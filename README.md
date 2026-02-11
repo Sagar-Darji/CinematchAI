@@ -113,11 +113,13 @@ python scripts/build_vectordb.py
 
 6. **Run the application**
 ```bash
-# Start FastAPI backend
-uvicorn src.api.main:app --reload --port 8000
+# Start FastAPI backend (Terminal 1)
+./scripts/run_api.sh
+# Or manually: uvicorn src.api.main:app --reload --port 8000
 
-# In another terminal, start Streamlit UI
-streamlit run src/ui/app.py
+# In another terminal, start Streamlit UI (Terminal 2)
+./scripts/run_ui.sh
+# Or manually: streamlit run src/ui/app.py
 ```
 
 7. **Open your browser**
@@ -227,15 +229,14 @@ See [deployment/huggingface/README.md](deployment/huggingface/README.md) for det
 
 ## Roadmap
 
-- [x] Phase 1: Foundation & Data Pipeline
-- [x] Phase 2: Embeddings & Vector Database
-- [x] Phase 3: Core Agents (Profile, Content, Context)
-- [x] Phase 4: Advanced Agents (Serendipity, Explanation, Group)
-- [x] Phase 5: LangGraph Orchestration
-- [x] Phase 6: FastAPI Backend
-- [x] Phase 7: Streamlit UI
-- [x] Phase 8: Evaluation & Optimization
-- [x] Phase 9: Deployment & Documentation
+- [x] Phase 1-2: Foundation & Data Pipeline (Weeks 1-4)
+- [x] Phase 3-4: Embeddings & Vector Database (Weeks 5-8)
+- [x] Phase 5-6: All 6 Agents + Supervisor (Weeks 5-8)
+- [x] Phase 7: LangGraph Workflow Orchestration (Week 9)
+- [x] Phase 8: FastAPI Backend (Week 10)
+- [x] Phase 9: Streamlit Frontend UI (Week 10)
+- [ ] Phase 10: Evaluation & Optimization (Week 11)
+- [ ] Phase 11: Deployment & Documentation (Week 12)
 
 ## Contributing
 
