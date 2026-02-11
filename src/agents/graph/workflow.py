@@ -1,6 +1,6 @@
 """LangGraph Workflow - Orchestrates multi-agent recommendation system."""
 
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from langgraph.graph import END, StateGraph
 
@@ -104,7 +104,16 @@ def retrieval_node(state: RecommendationState) -> RecommendationState:
     """Retrieval node (RAG)."""
     workflow_type = state.get("workflow_type", "single_user")
 
-    if workflow_type == "cold_start":
+    # Check if user profile indicates cold-start
+    user_profile = state.get("user_profile")
+    is_cold_start = (
+        workflow_type == "cold_start"
+        or state.get("is_cold_start", False)
+        or (user_profile is not None and getattr(user_profile, "is_cold_start", False))
+        or user_profile is None
+    )
+
+    if is_cold_start:
         return cold_start_retrieval(state)
     else:
         return retrieve_candidates(state, k=50, use_hybrid=True)

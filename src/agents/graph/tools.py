@@ -31,12 +31,12 @@ def retrieve_candidates(
 
     # Get user profile embedding
     user_profile = state.get("user_profile")
-    if not user_profile or not hasattr(user_profile, "embedding"):
+    if not user_profile or not user_profile.profile_embedding:
         logger.warning("No user profile embedding available for retrieval")
         state["candidate_movies"] = []
         return state
 
-    query_embedding = user_profile.embedding
+    query_embedding = user_profile.profile_embedding
 
     # Get context factors for filtering
     context_factors = state.get("context_factors", {})
@@ -44,14 +44,20 @@ def retrieve_candidates(
 
     # Retrieve from vector database
     try:
-        chroma_client = get_chroma_client()
+        from config.settings import get_settings
+        settings = get_settings()
 
         # Choose collection based on embedding type
-        collection_name = "movies_hybrid" if use_hybrid else "movies_text"
+        if use_hybrid:
+            collection_name = settings.chroma_collection_movies
+        else:
+            collection_name = f"{settings.chroma_collection_movies}_text"
+
+        chroma_client = get_chroma_client(collection_name=collection_name)
+        chroma_client.get_collection(collection_name)
 
         results = chroma_client.similarity_search(
-            collection_name=collection_name,
-            query_embedding=query_embedding.tolist(),
+            query_embedding=query_embedding,
             k=k,
             filter_dict=filter_dict,
         )
@@ -97,14 +103,19 @@ def retrieve_similar_to_movie(
     logger.info(f"Retrieving {k} movies similar to movie_id={movie_id}")
 
     try:
-        chroma_client = get_chroma_client()
-        collection_name = "movies_hybrid" if use_hybrid else "movies_text"
+        from config.settings import get_settings
+        settings = get_settings()
+
+        if use_hybrid:
+            collection_name = settings.chroma_collection_movies
+        else:
+            collection_name = f"{settings.chroma_collection_movies}_text"
+
+        chroma_client = get_chroma_client(collection_name=collection_name)
+        chroma_client.get_collection(collection_name)
 
         # Get the movie's embedding
-        results = chroma_client.collection(collection_name).get(
-            ids=[str(movie_id)],
-            include=["embeddings"],
-        )
+        results = chroma_client.get_by_ids(ids=[f"movie_{movie_id}"])
 
         if not results["embeddings"]:
             logger.warning(f"Movie {movie_id} not found in vectordb")
@@ -114,7 +125,6 @@ def retrieve_similar_to_movie(
 
         # Retrieve similar movies
         similar = chroma_client.similarity_search(
-            collection_name=collection_name,
             query_embedding=query_embedding,
             k=k + 1,  # +1 to exclude the query movie itself
             filter_dict=None,
@@ -188,8 +198,23 @@ def _result_to_movie(result: Dict[str, Any]) -> Movie:
         genres_str = metadata.get("genres", "")
         genres = [g.strip() for g in genres_str.split(",") if g.strip()]
 
+        # Extract movie ID from Chroma ID (format: "movie_<movieId>") or metadata
+        chroma_id = result.get("id", "")
+        movie_id = metadata.get("movieId", 0)
+        if not movie_id and chroma_id.startswith("movie_"):
+            movie_id = chroma_id.replace("movie_", "")
+
+        # Parse cast from comma-separated string to list
+        cast_raw = metadata.get("cast", "")
+        if isinstance(cast_raw, str):
+            cast_list = [c.strip() for c in cast_raw.split(",") if c.strip()]
+        elif isinstance(cast_raw, list):
+            cast_list = cast_raw
+        else:
+            cast_list = []
+
         movie_metadata = MovieMetadata(
-            tmdb_id=int(result.get("id", 0)),
+            tmdb_id=str(movie_id),
             title=metadata.get("title", "Unknown"),
             overview=metadata.get("overview", ""),
             genres=genres,
@@ -197,13 +222,13 @@ def _result_to_movie(result: Dict[str, Any]) -> Movie:
             vote_average=metadata.get("vote_average"),
             vote_count=metadata.get("vote_count"),
             director=metadata.get("director"),
-            cast=metadata.get("cast"),
+            cast=cast_list,
             poster_path=metadata.get("poster_path"),
         )
 
         movie = Movie(
+            movie_id=str(movie_id),
             metadata=movie_metadata,
-            embedding=np.array(result.get("embedding", [])),
         )
 
         return movie
@@ -226,33 +251,41 @@ def cold_start_retrieval(state: Dict[str, Any]) -> Dict[str, Any]:
     logger.info("Performing cold-start retrieval (diverse popular movies)")
 
     try:
-        chroma_client = get_chroma_client()
+        from config.settings import get_settings
+        settings = get_settings()
 
-        # Get all movies and sort by popularity
-        # (In practice, you'd have a popularity field in metadata)
-        # For now, retrieve a diverse set from different genres
+        collection_name = settings.chroma_collection_movies
+        chroma_client = get_chroma_client(collection_name=collection_name)
+        chroma_client.get_collection(collection_name)
 
-        # Strategy: Get top-rated movies from different genres
-        genres_to_sample = ["Action", "Comedy", "Drama", "Sci-Fi", "Thriller"]
+        # Retrieve diverse popular movies using a random-ish embedding
+        # to get a spread of results
+        rng = np.random.default_rng(42)
         candidate_movies = []
+        seen_ids = set()
 
-        for genre in genres_to_sample:
-            # Note: This is a simplified approach
-            # In production, you'd have a popularity index
+        # Multiple probes with different random embeddings for diversity
+        for _ in range(5):
+            query_embedding = rng.standard_normal(768).tolist()
+
             results = chroma_client.similarity_search(
-                collection_name="movies_hybrid",
-                query_embedding=[0.0] * 768,  # Dummy embedding
-                k=10,
-                filter_dict=None,  # Would filter by genre if supported
+                query_embedding=query_embedding,
+                k=20,
+                filter_dict=None,
             )
 
             for result in results:
-                movie = _result_to_movie(result)
-                if movie and len(candidate_movies) < 50:
-                    candidate_movies.append(movie)
+                rid = result.get("id")
+                if rid not in seen_ids:
+                    seen_ids.add(rid)
+                    movie = _result_to_movie(result)
+                    if movie:
+                        candidate_movies.append(movie)
 
             if len(candidate_movies) >= 50:
                 break
+
+        candidate_movies = candidate_movies[:50]
 
         logger.info(f"Cold-start retrieval: {len(candidate_movies)} candidates")
 

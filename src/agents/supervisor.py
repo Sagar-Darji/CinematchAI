@@ -106,16 +106,22 @@ class SupervisorAgent(BaseAgent):
         if not any("Context-Aware" in step for step in processing_steps):
             return "context_aware"
 
+        # Retrieval (get candidates) — only attempt once
+        retrieval_attempted = any("Retrieval" in step or "Cold-Start" in step for step in processing_steps)
+        if not state.get("candidate_movies") and not retrieval_attempted:
+            return "retrieval"
+
+        # If retrieval was attempted but returned nothing, skip to end
+        if not state.get("candidate_movies") and retrieval_attempted:
+            logger.warning("Retrieval returned no candidates, ending workflow")
+            return "end"
+
         # Content intelligence (after we have candidates)
         if (
             state.get("candidate_movies")
             and not any("Content Intelligence" in step for step in processing_steps)
         ):
             return "content_intelligence"
-
-        # Retrieval (get candidates)
-        if not state.get("candidate_movies"):
-            return "retrieval"
 
         # Group recommendation (if multi-user)
         workflow_type = state.get("workflow_type", "single_user")
