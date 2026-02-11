@@ -1,0 +1,83 @@
+# Model Configuration for CineMatch AI
+
+# LLM Configuration
+llm:
+  primary_provider: "ollama"  # ollama or groq
+  fallback_provider: "groq"
+
+  ollama:
+    base_url: "http://localhost:11434"
+    models:
+      main: "llama3.1:70b"
+      fast: "llama3.1:8b"
+    timeout: 120  # seconds
+    num_ctx: 4096  # context window
+
+  groq:
+    api_endpoint: "https://api.groq.com/openai/v1/chat/completions"
+    models:
+      main: "llama-3.1-70b-versatile"
+      fast: "llama-3.1-8b-instant"
+    rate_limit: 30  # requests per minute
+    max_retries: 3
+
+# Embedding Configuration
+embeddings:
+  text:
+    model: "sentence-transformers/all-mpnet-base-v2"
+    dimension: 768
+    device: "mps"  # mps for M4 Pro, cuda for NVIDIA, cpu for others
+    batch_size: 32
+    max_seq_length: 512
+    normalize: true
+
+  image:
+    model: "openai/clip-vit-base-patch32"
+    dimension: 512
+    device: "mps"
+    batch_size: 16
+    image_size: 224
+    normalize: true
+
+  hybrid:
+    text_weight: 0.7
+    image_weight: 0.3
+    fusion_method: "weighted_sum"  # weighted_sum, concatenation, late_fusion
+
+# Vector Database Configuration
+vectordb:
+  provider: "chroma"
+  chroma:
+    persist_directory: "./data/vectordb"
+    collection_metadata:
+      hnsw_space: "cosine"  # cosine, l2, ip
+      hnsw_construction_ef: 200
+      hnsw_search_ef: 100
+      hnsw_m: 16
+    batch_size: 1000
+
+# Recommendation Configuration
+recommendation:
+  retrieval:
+    top_k: 50  # Number of candidates to retrieve
+    rerank_top_n: 10  # Number to return after re-ranking
+    min_similarity: 0.3  # Minimum similarity threshold
+
+  diversity:
+    intra_list_diversity_weight: 0.3
+    genre_diversity: true
+    year_diversity: true
+    popularity_diversity: true
+
+  serendipity:
+    exploration_rate: 0.3
+    novelty_boost: 0.2
+    popularity_penalty: 0.1
+
+# Performance Configuration
+performance:
+  enable_caching: true
+  cache_ttl_seconds: 3600
+  batch_processing: true
+  parallel_agents: false  # Set to true for faster processing (experimental)
+  max_workers: 4

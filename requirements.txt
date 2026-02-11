@@ -1,0 +1,54 @@
+# LLM and Embeddings
+langchain==0.3.13
+langchain-groq==0.2.1
+langgraph==0.2.60
+sentence-transformers==3.3.1
+transformers==4.47.1
+torch==2.5.1
+
+# Vector Database
+chromadb==0.5.23
+
+# API and Backend
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.4
+pydantic-settings==2.7.0
+
+# Frontend
+streamlit==1.41.1
+
+# Data Processing
+pandas==2.2.3
+numpy==2.2.1
+pyarrow==18.1.0
+Pillow==11.0.0
+
+# Utilities
+python-dotenv==1.0.1
+pyyaml==6.0.2
+requests==2.32.3
+aiohttp==3.11.11
+python-multipart==0.0.20
+
+# Caching
+diskcache==5.6.3
+
+# Testing
+pytest==8.3.4
+pytest-asyncio==0.25.2
+pytest-cov==6.0.0
+httpx==0.28.1
+
+# Logging and Monitoring
+loguru==0.7.3
+
+# Rate Limiting
+slowapi==0.1.9
+
+# TMDB API
+tmdbsimple==2.9.1
+
+# Optional: MLX for M4 Pro optimization (if available)
+# mlx==0.21.1
+# mlx-lm==0.21.1

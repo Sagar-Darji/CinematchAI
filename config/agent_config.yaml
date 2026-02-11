@@ -1,0 +1,82 @@
+# Agent Configuration for CineMatch AI
+
+supervisor:
+  name: "Supervisor Agent"
+  description: "Orchestrates multi-agent workflow and routes requests"
+  model: "llama3.1:70b"
+  temperature: 0.1
+  max_tokens: 2048
+
+profile_analyzer:
+  name: "Profile Analyzer Agent"
+  description: "Analyzes user viewing history and builds psychological profile"
+  model: "llama3.1:70b"
+  temperature: 0.3
+  max_tokens: 1024
+  features:
+    - genre_preferences
+    - temporal_patterns
+    - exploration_rate
+    - nostalgia_tendency
+    - preference_drift
+
+content_intelligence:
+  name: "Content Intelligence Agent"
+  description: "Deep movie content analysis and micro-genre extraction"
+  model: "llama3.1:70b"
+  temperature: 0.5
+  max_tokens: 1024
+  features:
+    - theme_extraction
+    - micro_genre_generation
+    - sentiment_analysis
+    - tone_detection
+
+context_aware:
+  name: "Context-Aware Agent"
+  description: "Detects temporal and environmental context"
+  model: "llama3.1:8b"
+  temperature: 0.2
+  max_tokens: 512
+  context_factors:
+    - time_of_day
+    - day_of_week
+    - season
+    - weather
+    - companion
+
+serendipity:
+  name: "Serendipity Agent"
+  description: "Balances exploration vs exploitation"
+  model: "llama3.1:8b"
+  temperature: 0.7
+  max_tokens: 512
+  strategy: "thompson_sampling"  # or epsilon_greedy
+  diversity_threshold: 0.6
+  novelty_weight: 0.3
+
+explanation:
+  name: "Explanation Agent"
+  description: "Generates natural language explanations"
+  model: "llama3.1:70b"
+  temperature: 0.6
+  max_tokens: 512
+  explanation_styles:
+    - brief
+    - detailed
+    - technical
+  include_counterfactuals: true
+
+group_recommendation:
+  name: "Group Recommendation Agent"
+  description: "Handles multi-user consensus and fairness"
+  model: "llama3.1:70b"
+  temperature: 0.4
+  max_tokens: 1024
+  aggregation_strategies:
+    - multiplicative
+    - least_misery
+    - average
+    - borda_count
+  fairness_weight: 0.7
+  min_satisfaction_threshold: 0.5
