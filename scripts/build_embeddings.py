@@ -36,20 +36,19 @@ def build_text_embeddings(movies_df: pd.DataFrame, save_dir: Path) -> None:
         if pd.notna(movie.get("overview")):
             parts.append(str(movie["overview"]))
 
-        if pd.notna(movie.get("tmdb_genres")):
-            genres = movie["tmdb_genres"]
-            if isinstance(genres, list):
-                parts.append(" ".join(genres))
-            else:
-                parts.append(str(genres))
+        genres = movie.get("tmdb_genres")
+        if isinstance(genres, list) and len(genres) > 0:
+            parts.append(" ".join(genres))
+        elif genres is not None and not (isinstance(genres, float) and pd.isna(genres)):
+            parts.append(str(genres))
 
         if pd.notna(movie.get("director")):
             parts.append(f"Directed by {movie['director']}")
 
-        if pd.notna(movie.get("cast")) and isinstance(movie.get("cast"), list):
-            cast = movie["cast"][:5]  # Top 5
-            if cast:
-                parts.append(f"Starring {', '.join(cast)}")
+        cast = movie.get("cast")
+        if isinstance(cast, list) and len(cast) > 0:
+            top_cast = cast[:5]  # Top 5
+            parts.append(f"Starring {', '.join(top_cast)}")
 
         combined = ". ".join(parts)
         movie_texts.append(combined)
