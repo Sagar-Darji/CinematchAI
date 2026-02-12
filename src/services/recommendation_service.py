@@ -147,7 +147,7 @@ class RecommendationService:
 
         for rec in recommendations:
             movie_response = MovieResponse(
-                tmdb_id=rec.movie.metadata.tmdb_id,
+                tmdb_id=int(rec.movie.metadata.tmdb_id) if rec.movie.metadata.tmdb_id else 0,
                 title=rec.movie.metadata.title,
                 year=rec.movie.metadata.year,
                 genres=rec.movie.metadata.genres or [],
@@ -157,13 +157,18 @@ class RecommendationService:
                 poster_path=rec.movie.metadata.poster_path,
             )
 
+            # Extract explanation text from Explanation object or string
+            if hasattr(rec.explanation, "primary_reason"):
+                explanation_text = rec.explanation.primary_reason
+            else:
+                explanation_text = str(rec.explanation)
+
             item = RecommendationItemResponse(
                 movie=movie_response,
                 score=rec.score,
                 rank=rec.rank,
-                explanation=rec.explanation,
-                is_exploration=rec.metadata.get("is_exploration", False),
-                metadata=rec.metadata,
+                explanation=explanation_text,
+                is_exploration=rec.is_exploration,
             )
 
             response_items.append(item)

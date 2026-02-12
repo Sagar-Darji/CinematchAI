@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse
 import time
 import uuid
 
-from src.api.routes import groups, health, recommendations, users
+from src.api.routes import groups, health, movies, recommendations, users
 from src.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -126,6 +126,7 @@ app.include_router(health.router, prefix="/api/v1")
 app.include_router(recommendations.router, prefix="/api/v1")
 app.include_router(groups.router, prefix="/api/v1")
 app.include_router(users.router, prefix="/api/v1")
+app.include_router(movies.router, prefix="/api/v1")
 
 
 # Root endpoint
@@ -142,7 +143,13 @@ async def root():
             "recommendations": "/api/v1/recommendations",
             "group_recommendations": "/api/v1/groups/recommendations",
             "onboarding": "/api/v1/users/onboard",
+            "letterboxd_import": "/api/v1/users/import/letterboxd",
             "feedback": "/api/v1/users/feedback",
+            "trending_movies": "/api/v1/movies/trending",
+            "popular_by_language": "/api/v1/movies/popular/{language}",
+            "recent_releases": "/api/v1/movies/recent",
+            "search_movies": "/api/v1/movies/search",
+            "movie_details": "/api/v1/movies/{tmdb_id}",
         },
     }
 

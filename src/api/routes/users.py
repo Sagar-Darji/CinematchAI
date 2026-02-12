@@ -1,17 +1,20 @@
 """User Management API Routes."""
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, status
 
 from src.api.schemas.request import (
     FeedbackRequest,
+    LetterboxdImportRequest,
     OnboardingRequest,
     UpdateContextRequest,
 )
 from src.api.schemas.response import (
     ErrorResponse,
     FeedbackResponse,
+    LetterboxdImportResponse,
     OnboardingResponse,
 )
+from src.services.job_service import JobStatus, JobType, get_job_service
 from src.services.onboarding_service import get_onboarding_service
 from src.services.user_service import get_user_service
 from src.utils.logging import get_logger
@@ -196,3 +199,170 @@ async def get_onboarding_movies(k: int = 20):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to get onboarding movies",
         )
+
+
+@router.post(
+    "/import/letterboxd",
+    status_code=status.HTTP_202_ACCEPTED,
+    responses={
+        400: {"model": ErrorResponse},
+        500: {"model": ErrorResponse},
+    },
+)
+async def import_letterboxd(
+    request: LetterboxdImportRequest,
+    background_tasks: BackgroundTasks,
+):
+    """
+    Import user ratings from Letterboxd CSV export (ASYNC).
+
+    - **user_id**: User identifier
+    - **csv_content**: Letterboxd CSV export file content
+
+    **Returns immediately (202 Accepted) with job_id.**
+    Use GET /users/jobs/{job_id} to check progress.
+
+    **Production-grade async processing:**
+    - Immediate response (no timeout)
+    - Progress tracking
+    - Handles 100s of ratings without blocking
+    """
+    logger.info(f"POST /users/import/letterboxd: user_id={request.user_id}")
+
+    try:
+        import pandas as pd
+        from io import StringIO
+
+        # Parse CSV to get total count
+        df = pd.read_csv(StringIO(request.csv_content))
+        rated_df = df[df["Rating"].notna()]
+        total_movies = len(rated_df)
+
+        # Create job
+        job_service = get_job_service()
+        job_id = job_service.create_job(
+            job_type=JobType.LETTERBOXD_IMPORT,
+            user_id=request.user_id,
+            total=total_movies,
+        )
+
+        # Run import in background
+        background_tasks.add_task(
+            _import_letterboxd_background,
+            job_id=job_id,
+            user_id=request.user_id,
+            csv_content=request.csv_content,
+        )
+
+        logger.info(f"Created Letterboxd import job {job_id} for user {request.user_id} ({total_movies} movies)")
+
+        return {
+            "job_id": job_id,
+            "user_id": request.user_id,
+            "total_movies": total_movies,
+            "status": "pending",
+            "message": f"Import started. Poll GET /api/v1/users/jobs/{job_id} for status.",
+            "poll_url": f"/api/v1/users/jobs/{job_id}",
+        }
+
+    except ValueError as e:
+        logger.warning(f"Invalid Letterboxd CSV: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+    except Exception as e:
+        logger.error(f"Failed to start Letterboxd import: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to start import",
+        )
+
+
+def _import_letterboxd_background(job_id: str, user_id: str, csv_content: str):
+    """Background task for Letterboxd import."""
+    from src.services.letterboxd_service import get_letterboxd_service
+
+    job_service = get_job_service()
+
+    try:
+        # Update status to running
+        job_service.update_job_status(job_id, JobStatus.RUNNING, progress=0)
+
+        logger.info(f"🎬 Starting Letterboxd import for job {job_id}")
+
+        # Run import with progress callback
+        service = get_letterboxd_service()
+
+        def progress_callback(current: int, total: int):
+            """Progress callback for job tracking."""
+            progress = int((current / total) * 100)
+            job_service.update_job_status(job_id, JobStatus.RUNNING, progress=progress)
+            logger.info(f"Job {job_id}: {current}/{total} ({progress}%)")
+
+        result = service.import_from_csv(
+            user_id=user_id,
+            csv_content=csv_content,
+            progress_callback=progress_callback,
+        )
+
+        # CRITICAL: Force profile regeneration after import
+        logger.info(f"🔄 Triggering profile regeneration for user {user_id}")
+        try:
+            from src.agents.graph.workflow import run_recommendation_workflow
+
+            # Run workflow once to generate profile (discard recommendations)
+            run_recommendation_workflow(
+                user_id=user_id,
+                context={},
+                is_cold_start=False,
+            )
+            logger.info(f"✅ Profile regenerated for user {user_id}")
+        except Exception as e:
+            logger.warning(f"⚠️ Profile regeneration failed (non-critical): {e}")
+
+        # Update result
+        job_service.update_job_result(job_id, result)
+        job_service.update_job_status(job_id, JobStatus.COMPLETED, progress=100)
+
+        logger.info(
+            f"✅ Completed Letterboxd import for job {job_id}: "
+            f"{result['imported_count']}/{result['total_movies']} imported "
+            f"({result['success_rate']*100:.1f}% success rate)"
+        )
+
+    except Exception as e:
+        logger.error(f"❌ Failed Letterboxd import for job {job_id}: {e}", exc_info=True)
+        job_service.update_job_status(
+            job_id,
+            JobStatus.FAILED,
+            error_message=str(e),
+        )
+
+
+@router.get(
+    "/jobs/{job_id}",
+    status_code=status.HTTP_200_OK,
+)
+async def get_job_status(job_id: str):
+    """
+    Get job status by ID.
+
+    - **job_id**: Job identifier
+
+    Returns job status, progress (0-100), and result (if completed).
+
+    **Poll this endpoint every 2-3 seconds to track progress.**
+    """
+    logger.debug(f"GET /users/jobs/{job_id}")
+
+    job_service = get_job_service()
+    job = job_service.get_job_status(job_id)
+
+    if not job:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Job {job_id} not found",
+        )
+
+    return job

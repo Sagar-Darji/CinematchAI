@@ -1,7 +1,12 @@
-# LLM and Embeddings
+# CineMatch AI - Hugging Face Spaces Requirements
+# Optimized for HF Spaces free tier (16GB RAM, no GPU)
+
+# Core LangChain & Agents
 langchain==0.3.13
-langchain-groq==0.2.1
+langchain-groq==0.2.1  # Use Groq API instead of Ollama
 langgraph==0.2.60
+
+# Embeddings (smaller models for HF Spaces)
 sentence-transformers==3.3.1
 transformers==4.47.1
 torch==2.5.1
@@ -9,7 +14,7 @@ torch==2.5.1
 # Vector Database
 chromadb==0.6.3
 
-# API and Backend
+# API & Backend
 fastapi==0.115.6
 uvicorn[standard]==0.34.0
 pydantic==2.10.4
@@ -18,12 +23,11 @@ pydantic-settings==2.7.0
 # Frontend
 streamlit==1.41.1
 
-# Data Processing
+# Data Processing (lightweight)
 pandas==2.2.3
-numpy<2.0  # NumPy 1.x for compatibility with pandas
+numpy<2.0
 pyarrow==18.1.0
 Pillow==11.0.0
-tqdm==4.67.1
 
 # Utilities
 python-dotenv==1.0.1
@@ -35,21 +39,11 @@ python-multipart==0.0.20
 # Caching
 diskcache==5.6.3
 
-# Testing
-pytest==8.3.4
-pytest-asyncio==0.25.2
-pytest-cov==6.0.0
-httpx==0.28.1
-
-# Logging and Monitoring
+# Logging
 loguru==0.7.3
 
 # Rate Limiting
 slowapi==0.1.9
 
-# TMDB API
-tmdbsimple==2.9.1
-
-# Optional: MLX for M4 Pro optimization (if available)
-# mlx==0.21.1
-# mlx-lm==0.21.1
+# TMDB API (optional)
+tmdbv3api==1.9.0

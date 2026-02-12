@@ -1,9 +1,11 @@
 """Deploy CineMatch AI to Hugging Face Spaces."""
 
-import os
+import argparse
 import shutil
 import subprocess
 from pathlib import Path
+
+from huggingface_hub import HfApi
 
 print("🎬 CineMatch AI - Hugging Face Spaces Deployment")
 print("=" * 60)
@@ -11,33 +13,30 @@ print("=" * 60)
 # Project root
 PROJECT_ROOT = Path(__file__).parent.parent
 
+
 def check_prerequisites():
-    """Check if git and huggingface_hub are installed."""
+    """Check if git and huggingface_hub are installed and authenticated."""
     print("\n📋 Checking prerequisites...")
 
     # Check git
     try:
         subprocess.run(["git", "--version"], check=True, capture_output=True)
         print("✅ Git installed")
-    except:
+    except Exception:
         print("❌ Git not found. Please install git first.")
-        return False
+        return None
 
     # Check if logged in to HF
     try:
-        result = subprocess.run(
-            ["huggingface-cli", "whoami"],
-            check=True,
-            capture_output=True,
-            text=True
-        )
-        username = result.stdout.strip()
+        api = HfApi()
+        user_info = api.whoami()
+        username = user_info["name"]
         print(f"✅ Logged in to Hugging Face as: {username}")
-        return True
-    except:
+        return username
+    except Exception:
         print("❌ Not logged in to Hugging Face.")
         print("\nPlease run: huggingface-cli login")
-        return False
+        return None
 
 
 def prepare_deployment():
@@ -45,18 +44,22 @@ def prepare_deployment():
     print("\n📦 Preparing deployment files...")
 
     # Copy requirements
-    shutil.copy(
-        PROJECT_ROOT / "requirements-hf.txt",
-        PROJECT_ROOT / "requirements.txt"
-    )
-    print("✅ Copied requirements-hf.txt → requirements.txt")
+    src_req = PROJECT_ROOT / "requirements-hf.txt"
+    if src_req.exists():
+        shutil.copy(src_req, PROJECT_ROOT / "requirements.txt")
+        print("✅ Copied requirements-hf.txt → requirements.txt")
+    else:
+        print("❌ requirements-hf.txt not found")
+        return False
 
-    # Copy README
-    shutil.copy(
-        PROJECT_ROOT / "README_HF.md",
-        PROJECT_ROOT / "README.md"
-    )
-    print("✅ Copied README_HF.md → README.md")
+    # Copy README (contains HF Space metadata in frontmatter)
+    src_readme = PROJECT_ROOT / "README_HF.md"
+    if src_readme.exists():
+        shutil.copy(src_readme, PROJECT_ROOT / "README.md")
+        print("✅ Copied README_HF.md → README.md")
+    else:
+        print("❌ README_HF.md not found")
+        return False
 
     # Ensure .streamlit config exists
     streamlit_dir = PROJECT_ROOT / ".streamlit"
@@ -76,152 +79,84 @@ def prepare_deployment():
     return True
 
 
-def create_gitignore():
-    """Create .gitignore for HF Spaces."""
-    print("\n📝 Creating .gitignore...")
+def deploy_to_space(username: str, space_name: str):
+    """Create Space and upload all files using HfApi."""
+    repo_id = f"{username}/{space_name}"
+    space_url = f"https://huggingface.co/spaces/{repo_id}"
 
-    gitignore_content = """
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-venv/
-ENV/
+    api = HfApi()
 
-# Data (too large for HF Spaces)
-data/raw/
-data/processed/*.csv
-data/processed/*.parquet
+    # Step 1: Create the Space repo (README frontmatter defines sdk: streamlit)
+    print(f"\n🚀 Creating/verifying HF Space: {repo_id}...")
+    try:
+        api.create_repo(
+            repo_id=repo_id,
+            repo_type="space",
+            space_sdk="streamlit",
+            exist_ok=True,
+        )
+        print(f"✅ Space ready: {space_url}")
+    except Exception as e:
+        # If streamlit SDK fails via API, upload README first to set it
+        print(f"⚠️  API create with sdk failed ({e}), uploading README to configure...")
+        try:
+            api.create_repo(
+                repo_id=repo_id,
+                repo_type="space",
+                space_sdk="static",
+                exist_ok=True,
+            )
+            # Upload README with streamlit frontmatter to reconfigure
+            api.upload_file(
+                path_or_fileobj=str(PROJECT_ROOT / "README.md"),
+                path_in_repo="README.md",
+                repo_id=repo_id,
+                repo_type="space",
+            )
+            print(f"✅ Space created and configured via README: {space_url}")
+        except Exception as e2:
+            print(f"⚠️  Space setup issue: {e2}")
+            print("   Continuing with upload (space may already exist)...")
 
-# Embeddings (will be generated on-the-fly or cached)
-# Keep small test embeddings only
+    # Step 2: Upload project files
+    print(f"\n📤 Uploading files to {repo_id}...")
 
-# Vector DB (will be rebuilt)
-data/vectordb/
-
-# Logs
-logs/
-*.log
-
-# Environment
-.env
-.env.local
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Build
-dist/
-build/
-*.egg-info/
-
-# Evaluation results
-evaluation/results/
-"""
-
-    with open(PROJECT_ROOT / ".gitignore", "w") as f:
-        f.write(gitignore_content.strip())
-
-    print("✅ .gitignore created")
-
-
-def create_space_repo(space_name: str):
-    """Create Hugging Face Space repository."""
-    print(f"\n🚀 Creating HF Space: {space_name}...")
+    # Define patterns to ignore during upload
+    ignore_patterns = [
+        "data/raw/*",
+        "data/processed/*",
+        "data/vectordb/*",
+        "data/posters/*",
+        "*.parquet",
+        "logs/*",
+        "*.log",
+        ".env",
+        ".env.local",
+        ".git/*",
+        ".claude/*",
+        "__pycache__/*",
+        "*.pyc",
+        ".DS_Store",
+        "evaluation/results/*",
+        "cache/*",
+        "*.zip",
+        "*.npy",
+        "venv/*",
+        "ENV/*",
+    ]
 
     try:
-        # Get username
-        result = subprocess.run(
-            ["huggingface-cli", "whoami"],
-            check=True,
-            capture_output=True,
-            text=True
+        api.upload_folder(
+            folder_path=str(PROJECT_ROOT),
+            repo_id=repo_id,
+            repo_type="space",
+            ignore_patterns=ignore_patterns,
         )
-        username = result.stdout.strip().split()[0]
-
-        # Create space
-        subprocess.run(
-            [
-                "huggingface-cli",
-                "repo",
-                "create",
-                space_name,
-                "--type",
-                "space",
-                "--space_sdk",
-                "streamlit",
-            ],
-            check=True,
-        )
-
-        space_url = f"https://huggingface.co/spaces/{username}/{space_name}"
-        print(f"✅ Space created: {space_url}")
-
+        print(f"✅ Files uploaded to: {space_url}")
         return space_url
 
-    except subprocess.CalledProcessError as e:
-        print(f"⚠️  Space may already exist or creation failed: {e}")
-        return None
-
-
-def push_to_space(space_name: str):
-    """Push code to HF Space."""
-    print(f"\n📤 Pushing to HF Space: {space_name}...")
-
-    try:
-        # Get username
-        result = subprocess.run(
-            ["huggingface-cli", "whoami"],
-            check=True,
-            capture_output=True,
-            text=True
-        )
-        username = result.stdout.strip().split()[0]
-
-        space_url = f"https://huggingface.co/spaces/{username}/{space_name}"
-
-        # Initialize git if needed
-        if not (PROJECT_ROOT / ".git").exists():
-            subprocess.run(["git", "init"], cwd=PROJECT_ROOT, check=True)
-            subprocess.run(
-                ["git", "add", "."],
-                cwd=PROJECT_ROOT,
-                check=True
-            )
-            subprocess.run(
-                ["git", "commit", "-m", "Initial commit for HF Spaces"],
-                cwd=PROJECT_ROOT,
-                check=True
-            )
-
-        # Add HF remote
-        subprocess.run(
-            ["git", "remote", "add", "spaces", f"https://huggingface.co/spaces/{username}/{space_name}"],
-            cwd=PROJECT_ROOT,
-            capture_output=True
-        )
-
-        # Push
-        subprocess.run(
-            ["git", "push", "spaces", "main", "--force"],
-            cwd=PROJECT_ROOT,
-            check=True
-        )
-
-        print(f"✅ Pushed to: {space_url}")
-        return space_url
-
-    except subprocess.CalledProcessError as e:
-        print(f"❌ Push failed: {e}")
+    except Exception as e:
+        print(f"❌ Upload failed: {e}")
         return None
 
 
@@ -260,45 +195,33 @@ def print_next_steps(space_url: str):
 
 def main():
     """Main deployment flow."""
+    parser = argparse.ArgumentParser(description="Deploy CineMatch AI to HF Spaces")
+    parser.add_argument(
+        "--space-name",
+        default="cinematch-ai",
+        help="HF Space name (default: cinematch-ai)",
+    )
+    args = parser.parse_args()
+
+    space_name = args.space_name
 
     # Check prerequisites
-    if not check_prerequisites():
+    username = check_prerequisites()
+    if not username:
         return
 
-    # Get space name
-    print("\n📛 Enter Space name (e.g., cinematch-ai):")
-    space_name = input("> ").strip()
-
-    if not space_name:
-        print("❌ Space name required")
-        return
+    print(f"\n📛 Space name: {space_name}")
 
     # Prepare files
     if not prepare_deployment():
         print("❌ Deployment preparation failed")
         return
 
-    # Create .gitignore
-    create_gitignore()
+    # Deploy
+    space_url = deploy_to_space(username, space_name)
 
-    # Create space
-    space_url = create_space_repo(space_name)
-
-    if not space_url:
-        print("\nSpace may already exist. Continuing with push...")
-        result = subprocess.run(
-            ["huggingface-cli", "whoami"],
-            capture_output=True,
-            text=True
-        )
-        username = result.stdout.strip().split()[0]
-        space_url = f"https://huggingface.co/spaces/{username}/{space_name}"
-
-    # Push code
-    final_url = push_to_space(space_name)
-
-    if final_url:
-        print_next_steps(final_url)
+    if space_url:
+        print_next_steps(space_url)
     else:
         print("\n❌ Deployment failed. Please check errors above.")
 

@@ -76,31 +76,72 @@ class ProfileAnalyzerAgent(BaseAgent):
             User data dictionary or None if not found.
         """
         try:
-            settings = get_settings()
+            # CRITICAL FIX: Load ratings from SQLite database (not Parquet)
+            # This allows Letterboxd imports and manual ratings to work
+            from src.services.user_service import get_user_service
+            from src.services.movie_service import get_movie_service
 
-            # Load ratings
-            ratings_df = pd.read_parquet(settings.processed_data_dir / "ratings.parquet")
-            user_ratings = ratings_df[ratings_df["userId"] == int(user_id)]
+            user_service = get_user_service()
+            movie_service = get_movie_service()
 
-            if len(user_ratings) == 0:
+            # Get ratings from SQLite
+            ratings = user_service.get_user_ratings(user_id)
+
+            if not ratings or len(ratings) == 0:
+                logger.info(f"No ratings found for user {user_id} in database")
                 return None
 
-            # Load movies
-            movies_df = pd.read_parquet(settings.processed_data_dir / "movies_enriched.parquet")
+            logger.info(f"Found {len(ratings)} ratings for user {user_id} in database")
+
+            # Convert to DataFrame for processing
+            ratings_data = []
+            movies_data = []
+
+            for rating in ratings:
+                movie_id = rating["movie_id"]
+
+                # Get movie details from TMDB (on-demand)
+                try:
+                    movie = movie_service.get_movie_by_id(tmdb_id=int(movie_id))
+                    if movie:
+                        ratings_data.append({
+                            "movieId": int(movie_id),
+                            "rating": rating["rating"],
+                            "timestamp": pd.to_datetime(rating["timestamp"]),
+                        })
+
+                        movies_data.append({
+                            "movieId": int(movie_id),
+                            "title": movie.metadata.title,
+                            "tmdb_genres": movie.metadata.genres,
+                            "director": movie.metadata.director,
+                            "year": movie.metadata.year,
+                            "vote_average": movie.metadata.vote_average,
+                        })
+                except Exception as e:
+                    logger.warning(f"Failed to load movie {movie_id}: {e}")
+                    continue
+
+            if not ratings_data:
+                logger.warning(f"No valid movies found for user {user_id}")
+                return None
+
+            ratings_df = pd.DataFrame(ratings_data)
+            movies_df = pd.DataFrame(movies_data)
 
             # Merge ratings with movies
-            user_movies = user_ratings.merge(movies_df, on="movieId", how="left")
+            user_movies = ratings_df.merge(movies_df, on="movieId", how="left")
 
             return {
-                "total_ratings": len(user_ratings),
-                "ratings_df": user_ratings,
+                "total_ratings": len(ratings_df),
+                "ratings_df": ratings_df,
                 "movies_df": user_movies,
-                "avg_rating": user_ratings["rating"].mean(),
-                "rating_variance": user_ratings["rating"].var(),
+                "avg_rating": ratings_df["rating"].mean(),
+                "rating_variance": ratings_df["rating"].var(),
             }
 
         except Exception as e:
-            logger.error(f"Failed to load user data: {e}")
+            logger.error(f"Failed to load user data: {e}", exc_info=True)
             return None
 
     def _create_cold_start_profile(self, user_id: str) -> UserProfile:
@@ -313,6 +354,8 @@ class ProfileAnalyzerAgent(BaseAgent):
         """
         Calculate user profile embedding as weighted average of movie embeddings.
 
+        CRITICAL FIX: Generate embeddings on-demand for TMDB movies that don't have pre-computed embeddings.
+
         Args:
             ratings_df: User ratings.
 
@@ -320,34 +363,46 @@ class ProfileAnalyzerAgent(BaseAgent):
             Profile embedding vector or None.
         """
         try:
-            settings = get_settings()
-            embeddings_path = settings.embeddings_dir / "movie_hybrid_embeddings.npy"
+            from src.services.movie_service import get_movie_service
+            from src.core.embeddings.text_embedder import get_text_embedder
 
-            if not embeddings_path.exists():
-                return None
-
-            # Load embeddings
-            embeddings = np.load(embeddings_path)
-
-            # Load movies to map IDs to indices
-            movies_df = pd.read_parquet(settings.processed_data_dir / "movies_enriched.parquet")
-            movie_id_to_idx = {row["movieId"]: idx for idx, row in movies_df.iterrows()}
+            movie_service = get_movie_service()
+            text_embedder = get_text_embedder()
 
             # Calculate weighted average
             weighted_embeddings = []
             weights = []
 
+            logger.info(f"Calculating profile embedding from {len(ratings_df)} ratings")
+
             for _, rating in ratings_df.iterrows():
                 movie_id = rating["movieId"]
-                if movie_id in movie_id_to_idx:
-                    idx = movie_id_to_idx[movie_id]
-                    if idx < len(embeddings):
-                        # Weight by rating (higher ratings = more influence)
-                        weight = rating["rating"] / 5.0  # Normalize to 0-1
-                        weighted_embeddings.append(embeddings[idx] * weight)
-                        weights.append(weight)
+
+                try:
+                    # Get movie details (cached from TMDB)
+                    movie = movie_service.get_movie_by_id(tmdb_id=int(movie_id))
+
+                    if movie and movie.metadata.overview:
+                        # Generate embedding on-demand using text embedder
+                        text = f"{movie.metadata.title}. {movie.metadata.overview}"
+                        if movie.metadata.genres:
+                            text += f" Genres: {', '.join(movie.metadata.genres)}"
+
+                        # Use text-only embedding (faster, no poster needed)
+                        embedding = text_embedder.embed_text(text)[0]  # embed_text returns array
+
+                        if embedding is not None and len(embedding) > 0:
+                            # Weight by rating (higher ratings = more influence)
+                            weight = rating["rating"] / 5.0  # Normalize to 0-1
+                            weighted_embeddings.append(np.array(embedding) * weight)
+                            weights.append(weight)
+
+                except Exception as e:
+                    logger.warning(f"Failed to embed movie {movie_id}: {e}")
+                    continue
 
             if not weighted_embeddings:
+                logger.warning("No embeddings generated - profile will be cold-start")
                 return None
 
             # Calculate weighted average
@@ -356,10 +411,12 @@ class ProfileAnalyzerAgent(BaseAgent):
             # Normalize
             profile_embedding = profile_embedding / np.linalg.norm(profile_embedding)
 
+            logger.info(f"✅ Generated profile embedding ({len(profile_embedding)}-dim) from {len(weighted_embeddings)} movies")
+
             return profile_embedding.tolist()
 
         except Exception as e:
-            logger.error(f"Failed to calculate profile embedding: {e}")
+            logger.error(f"Failed to calculate profile embedding: {e}", exc_info=True)
             return None
 
 

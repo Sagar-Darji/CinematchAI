@@ -1,268 +1,172 @@
+---
+title: CineMatch AI
+emoji: 🎬
+colorFrom: purple
+colorTo: blue
+sdk: streamlit
+sdk_version: 1.41.1
+app_file: app_hf.py
+pinned: false
+license: mit
+---
+
 # 🎬 CineMatch AI
 
-> Multi-Agent Movie Recommendation System with Explainable AI
+**Multi-Agent Movie Recommendation System with RAG & Multi-Modal AI**
 
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+## What is CineMatch AI?
 
-## Overview
+CineMatch AI is a production-grade movie recommendation system powered by **6 specialized AI agents** working together to deliver personalized, context-aware, and explainable recommendations.
 
-CineMatch AI is a production-grade movie recommendation system powered by 6 specialized AI agents working together to deliver personalized, context-aware, and explainable movie recommendations. Built with LangGraph, RAG, and multi-modal AI.
+### ✨ Key Features
 
-## Key Features
+- 🤖 **Multi-Agent System**: 6 specialized agents orchestrated via LangGraph
+- 🔍 **RAG Architecture**: Vector similarity search with ChromaDB
+- 🎨 **Multi-Modal AI**: Combines text (plot) + image (poster) embeddings
+- 🌍 **Context-Aware**: Adapts to your mood, time, and viewing situation
+- 💡 **Explainable**: Natural language reasoning for each recommendation
+- 👥 **Group Mode**: Fair recommendations for multiple users
 
-- **Multi-Agent Architecture**: 6 specialized agents orchestrated via LangGraph
-  - Profile Analyzer (user preference extraction)
-  - Content Intelligence (movie analysis + micro-genres)
-  - Context-Aware (temporal/environmental context)
-  - Serendipity (exploration vs exploitation)
-  - Explanation (natural language reasoning)
-  - Group Recommendation (multi-user fairness)
+## How It Works
 
-- **Multi-Modal AI**: Combines text embeddings (plot, genres) + image embeddings (posters via CLIP)
+### The 6 AI Agents
 
-- **Explainable Recommendations**: Natural language explanations with supporting evidence
+1. **Profile Analyzer** - Understands your taste from rating history
+2. **Content Intelligence** - Analyzes movie themes and micro-genres
+3. **Context-Aware** - Considers time of day, mood, companion
+4. **Serendipity** - Prevents filter bubbles, adds diversity
+5. **Explanation** - Generates natural language reasoning
+6. **Group Recommendation** - Optimizes for fairness when watching with others
 
-- **Group Mode**: Fair recommendations for multiple users with satisfaction guarantees
-
-- **Context-Aware**: Adapts to time of day, day of week, mood, and viewing situation
-
-- **Cold-Start Solution**: Interactive onboarding for new users
-
-## Tech Stack
-
-**100% Free & Open Source:**
-- **LLM**: Ollama (Llama 3.1 70B) with MLX optimization for M4 Pro
-- **Embeddings**: sentence-transformers (text), CLIP (images)
-- **Vector DB**: Chroma (local, persistent)
-- **Agents**: LangGraph (supervisor pattern)
-- **Backend**: FastAPI (async, type-safe)
-- **Frontend**: Streamlit (multi-page app)
-- **Data**: MovieLens 25M + TMDB API
-- **Deployment**: Hugging Face Spaces (free tier)
-
-## Architecture
+### Architecture
 
 ```
-User Request → Supervisor Agent
-    ├─→ Profile Analyzer → User preferences & patterns
-    ├─→ Content Intelligence → Movie analysis & micro-genres
-    ├─→ Context-Aware → Temporal/environmental context
+Your Request
     ↓
-RAG Retrieval → Top-K candidates from Chroma DB
+Streamlit UI → FastAPI → Multi-Agent Workflow
     ↓
-Serendipity Agent → Diversity optimization
+6 Agents Working Together:
+  Profile → Context → RAG Retrieval → Content Analysis
+  → Serendipity → Explanation → Group (if needed)
     ↓
-Explanation Agent → Natural language reasoning
-    ↓
-Final Recommendations + Explanations
+Personalized Recommendations + Explanations
 ```
 
-## Quick Start
+## 🚀 Getting Started
 
-### Prerequisites
+### First Time Users
 
-- Python 3.10+
-- 16GB+ RAM (24GB recommended)
-- Ollama installed
+1. **Onboard**: Rate 5 movies to create your profile
+2. **Get Recommendations**: Receive personalized suggestions
+3. **Provide Feedback**: Rate recommendations to improve your profile
 
-### Installation
+### Existing Users
 
-1. **Clone the repository**
-```bash
-git clone https://github.com/yourusername/cinematch-ai.git
-cd cinematch-ai
-```
+1. Enter your username
+2. Set your current context (mood, time, companion)
+3. Get instant personalized recommendations
 
-2. **Install dependencies**
-```bash
-# Using pip
-pip install -r requirements.txt
+## 📊 Technology Stack
 
-# Or using Poetry
-poetry install
-```
+- **LLM**: Groq API (Llama 3.1 70B)
+- **Embeddings**: sentence-transformers + CLIP
+- **Vector DB**: ChromaDB (HNSW indexing)
+- **Orchestration**: LangGraph
+- **Backend**: FastAPI
+- **Frontend**: Streamlit
+- **Dataset**: MovieLens 25M (62K movies)
 
-3. **Set up environment variables**
-```bash
-cp .env.example .env
-# Edit .env with your API keys (TMDB, Groq backup)
-```
+## 🎯 Features
 
-4. **Install Ollama and pull models**
-```bash
-# Install Ollama (if not already installed)
-curl -fsSL https://ollama.ai/install.sh | sh
+### Personalized Recommendations
+- Analyzes your viewing history
+- Detects temporal patterns
+- Calculates psychological metrics
 
-# Pull models (optimized for M4 Pro with MLX)
-ollama pull llama3.1:70b
-ollama pull llama3.1:8b
-```
+### Context-Aware
+- Morning vs evening preferences
+- Weekday vs weekend mood
+- Solo vs social viewing
 
-5. **Download data and build embeddings**
-```bash
-# Download MovieLens dataset and TMDB metadata
-python scripts/setup_data.py
+### Explainable AI
+- "Why this movie?" explanations
+- Multi-faceted reasoning
+- Transparent recommendations
 
-# Generate embeddings (takes ~30 minutes)
-python scripts/build_embeddings.py
+### Group Mode
+- Fair recommendations for 2+ people
+- Multiple aggregation strategies
+- Conflict detection
 
-# Build vector database
-python scripts/build_vectordb.py
-```
+## 📈 Performance
 
-6. **Run the application**
-```bash
-# Start FastAPI backend (Terminal 1)
-./scripts/run_api.sh
-# Or manually: uvicorn src.api.main:app --reload --port 8000
+- **Response Time**: < 2 seconds (P95)
+- **Vector Retrieval**: < 300ms
+- **Recommendation Quality**: Hit Rate@10 > 0.30
+- **Diversity**: Intra-list diversity > 0.60
 
-# In another terminal, start Streamlit UI (Terminal 2)
-./scripts/run_ui.sh
-# Or manually: streamlit run src/ui/app.py
-```
+## 🔬 Technical Details
 
-7. **Open your browser**
-- Streamlit UI: http://localhost:8501
-- API docs: http://localhost:8000/docs
+### Multi-Modal Embeddings
+- **Text**: Plot, genres, themes (768-dim)
+- **Image**: Poster aesthetics (512-dim)
+- **Hybrid**: 70% text + 30% image fusion
 
-## Project Structure
+### RAG Architecture
+- ChromaDB with HNSW indexing
+- Fast similarity search
+- Hybrid text+image retrieval
 
-```
-cinematch-ai/
-├── config/              # Configuration files
-├── data/                # Data storage
-│   ├── raw/             # MovieLens + TMDB
-│   ├── processed/       # Cleaned data
-│   ├── embeddings/      # Pre-computed embeddings
-│   └── vectordb/        # Chroma DB
-├── src/
-│   ├── agents/          # Multi-agent system
-│   ├── core/            # Embeddings, vectordb, models
-│   ├── data_pipeline/   # ETL and preprocessing
-│   ├── services/        # Business logic
-│   ├── api/             # FastAPI backend
-│   ├── ui/              # Streamlit frontend
-│   └── utils/           # Utilities
-├── scripts/             # Setup and deployment scripts
-├── tests/               # Test suite
-├── evaluation/          # Metrics and benchmarks
-└── docs/                # Documentation
-```
+### Evaluation
+- 15+ metrics (accuracy, diversity, explainability)
+- Benchmarked against baselines
+- Offline evaluation on MovieLens test set
 
-## API Endpoints
+## 📚 Documentation
 
-```bash
-# Get personalized recommendations
-POST /api/v1/recommendations
-{
-  "user_id": "user_123",
-  "context": {"time_of_day": "evening", "mood": "relaxed"},
-  "num_recommendations": 10
-}
+- **Architecture**: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+- **API Reference**: [docs/API_REFERENCE.md](docs/API_REFERENCE.md)
+- **Deployment**: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)
 
-# Group recommendations
-POST /api/v1/recommendations/group
-{
-  "user_ids": ["user_1", "user_2", "user_3"],
-  "aggregation_strategy": "multiplicative"
-}
+## 🏆 Project Stats
 
-# Cold-start onboarding
-POST /api/v1/users/onboard
-{
-  "user_id": "new_user",
-  "favorite_movies": ["The Matrix", "Inception"]
-}
-```
+- **Lines of Code**: 10,000+
+- **Files**: 70+
+- **Agents**: 7 (6 specialized + supervisor)
+- **API Endpoints**: 7
+- **Documentation**: 1,450+ lines
 
-## Evaluation Metrics
+## 💻 Source Code
 
-**Offline Evaluation (MovieLens Test Set):**
-- Hit Rate@10: > 0.30
-- NDCG@10: > 0.25
-- Intra-list Diversity: > 0.60
-- Coverage: > 20%
+Full source code available on GitHub:
+**[github.com/yourusername/cinematch-ai](https://github.com/yourusername/cinematch-ai)**
 
-**Performance:**
-- API Response Time (P95): < 2 seconds
-- Memory Usage: < 14GB
-- Error Rate: < 1%
+## 🎓 Built For
 
-## Development
+Portfolio project demonstrating:
+- Multi-agent systems (LangGraph)
+- RAG architecture (ChromaDB)
+- Multi-modal AI (text + image)
+- Production engineering
+- Full-stack development
 
-```bash
-# Run tests
-pytest tests/ -v
+Perfect for MAANG-level technical interviews!
 
-# Run specific test suite
-pytest tests/unit/agents/ -v
+## 📄 License
 
-# Run evaluation
-python evaluation/benchmarks/offline_eval.py
+MIT License - See [LICENSE](LICENSE)
 
-# Format code
-black src/
-isort src/
+## 🙏 Acknowledgments
 
-# Type checking
-mypy src/
-```
-
-## Deployment
-
-### Hugging Face Spaces
-
-```bash
-# Deploy to HF Spaces
-python scripts/deploy_hf_space.py
-```
-
-See [deployment/huggingface/README.md](deployment/huggingface/README.md) for detailed instructions.
-
-## Documentation
-
-📚 **Comprehensive Documentation Available:**
-- **[Architecture Guide](docs/ARCHITECTURE.md)** - Complete system design, multi-agent workflow, data flow diagrams
-- **[API Reference](docs/API_REFERENCE.md)** - All endpoints, request/response schemas, client examples
-- **[Deployment Guide](docs/DEPLOYMENT.md)** - Local setup, Docker, AWS, HuggingFace Spaces
-- **[Progress Tracker](PROGRESS.md)** - Week-by-week development log (92% complete)
-
-## Roadmap
-
-- [x] Phase 1-2: Foundation & Data Pipeline (Weeks 1-4)
-- [x] Phase 3-4: Embeddings & Vector Database (Weeks 5-8)
-- [x] Phase 5-6: All 6 Agents + Supervisor (Weeks 5-8)
-- [x] Phase 7: LangGraph Workflow Orchestration (Week 9)
-- [x] Phase 8: FastAPI Backend (Week 10)
-- [x] Phase 9: Streamlit Frontend UI (Week 10)
-- [x] Phase 10: Evaluation & Optimization (Week 11)
-- [x] Phase 11: Documentation & Architecture (Week 12)
-
-**✅ Project Complete!** Portfolio-ready with 10,000+ lines of code, 70+ files, 20+ commits.
-
-## Contributing
-
-Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) for details.
-
-## License
-
-This project is licensed under the MIT License - see [LICENSE](LICENSE) for details.
-
-## Acknowledgments
-
-- [MovieLens Dataset](https://grouplens.org/datasets/movielens/)
-- [TMDB API](https://www.themoviedb.org/documentation/api)
-- [LangChain & LangGraph](https://www.langchain.com/)
-- [Ollama](https://ollama.ai/)
-- [Chroma DB](https://www.trychroma.com/)
-
-## Contact
-
-For questions or feedback:
-- GitHub Issues: [https://github.com/yourusername/cinematch-ai/issues](https://github.com/yourusername/cinematch-ai/issues)
-- Email: your.email@example.com
+- MovieLens (GroupLens Research)
+- TMDB API
+- Groq API
+- LangChain/LangGraph
+- ChromaDB
 
 ---
 
-Built with ❤️ using 100% free and open-source tools
+<p align="center">
+  <strong>Built with ❤️ for movie lovers</strong><br>
+  <em>Using 100% free and open-source tools</em>
+</p>

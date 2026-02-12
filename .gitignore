@@ -4,123 +4,47 @@ __pycache__/
 *$py.class
 *.so
 .Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-share/python-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
-
-# Virtual Environment
 venv/
-env/
 ENV/
-env.bak/
-venv.bak/
-.venv/
 
-# IDEs
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-.DS_Store
-
-# Environment Variables
-.env
-.env.local
-.env.*.local
-
-# Data (exclude raw data, keep structure)
-data/raw/movielens/*.csv
-data/raw/movielens/*.zip
-data/raw/tmdb/**/*.json
-data/raw/tmdb/posters/*.jpg
-data/raw/tmdb/posters/*.png
-data/processed/*.parquet
+# Data (too large for GitHub)
+data/raw/
 data/processed/*.csv
-data/embeddings/*.npy
-data/embeddings/*.pkl
+data/processed/*.parquet
+
+# Vector DB (will be rebuilt)
 data/vectordb/
 
-# Model checkpoints and caches
-models/
-*.pt
-*.pth
-*.ckpt
-.cache/
-huggingface/
+# Embeddings (generated, can be rebuilt)
+data/embeddings/
+
+# Cache and databases (generated at runtime)
+cache/
+data/cache/
+*.db
 
 # Logs
 logs/
 *.log
 
-# Test coverage
-.coverage
-.coverage.*
-htmlcov/
-.pytest_cache/
-.tox/
+# Environment
+.env
+.env.local
 
-# Jupyter
-.ipynb_checkpoints/
-*.ipynb
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
 
-# Profiling
-*.prof
-*.stats
-
-# Evaluation reports
-evaluation/reports/*.html
-evaluation/reports/*.pdf
-
-# Secrets
-secrets/
-*.key
-*.pem
-
-# Temporary files
-tmp/
-temp/
-*.tmp
-
-# SQLite databases
-*.db
-*.sqlite
-*.sqlite3
-
-# macOS
+# OS
 .DS_Store
-.AppleDouble
-.LSOverride
+Thumbs.db
 
-# Thumbnails
-._*
+# Build
+dist/
+build/
+*.egg-info/
 
-# Files that might appear in the root
-.DocumentRevisions-V100
-.fseventsd
-.Spotlight-V100
-.TemporaryItems
-.Trashes
-.VolumeIcon.icns
-.com.apple.timemachine.donotpresent
-
-# Directories potentially created on remote AFP share
-.AppleDB
-.AppleDesktop
-Network Trash Folder
-Temporary Items
-.apdisk
+# Evaluation results
+evaluation/results/

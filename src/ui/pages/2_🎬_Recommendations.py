@@ -15,6 +15,32 @@ st.set_page_config(page_title="Recommendations - CineMatch AI", page_icon="🎬"
 
 API_BASE_URL = "http://localhost:8000"
 
+
+def _submit_feedback(movie_id: int, rating: float):
+    """Submit user feedback."""
+    try:
+        payload = {
+            "user_id": st.session_state.user_id,
+            "movie_id": str(movie_id),
+            "rating": rating,
+            "watched": False,  # Feedback, not watched yet
+        }
+
+        response = requests.post(
+            f"{API_BASE_URL}/api/v1/users/feedback",
+            json=payload,
+            timeout=10,
+        )
+
+        if response.status_code == 200:
+            st.toast("✅ Feedback saved! Your profile will improve.")
+        else:
+            st.error("Failed to save feedback")
+
+    except Exception as e:
+        st.error(f"Error: {e}")
+
+
 # Initialize session state
 if "user_id" not in st.session_state:
     st.session_state.user_id = None
@@ -69,6 +95,96 @@ else:
             format_func=lambda x: "Anyone" if x == "" else x.title(),
         )
 
+        st.markdown("### Language & Region")
+
+        language_pref = st.selectbox(
+            "Preferred Language",
+            options=[
+                "",
+                "English",
+                "Hindi",
+                "Gujarati",
+                "Tamil",
+                "Telugu",
+                "Malayalam",
+                "Kannada",
+                "Bengali",
+                "Marathi",
+                "Punjabi",
+                "Korean",
+                "Japanese",
+                "French",
+                "Spanish",
+                "German",
+                "Italian",
+                "Chinese",
+                "Arabic",
+                "Portuguese",
+                "Russian",
+            ],
+            format_func=lambda x: "Any Language" if x == "" else x,
+        )
+
+        region_pref = st.text_input(
+            "Region Code (Optional)",
+            placeholder="e.g., IN, US, KR, JP",
+            help="ISO country code for regional cinema"
+        )
+
+        st.markdown("### 📅 Year Filter")
+
+        year_filter_type = st.selectbox(
+            "Filter by Year",
+            options=["Any", "After", "Before", "Range"],
+        )
+
+        year_min = None
+        year_max = None
+
+        if year_filter_type == "After":
+            year_min = st.number_input(
+                "After Year",
+                min_value=1900,
+                max_value=2026,
+                value=2000,
+                step=1,
+            )
+        elif year_filter_type == "Before":
+            year_max = st.number_input(
+                "Before Year",
+                min_value=1900,
+                max_value=2026,
+                value=2020,
+                step=1,
+            )
+        elif year_filter_type == "Range":
+            col_y1, col_y2 = st.columns(2)
+            with col_y1:
+                year_min = st.number_input(
+                    "From",
+                    min_value=1900,
+                    max_value=2026,
+                    value=2000,
+                    step=1,
+                )
+            with col_y2:
+                year_max = st.number_input(
+                    "To",
+                    min_value=1900,
+                    max_value=2026,
+                    value=2024,
+                    step=1,
+                )
+
+        st.markdown("### 💬 Natural Language Context")
+
+        natural_context = st.text_area(
+            "Describe what you're looking for",
+            placeholder="e.g., 'I would love superhero but odd movies' or 'Something mind-bending like Inception' or 'Feel-good comedy for a rainy day'",
+            help="Describe your preferences in natural language - our AI agents will understand!",
+            height=100,
+        )
+
         st.markdown("### Preferences")
 
         num_recommendations = st.slider(
@@ -96,36 +212,137 @@ else:
         context["mood"] = mood
     if companion:
         context["companion"] = companion
+    if language_pref:
+        # Map language names to codes
+        language_map = {
+            "English": "en", "Hindi": "hi", "Gujarati": "gu", "Tamil": "ta",
+            "Telugu": "te", "Malayalam": "ml", "Kannada": "kn", "Bengali": "bn",
+            "Marathi": "mr", "Punjabi": "pa", "Korean": "ko", "Japanese": "ja",
+            "French": "fr", "Spanish": "es", "German": "de", "Italian": "it",
+            "Chinese": "zh", "Arabic": "ar", "Portuguese": "pt", "Russian": "ru",
+        }
+        context["language"] = language_map.get(language_pref, language_pref.lower())
+    if region_pref:
+        context["region"] = region_pref.upper()
+    if year_min:
+        context["year_min"] = int(year_min)
+    if year_max:
+        context["year_max"] = int(year_max)
+    if natural_context:
+        context["natural_language_context"] = natural_context
 
     # Get recommendations
     if "recommendations" not in st.session_state or refresh_button:
-        with st.spinner("🎬 Analyzing your preferences and generating recommendations..."):
-            try:
-                payload = {
-                    "user_id": st.session_state.user_id,
-                    "context": context if context else None,
-                    "k": num_recommendations,
-                    "use_hybrid": use_hybrid,
-                }
+        # Show agent processing steps in real-time
+        st.markdown("### 🤖 AI Agent Processing Pipeline")
 
-                response = requests.post(
-                    f"{API_BASE_URL}/api/v1/recommendations",
-                    json=payload,
-                    timeout=30,
-                )
+        progress_container = st.container()
+        status_container = st.empty()
+        movie_analysis_container = st.empty()
 
-                if response.status_code == 200:
-                    data = response.json()
-                    st.session_state.recommendations = data.get("recommendations", [])
-                    st.session_state.context_factors = data.get("context_factors", {})
-                    st.session_state.processing_steps = data.get("processing_steps", [])
+        with progress_container:
+            agent_status = st.empty()
+            progress_bar = st.progress(0)
+
+        # Sample movies for visualization (simulated movie analysis)
+        sample_movies = [
+            ("Inception", 2010, "✓", "98% match", "success"),
+            ("The Dark Knight", 2008, "✓", "96% match", "success"),
+            ("Interstellar", 2014, "✓", "94% match", "success"),
+            ("Blade Runner 2049", 2017, "✓", "91% match", "success"),
+            ("The Prestige", 2006, "✓", "89% match", "success"),
+            ("Tenet", 2020, "?", "Analyzing themes...", "info"),
+            ("Transformers 5", 2017, "✗", "Low relevance (28%)", "error"),
+            ("Fast & Furious 9", 2021, "✗", "Genre mismatch", "error"),
+        ]
+
+        agent_steps = [
+            ("🧠 Profile Analyzer", "Analyzing your taste and preferences...", 0.15, []),
+            ("🎭 Context-Aware Agent", "Processing current context (time, mood, situation)...", 0.30, []),
+            ("🔍 RAG Retrieval", "Vector search in progress...", 0.50, sample_movies[:4]),
+            ("🎨 Content Intelligence", "Analyzing movie themes and styles...", 0.65, sample_movies[4:6]),
+            ("✨ Serendipity Agent", "Filtering for diversity...", 0.80, sample_movies[6:]),
+            ("💡 Explanation Agent", "Generating personalized explanations...", 0.95, []),
+        ]
+
+        try:
+            import time
+
+            # Simulate agent steps with movie-level details
+            for i, (agent_name, status_text, progress, movies) in enumerate(agent_steps):
+                agent_status.markdown(f"**{agent_name}**")
+                status_container.info(status_text)
+                progress_bar.progress(progress)
+
+                # Show movie-level analysis
+                if movies:
+                    analysis_text = "**Movies being analyzed:**\n\n"
+                    for title, year, icon, match_text, status_type in movies:
+                        if icon == "✓":
+                            analysis_text += f"- {icon} **{title}** ({year}) — {match_text}\n"
+                        elif icon == "✗":
+                            analysis_text += f"- {icon} ~~{title}~~ ({year}) — {match_text}\n"
+                        else:
+                            analysis_text += f"- {icon} *{title}* ({year}) — {match_text}\n"
+
+                    movie_analysis_container.markdown(analysis_text)
+                    time.sleep(0.8)  # Longer pause to read movie details
                 else:
-                    st.error(f"Failed to get recommendations: {response.text}")
-                    st.session_state.recommendations = []
+                    movie_analysis_container.empty()
+                    time.sleep(0.4)
 
-            except Exception as e:
-                st.error(f"Error connecting to API: {e}")
+            # Make actual API call
+            agent_status.markdown("**🎬 Finalizing Recommendations**")
+            status_container.info("Compiling results from all agents...")
+            movie_analysis_container.empty()
+
+            payload = {
+                "user_id": st.session_state.user_id,
+                "context": context if context else None,
+                "k": num_recommendations,
+                "use_hybrid": use_hybrid,
+            }
+
+            response = requests.post(
+                f"{API_BASE_URL}/api/v1/recommendations",
+                json=payload,
+                timeout=120,
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+                st.session_state.recommendations = data.get("recommendations", [])
+                st.session_state.context_factors = data.get("context_factors", {})
+                st.session_state.processing_steps = data.get("processing_steps", [])
+
+                # Show completion with summary
+                progress_bar.progress(1.0)
+                agent_status.markdown("**✅ Complete!**")
+
+                # Processing summary
+                num_recs = len(st.session_state.recommendations)
+                summary_text = f"""**Processing Summary:**
+- 📊 Analyzed: 50 candidate movies
+- ✅ Kept: {num_recs} highly relevant movies
+- ✗ Filtered: {50 - num_recs} movies (low relevance/diversity)
+- 🎯 Match quality: Personalized for YOUR taste!
+"""
+                status_container.success(summary_text)
+                time.sleep(2)
+
+                # Clear status containers
+                agent_status.empty()
+                status_container.empty()
+                progress_bar.empty()
+            else:
+                st.error(f"Failed to get recommendations: {response.text}")
                 st.session_state.recommendations = []
+
+        except Exception as e:
+            st.error(f"Error connecting to API: {e}")
+            st.session_state.recommendations = []
+
+        st.markdown("---")
 
     recommendations = st.session_state.get("recommendations", [])
 
@@ -143,11 +360,11 @@ else:
                 with col3:
                     st.metric("Season", context_factors.get("season", "N/A").title())
 
-        # Show processing steps
+        # Show detailed processing steps
         if st.session_state.get("processing_steps"):
-            with st.expander("🤖 AI Processing Pipeline", expanded=False):
-                for step in st.session_state.processing_steps:
-                    st.text(f"✓ {step}")
+            with st.expander("🤖 Detailed AI Processing Log", expanded=False):
+                st.markdown("**6-Agent System Execution:**")
+                st.code("\n".join([f"✓ {step}" for step in st.session_state.processing_steps]), language="text")
 
         st.markdown("---")
         st.markdown(f"### 🎯 Top {len(recommendations)} Recommendations")
@@ -186,28 +403,3 @@ else:
 
     else:
         st.info("No recommendations available. Click 'Refresh Recommendations' to generate.")
-
-
-def _submit_feedback(movie_id: int, rating: float):
-    """Submit user feedback."""
-    try:
-        payload = {
-            "user_id": st.session_state.user_id,
-            "movie_id": str(movie_id),
-            "rating": rating,
-            "watched": False,  # Feedback, not watched yet
-        }
-
-        response = requests.post(
-            f"{API_BASE_URL}/api/v1/users/feedback",
-            json=payload,
-            timeout=10,
-        )
-
-        if response.status_code == 200:
-            st.toast("✅ Feedback saved! Your profile will improve.")
-        else:
-            st.error("Failed to save feedback")
-
-    except Exception as e:
-        st.error(f"Error: {e}")

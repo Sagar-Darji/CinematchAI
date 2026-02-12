@@ -141,3 +141,21 @@ class UpdateContextRequest(BaseModel):
             ]
         }
     }
+
+
+class LetterboxdImportRequest(BaseModel):
+    """Request to import Letterboxd CSV export."""
+
+    user_id: str = Field(..., description="User ID")
+    csv_content: str = Field(..., description="Letterboxd CSV export file content")
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "user_id": "user123",
+                    "csv_content": "Date,Name,Year,Letterboxd URI,Rating\n2024-01-15,Inception,2010,https://letterboxd.com/film/inception/,4.5\n...",
+                }
+            ]
+        }
+    }

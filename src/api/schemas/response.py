@@ -156,3 +156,14 @@ class ErrorResponse(BaseModel):
     error: str = Field(..., description="Error message")
     detail: Optional[str] = Field(default=None, description="Detailed error information")
     request_id: Optional[str] = Field(default=None, description="Request ID for tracking")
+
+
+class LetterboxdImportResponse(BaseModel):
+    """Response for Letterboxd import."""
+
+    user_id: str
+    total_movies: int = Field(..., description="Total movies found in CSV")
+    imported_count: int = Field(..., description="Successfully imported ratings")
+    failed_count: int = Field(..., description="Failed to import (not found in TMDB)")
+    success_rate: float = Field(..., description="Import success rate (0-1)")
+    message: str

@@ -165,25 +165,30 @@ class SupervisorAgent(BaseAgent):
         explanations = state.get("explanations", {})
 
         # Build final recommendations
-        from src.core.models import Recommendation
+        from src.core.models import Explanation, Recommendation
 
         final_recommendations = []
 
         for idx, movie in enumerate(diverse_candidates[:10], start=1):
             movie_id = str(movie.metadata.tmdb_id)
-            explanation = explanations.get(movie_id, "Recommended based on your preferences.")
+            explanation_text = explanations.get(movie_id, "Recommended based on your preferences.")
+
+            # Wrap string explanation into Explanation object
+            if isinstance(explanation_text, str):
+                explanation = Explanation(
+                    primary_reason=explanation_text,
+                    supporting_factors=[],
+                    confidence=0.8,
+                )
+            else:
+                explanation = explanation_text
 
             recommendation = Recommendation(
                 movie=movie,
                 score=1.0 - (idx - 1) * 0.05,  # Decreasing score (1.0, 0.95, 0.90, ...)
                 explanation=explanation,
                 rank=idx,
-                metadata={
-                    "is_exploration": movie in state.get("exploration_items", []),
-                    "content_features": state.get("content_features", {}).get(
-                        movie_id, {}
-                    ),
-                },
+                is_exploration=movie in state.get("exploration_items", []),
             )
 
             final_recommendations.append(recommendation)

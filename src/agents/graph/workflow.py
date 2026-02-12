@@ -101,22 +101,38 @@ def group_recommendation_node(state: RecommendationState) -> RecommendationState
 
 
 def retrieval_node(state: RecommendationState) -> RecommendationState:
-    """Retrieval node (RAG)."""
-    workflow_type = state.get("workflow_type", "single_user")
+    """
+    Retrieval node (RAG).
 
-    # Check if user profile indicates cold-start
+    Prioritizes personalized recommendations when user has profile embedding.
+    Only uses cold-start for truly new users.
+
+    CRITICAL FIX: Simplified logic to properly detect personalized vs cold-start.
+    """
     user_profile = state.get("user_profile")
-    is_cold_start = (
-        workflow_type == "cold_start"
-        or state.get("is_cold_start", False)
-        or (user_profile is not None and getattr(user_profile, "is_cold_start", False))
-        or user_profile is None
+
+    # SIMPLE LOGIC: Check if profile has embedding
+    has_profile_embedding = (
+        user_profile is not None
+        and hasattr(user_profile, "profile_embedding")
+        and user_profile.profile_embedding is not None
+        and len(user_profile.profile_embedding) > 0
     )
 
-    if is_cold_start:
-        return cold_start_retrieval(state)
+    # Log for debugging
+    if user_profile:
+        logger.info(f"User profile exists: is_cold_start={getattr(user_profile, 'is_cold_start', 'N/A')}, "
+                   f"total_ratings={getattr(user_profile, 'total_ratings', 'N/A')}, "
+                   f"has_embedding={has_profile_embedding}")
     else:
+        logger.info("No user profile found")
+
+    if has_profile_embedding:
+        logger.info("✅ Using PERSONALIZED retrieval (user has profile embedding from ratings)")
         return retrieve_candidates(state, k=50, use_hybrid=True)
+    else:
+        logger.info("❄️ Using COLD-START retrieval (no profile embedding available)")
+        return cold_start_retrieval(state)
 
 
 def aggregation_node(state: RecommendationState) -> RecommendationState:
@@ -237,8 +253,11 @@ def run_recommendation_workflow(
     workflow = build_recommendation_workflow()
 
     try:
-        # Execute workflow
-        final_state = workflow.invoke(initial_state)
+        # Execute workflow (increase recursion limit for multi-agent pipeline)
+        final_state = workflow.invoke(
+            initial_state,
+            {"recursion_limit": 50},
+        )
 
         logger.info(
             f"Workflow completed. Generated {len(final_state.get('final_recommendations', []))} recommendations"
