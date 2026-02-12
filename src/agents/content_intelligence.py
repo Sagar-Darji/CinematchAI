@@ -24,38 +24,68 @@ class ContentIntelligenceAgent(BaseAgent):
             use_fast_model=False,  # Use main model for better analysis
         )
 
+    # Mood-to-tone mapping: which tones fit which moods
+    MOOD_TONE_AFFINITY = {
+        "happy": {"light": 1.0, "whimsical": 0.8, "balanced": 0.4, "intense": 0.2, "serious": 0.1, "dark": 0.0},
+        "sad": {"serious": 0.8, "balanced": 0.6, "light": 0.5, "whimsical": 0.4, "dark": 0.3, "intense": 0.2},
+        "stressed": {"light": 0.9, "whimsical": 0.8, "balanced": 0.5, "serious": 0.2, "intense": 0.0, "dark": 0.0},
+        "bored": {"intense": 0.9, "dark": 0.7, "balanced": 0.5, "serious": 0.4, "light": 0.3, "whimsical": 0.3},
+        "thoughtful": {"serious": 0.9, "dark": 0.7, "balanced": 0.6, "intense": 0.4, "light": 0.2, "whimsical": 0.2},
+        "energetic": {"intense": 0.9, "light": 0.6, "balanced": 0.5, "dark": 0.4, "whimsical": 0.3, "serious": 0.2},
+        "nostalgic": {"balanced": 0.8, "light": 0.7, "serious": 0.6, "whimsical": 0.6, "dark": 0.3, "intense": 0.3},
+        "adventurous": {"intense": 0.8, "balanced": 0.7, "dark": 0.6, "whimsical": 0.5, "light": 0.4, "serious": 0.3},
+    }
+
+    # Genres that are NOT family-friendly
+    NON_FAMILY_GENRES = {"horror", "thriller", "crime", "war"}
+
     def process(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Analyze movie content features.
+        Analyze movie content features, then score and rerank candidates.
 
         Args:
             state: Current state with candidate_movies or movie data.
 
         Returns:
-            Updated state with content_features.
+            Updated state with content_features and reranked candidate_movies.
         """
         self.log_processing("Starting content analysis")
 
-        # Get movies to analyze
         candidate_movies = state.get("candidate_movies", [])
 
         if not candidate_movies:
-            # If no candidates yet, analyze based on user profile
             self.log_processing("No candidate movies yet, skipping content analysis")
             state["content_features"] = {}
             return state
 
-        # Analyze content for candidates
+        # Run cheap heuristic analysis (tone/pacing/complexity) for ALL candidates,
+        # and deep LLM analysis (themes/micro-genres) for top 10 only.
         content_features = {}
 
-        for movie in candidate_movies[:10]:  # Analyze top 10 candidates
+        for i, movie in enumerate(candidate_movies):
             movie_id = str(movie.metadata.tmdb_id)
-            features = self._analyze_movie_content(movie)
+            if i < 10:
+                features = self._analyze_movie_content(movie)
+            else:
+                features = self._analyze_movie_content_fast(movie)
             content_features[movie_id] = features
 
         state["content_features"] = content_features
+
+        # Score and rerank candidates using preferences + context
+        user_profile = state.get("user_profile")
+        context_factors = state.get("context_factors", {})
+        context = state.get("context", {})
+
+        scored_movies = self._score_and_rerank(
+            candidate_movies, content_features, user_profile, context_factors, context
+        )
+
+        original_count = len(candidate_movies)
+        state["candidate_movies"] = scored_movies
         state["processing_steps"] = state.get("processing_steps", []) + [
-            f"Content Intelligence: Analyzed {len(content_features)} movies"
+            f"Content Intelligence: Analyzed {len(content_features)} movies, "
+            f"reranked to {len(scored_movies)} (from {original_count})"
         ]
 
         return state
@@ -84,6 +114,142 @@ class ContentIntelligenceAgent(BaseAgent):
         }
 
         return features
+
+    def _analyze_movie_content_fast(self, movie) -> Dict[str, Any]:
+        """
+        Fast content analysis using only heuristics (no LLM calls).
+
+        Args:
+            movie: Movie object.
+
+        Returns:
+            Content features dictionary.
+        """
+        metadata = movie.metadata
+
+        features = {
+            "title": metadata.title,
+            "genres": metadata.genres,
+            "themes": self._genre_to_themes(metadata.genres),
+            "micro_genres": self._combine_genres(metadata.genres),
+            "tone": self._analyze_tone(metadata),
+            "pacing": self._estimate_pacing(metadata),
+            "complexity": self._estimate_complexity(metadata),
+        }
+
+        return features
+
+    def _score_and_rerank(
+        self,
+        candidates: List,
+        content_features: Dict[str, Dict],
+        user_profile,
+        context_factors: Dict[str, Any],
+        context: Dict[str, Any],
+    ) -> List:
+        """
+        Score candidates by relevance and filter out mismatches.
+
+        Args:
+            candidates: List of Movie objects.
+            content_features: Analyzed features per movie_id.
+            user_profile: User profile (may be None for cold-start).
+            context_factors: Detected context (mood, companion, etc.).
+            context: Raw user context (language, year_min, year_max, NL context).
+
+        Returns:
+            Reranked and filtered list of Movie objects.
+        """
+        mood = context_factors.get("mood")
+        companion = context_factors.get("companion", "alone")
+        nl_context = (
+            context.get("natural_language_context", "")
+            or context_factors.get("natural_language_context", "")
+            or ""
+        ).lower()
+        year_min = context.get("year_min") or context_factors.get("year_min")
+        year_max = context.get("year_max") or context_factors.get("year_max")
+        language = context.get("language") or context_factors.get("language")
+
+        # Get user genre preferences
+        fav_genres = set()
+        disliked_genres = set()
+        if user_profile and hasattr(user_profile, "preferences"):
+            fav_genres = {g.lower() for g in (user_profile.preferences.favorite_genres or [])}
+            disliked_genres = {g.lower() for g in (user_profile.preferences.disliked_genres or [])}
+
+        # NL context keywords for matching against themes/micro-genres
+        nl_keywords = [w for w in nl_context.split() if len(w) > 2] if nl_context else []
+
+        scored = []
+        for movie in candidates:
+            movie_id = str(movie.metadata.tmdb_id)
+            features = content_features.get(movie_id, {})
+            movie_genres = {g.lower() for g in (features.get("genres") or movie.metadata.genres or [])}
+            tone = features.get("tone", "balanced")
+
+            # --- Hard filters: remove clearly wrong movies ---
+
+            # Year filter enforcement (catch anything that slipped through DB filter)
+            movie_year = movie.metadata.year
+            if year_min and movie_year and movie_year < int(year_min):
+                continue
+            if year_max and movie_year and movie_year > int(year_max):
+                continue
+
+            # Language post-filter
+            if language and movie.metadata.original_language:
+                if movie.metadata.original_language != language:
+                    continue
+
+            # --- Soft scoring ---
+            score = 0.5  # Base score
+
+            # 1. Genre match with user preferences (±0.25)
+            if fav_genres:
+                genre_overlap = len(movie_genres & fav_genres)
+                score += min(genre_overlap * 0.1, 0.25)
+            if disliked_genres and (movie_genres & disliked_genres):
+                score -= 0.2
+
+            # 2. Tone-mood affinity (±0.15)
+            if mood and mood.lower() in self.MOOD_TONE_AFFINITY:
+                affinity = self.MOOD_TONE_AFFINITY[mood.lower()].get(tone, 0.4)
+                score += (affinity - 0.4) * 0.3  # Range: -0.12 to +0.18
+
+            # 3. Companion appropriateness (±0.2)
+            if companion == "family":
+                if movie_genres & self.NON_FAMILY_GENRES:
+                    score -= 0.25  # Penalize non-family content
+                if "family" in movie_genres or "animation" in movie_genres:
+                    score += 0.15
+            elif companion == "partner":
+                if "romance" in movie_genres:
+                    score += 0.1
+
+            # 4. Natural language context keyword matching (±0.15)
+            if nl_keywords:
+                themes = [t.lower() for t in (features.get("themes") or [])]
+                micro_genres = [mg.lower() for mg in (features.get("micro_genres") or [])]
+                overview = (movie.metadata.overview or "").lower()
+                searchable = " ".join(themes + micro_genres) + " " + " ".join(movie_genres) + " " + overview
+
+                keyword_hits = sum(1 for kw in nl_keywords if kw in searchable)
+                score += min(keyword_hits * 0.05, 0.15)
+
+            scored.append((score, movie))
+
+        # Sort by score descending
+        scored.sort(key=lambda x: x[0], reverse=True)
+
+        reranked = [movie for _, movie in scored]
+
+        logger.info(
+            f"Content reranking: {len(candidates)} → {len(reranked)} candidates "
+            f"(mood={mood}, companion={companion}, language={language})"
+        )
+
+        return reranked
 
     def _extract_themes(self, metadata) -> List[str]:
         """

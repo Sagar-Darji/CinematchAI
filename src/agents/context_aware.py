@@ -82,6 +82,13 @@ class ContextAwareAgent(BaseAgent):
             "viewing_situation": self._infer_viewing_situation(
                 context_input, now
             ),
+
+            # Forward user-specified filters (language, region, year, NL context)
+            "language": context_input.get("language"),
+            "region": context_input.get("region"),
+            "year_min": context_input.get("year_min"),
+            "year_max": context_input.get("year_max"),
+            "natural_language_context": context_input.get("natural_language_context"),
         }
 
         return context
