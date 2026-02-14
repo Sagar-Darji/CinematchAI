@@ -85,32 +85,46 @@ class LLMClient:
         Raises:
             Exception: If all providers fail.
         """
-        try:
-            if self.provider == LLMProvider.OLLAMA:
-                return self._generate_ollama(prompt, system_prompt, temperature, max_tokens, stop)
-            elif self.provider == LLMProvider.GROQ:
-                return self._generate_groq(prompt, system_prompt, temperature, max_tokens, stop)
-            else:
-                raise ValueError(f"Unsupported provider: {self.provider}")
-        except Exception as e:
-            logger.error(f"Primary provider {self.provider} failed: {e}")
+        last_error: Optional[Exception] = None
 
-            # Try fallback provider
-            if self.fallback_provider:
-                logger.info(f"Attempting fallback provider: {self.fallback_provider}")
-                try:
-                    if self.fallback_provider == LLMProvider.OLLAMA:
-                        return self._generate_ollama(
-                            prompt, system_prompt, temperature, max_tokens, stop
-                        )
-                    elif self.fallback_provider == LLMProvider.GROQ:
-                        return self._generate_groq(
-                            prompt, system_prompt, temperature, max_tokens, stop
-                        )
-                except Exception as fallback_error:
-                    logger.error(f"Fallback provider {self.fallback_provider} failed: {fallback_error}")
+        # Attempt primary provider (up to 3 retries for Groq rate-limit / transient errors)
+        max_attempts = 3 if self.provider == LLMProvider.GROQ else 1
+        for attempt in range(1, max_attempts + 1):
+            try:
+                if self.provider == LLMProvider.OLLAMA:
+                    return self._generate_ollama(prompt, system_prompt, temperature, max_tokens, stop)
+                elif self.provider == LLMProvider.GROQ:
+                    return self._generate_groq(prompt, system_prompt, temperature, max_tokens, stop)
+                else:
+                    raise ValueError(f"Unsupported provider: {self.provider}")
+            except Exception as e:
+                last_error = e
+                if attempt < max_attempts:
+                    wait = attempt * 2  # 2s, 4s back-off
+                    logger.warning(
+                        f"Groq attempt {attempt}/{max_attempts} failed: {e} — retrying in {wait}s"
+                    )
+                    time.sleep(wait)
+                else:
+                    logger.error(f"Primary provider {self.provider} failed after {attempt} attempts: {e}")
 
-            raise Exception(f"All LLM providers failed. Last error: {e}")
+        # Try fallback provider (once)
+        if self.fallback_provider:
+            logger.info(f"Attempting fallback provider: {self.fallback_provider}")
+            try:
+                if self.fallback_provider == LLMProvider.OLLAMA:
+                    return self._generate_ollama(
+                        prompt, system_prompt, temperature, max_tokens, stop
+                    )
+                elif self.fallback_provider == LLMProvider.GROQ:
+                    return self._generate_groq(
+                        prompt, system_prompt, temperature, max_tokens, stop
+                    )
+            except Exception as fallback_error:
+                logger.error(f"Fallback provider {self.fallback_provider} failed: {fallback_error}")
+                raise Exception(f"All LLM providers failed. Last error: {fallback_error}")
+
+        raise Exception(f"All LLM providers failed. Last error: {last_error}")
 
     def _generate_ollama(
         self,
@@ -222,35 +236,46 @@ def get_llm_client(
     model: Optional[str] = None,
     use_fast_model: bool = False,
 ) -> LLMClient:
-    """
-    Get configured LLM client.
+    """Get configured LLM client.
+
+    Provider priority (when provider=None):
+    1. If settings.llm_provider == 'groq' AND groq_api_key is set → Groq primary, Ollama fallback
+    2. If settings.llm_provider == 'groq' but no API key → Ollama (warn)
+    3. If settings.llm_provider == 'ollama' → Ollama primary, no fallback
 
     Args:
-        provider: LLM provider. If None, uses Ollama.
-        model: Model name. If None, uses default.
-        use_fast_model: Use fast model instead of main model.
+        provider: Override provider. If None, auto-selects based on settings.
+        model: Override model name. If None, uses default for the chosen provider.
+        use_fast_model: Use fast/cheap model instead of the main model.
 
     Returns:
         Configured LLM client.
     """
     settings = get_settings()
-    provider = provider or LLMProvider.OLLAMA
 
-    if not model:
-        if use_fast_model:
-            model = (
-                settings.ollama_model_fast
-                if provider == LLMProvider.OLLAMA
-                else "llama-3.1-8b-instant"
-            )
+    # Auto-select provider from settings if not overridden
+    if provider is None:
+        if settings.llm_provider == "groq" and settings.groq_api_key:
+            provider = LLMProvider.GROQ
         else:
-            model = (
-                settings.ollama_model_main
-                if provider == LLMProvider.OLLAMA
-                else "llama-3.1-70b-versatile"
-            )
+            if settings.llm_provider == "groq" and not settings.groq_api_key:
+                logger.warning(
+                    "LLM_PROVIDER=groq but GROQ_API_KEY is not set — falling back to Ollama"
+                )
+            provider = LLMProvider.OLLAMA
 
-    # Set fallback provider
-    fallback_provider = LLMProvider.GROQ if provider == LLMProvider.OLLAMA else None
+    # Pick model for the chosen provider
+    if not model:
+        if provider == LLMProvider.GROQ:
+            model = settings.groq_model_fast if use_fast_model else settings.groq_model_main
+        else:
+            model = settings.ollama_model_fast if use_fast_model else settings.ollama_model_main
 
+    # Groq gets Ollama as fallback; Ollama has no fallback
+    fallback_provider = LLMProvider.OLLAMA if provider == LLMProvider.GROQ else None
+
+    logger.info(
+        f"LLM: {provider.value} ({model})"
+        + (f" → fallback: {fallback_provider.value}" if fallback_provider else "")
+    )
     return LLMClient(provider=provider, model=model, fallback_provider=fallback_provider)

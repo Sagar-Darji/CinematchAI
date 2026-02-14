@@ -9,6 +9,7 @@ import streamlit as st
 import requests
 from typing import List, Dict
 from src.ui.session import restore_streamlit_session, save_session, clear_session
+from src.ui.styles import inject_cinema_theme
 
 # Page configuration
 st.set_page_config(
@@ -18,34 +19,8 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# Custom CSS
-st.markdown(
-    """
-    <style>
-    .main-header {
-        font-size: 48px;
-        font-weight: bold;
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        margin-bottom: 10px;
-    }
-    .subtitle {
-        font-size: 18px;
-        color: #666;
-        margin-bottom: 30px;
-    }
-    .feature-card {
-        background-color: #f8f9fa;
-        padding: 20px;
-        border-radius: 10px;
-        border-left: 4px solid #667eea;
-        margin-bottom: 15px;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+# Cinema dark theme
+inject_cinema_theme()
 
 # Helper functions
 

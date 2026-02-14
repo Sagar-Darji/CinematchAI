@@ -353,11 +353,18 @@ class _IndexedTracker:
             }
 
     # ---- bulk job queue methods ----
-    def has_pending_jobs(self) -> bool:
+    def has_pending_jobs(self, languages: Optional[List[str]] = None) -> bool:
         with sqlite3.connect(str(self.db_path)) as conn:
-            row = conn.execute(
-                "SELECT 1 FROM bulk_jobs WHERE status = 'pending' LIMIT 1"
-            ).fetchone()
+            if languages:
+                placeholders = ",".join("?" * len(languages))
+                row = conn.execute(
+                    f"SELECT 1 FROM bulk_jobs WHERE status = 'pending' AND language IN ({placeholders}) LIMIT 1",
+                    languages,
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT 1 FROM bulk_jobs WHERE status = 'pending' LIMIT 1"
+                ).fetchone()
             return row is not None
 
     def count_jobs(self) -> Dict[str, int]:
@@ -384,16 +391,26 @@ class _IndexedTracker:
             )
             conn.commit()
 
-    def pick_next_job(self) -> Optional[Dict]:
+    def pick_next_job(self, languages: Optional[List[str]] = None) -> Optional[Dict]:
         """Atomically pick the next pending job (lowest priority number first = highest priority)."""
         with sqlite3.connect(str(self.db_path)) as conn:
             conn.row_factory = sqlite3.Row
-            row = conn.execute(
-                """SELECT * FROM bulk_jobs
-                   WHERE status = 'pending'
-                   ORDER BY priority ASC, id ASC
-                   LIMIT 1"""
-            ).fetchone()
+            if languages:
+                placeholders = ",".join("?" * len(languages))
+                row = conn.execute(
+                    f"""SELECT * FROM bulk_jobs
+                       WHERE status = 'pending' AND language IN ({placeholders})
+                       ORDER BY priority ASC, id ASC
+                       LIMIT 1""",
+                    languages,
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    """SELECT * FROM bulk_jobs
+                       WHERE status = 'pending'
+                       ORDER BY priority ASC, id ASC
+                       LIMIT 1"""
+                ).fetchone()
             if not row:
                 return None
             job = dict(row)
@@ -645,6 +662,7 @@ class EnrichmentPipeline:
         target_gb: float = 15.0,
         max_pages: int = 500,
         progress_callback: Optional[Callable] = None,
+        languages: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """Main entry point for bulk local enrichment.
 
@@ -652,19 +670,31 @@ class EnrichmentPipeline:
             target_gb: Target corpus size in GB.
             max_pages: Maximum pages to process in this run.
             progress_callback: Optional callback(info_dict) called after each job.
+            languages: If provided, only process these language codes (e.g. ["hi", "en"]).
+                       When specified, stale pending jobs for those languages are cleared
+                       and regenerated so the language filter takes effect immediately.
 
         Returns:
             Summary dict with total_new, pages_processed, etc.
         """
-        logger.info(f"Starting bulk local enrichment (target={target_gb}GB, max_pages={max_pages})")
+        if languages:
+            lang_names = [LANGUAGE_NAMES.get(l, l) for l in languages]
+            logger.info(
+                f"Starting bulk enrichment for: {', '.join(lang_names)} "
+                f"(target={target_gb}GB, max_pages={max_pages})"
+            )
+            # Clear stale pending jobs for selected languages so we regenerate fresh
+            self._clear_pending_jobs_for_languages(languages)
+        else:
+            logger.info(f"Starting bulk local enrichment (ALL languages, target={target_gb}GB, max_pages={max_pages})")
 
-        # Generate jobs if queue is empty (smart page-aware generation)
-        if not self.tracker.has_pending_jobs():
+        # Generate jobs if no pending jobs exist for selected languages
+        if not self.tracker.has_pending_jobs(languages=languages):
             logger.info("No pending jobs — generating smart page-aware jobs...")
-            self._generate_jobs()
+            self._generate_jobs(languages=languages)
 
         # Check if anything was generated
-        if not self.tracker.has_pending_jobs():
+        if not self.tracker.has_pending_jobs(languages=languages):
             logger.info("No jobs needed — all pages fresh and fully indexed")
             return {
                 "total_new": 0,
@@ -674,8 +704,12 @@ class EnrichmentPipeline:
                 "total_indexed": self.tracker.count(),
             }
 
-        # Process jobs
-        result = self._process_jobs(max_pages=max_pages, progress_callback=progress_callback)
+        # Process jobs (filter by language if specified)
+        result = self._process_jobs(
+            max_pages=max_pages,
+            progress_callback=progress_callback,
+            languages=languages,
+        )
 
         logger.info(
             f"Bulk enrichment run complete: {result['total_new']} new movies, "
@@ -684,7 +718,19 @@ class EnrichmentPipeline:
         )
         return result
 
-    def _generate_jobs(self):
+    def _clear_pending_jobs_for_languages(self, languages: List[str]):
+        """Delete pending (not yet started) jobs for specific languages."""
+        import sqlite3 as _sqlite3
+        with _sqlite3.connect(str(self.tracker.db_path)) as conn:
+            placeholders = ",".join("?" * len(languages))
+            conn.execute(
+                f"DELETE FROM bulk_jobs WHERE status = 'pending' AND language IN ({placeholders})",
+                languages,
+            )
+            conn.commit()
+        logger.info(f"Cleared pending jobs for languages: {languages}")
+
+    def _generate_jobs(self, languages: Optional[List[str]] = None):
         """Generate jobs intelligently using the page registry.
 
         For each combo (language + genre + decade + sort):
@@ -692,10 +738,20 @@ class EnrichmentPipeline:
         2. Check pages with unindexed movies
         3. Auto-discover new pages up to TMDB's reported total_pages
         Skips pages that are fresh AND fully indexed (zero cost).
+
+        Args:
+            languages: If provided, only generate jobs for these language codes.
         """
         already_indexed = self.tracker.get_indexed_ids()
         jobs: List[Dict] = []
         skipped = 0
+
+        # Filter language configs if requested
+        lang_configs = BULK_LANGUAGE_CONFIG
+        if languages:
+            lang_configs = [c for c in BULK_LANGUAGE_CONFIG if c["language"] in languages]
+            lang_names = [LANGUAGE_NAMES.get(l, l) for l in languages]
+            logger.info(f"Generating jobs for: {', '.join(lang_names)}")
 
         def _should_create_job(combo_key: str, page: int, sort_by: str) -> bool:
             """Return True if this page needs processing."""
@@ -743,7 +799,7 @@ class EnrichmentPipeline:
             # Always explore a few pages beyond what we've seen (in case TMDB grew)
             return min(max(ceiling, max_explored + 2), 500)
 
-        for cfg in BULK_LANGUAGE_CONFIG:
+        for cfg in lang_configs:
             lang = cfg["language"]
             priority = cfg["priority"]
             genre_ids = cfg.get("genre_ids", [])
@@ -817,6 +873,7 @@ class EnrichmentPipeline:
         self,
         max_pages: int = 500,
         progress_callback: Optional[Callable] = None,
+        languages: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """Process jobs from the queue in priority order.
 
@@ -836,7 +893,7 @@ class EnrichmentPipeline:
         start_time = time.time()
 
         while pages_processed < max_pages:
-            job = self.tracker.pick_next_job()
+            job = self.tracker.pick_next_job(languages=languages)
             if not job:
                 logger.info("No more pending jobs in queue")
                 break

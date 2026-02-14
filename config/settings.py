@@ -25,6 +25,10 @@ class Settings(BaseSettings):
     log_level: str = Field(default="INFO", description="Logging level")
 
     # LLM Configuration
+    llm_provider: str = Field(
+        default="groq",
+        description="Primary LLM provider: 'groq' (cloud, fast) or 'ollama' (local)",
+    )
     ollama_base_url: str = Field(
         default="http://localhost:11434", description="Ollama server URL"
     )
@@ -35,8 +39,16 @@ class Settings(BaseSettings):
         default="llama3.1:8b", description="Fast Ollama model for simple tasks"
     )
 
-    # Groq API (Backup)
+    # Groq API (Primary cloud LLM)
     groq_api_key: Optional[str] = Field(default=None, description="Groq API key")
+    groq_model_main: str = Field(
+        default="llama-3.1-70b-versatile",
+        description="Main Groq model for complex tasks",
+    )
+    groq_model_fast: str = Field(
+        default="llama-3.1-8b-instant",
+        description="Fast Groq model for simple tasks",
+    )
 
     # TMDB API
     tmdb_api_key: Optional[str] = Field(default=None, description="TMDB API key")

@@ -1,10 +1,12 @@
 """Movie Service - On-demand movie data from TMDB API (scalable to all movies)."""
 
 import hashlib
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional
 from datetime import datetime, timedelta
 
 import requests
+from requests.adapters import HTTPAdapter
 from diskcache import Cache
 
 from config.settings import get_settings
@@ -33,6 +35,11 @@ class MovieService:
         """Initialize movie service."""
         self.base_url = "https://api.themoviedb.org/3"
         self.api_key = settings.tmdb_api_key
+        # Connection pooling — reuse TCP connections across TMDB requests
+        self._session = requests.Session()
+        adapter = HTTPAdapter(pool_maxsize=20, pool_connections=10)
+        self._session.mount("https://", adapter)
+        self._session.mount("http://", adapter)
 
     def get_movie_by_id(self, tmdb_id: int) -> Optional[Movie]:
         """
@@ -58,7 +65,7 @@ class MovieService:
                 "append_to_response": "credits",
             }
 
-            response = requests.get(url, params=params, timeout=10)
+            response = self._session.get(url, params=params, timeout=10)
 
             if response.status_code == 200:
                 data = response.json()
@@ -76,6 +83,35 @@ class MovieService:
         except Exception as e:
             logger.error(f"Failed to fetch movie {tmdb_id}: {e}")
             return None
+
+    def get_movies_batch(
+        self, tmdb_ids: List[int], max_workers: int = 5
+    ) -> List[Optional["Movie"]]:
+        """Fetch multiple movies in parallel — fixes the N+1 loop in profile_analyzer.
+
+        Args:
+            tmdb_ids: List of TMDB movie IDs.
+            max_workers: Concurrent TMDB requests (default 5 — gentle rate limit).
+
+        Returns:
+            List of Movie objects in the same order as tmdb_ids (None for failures).
+        """
+        results: dict = {}
+
+        def _fetch(tid: int):
+            return tid, self.get_movie_by_id(tmdb_id=tid)
+
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = {pool.submit(_fetch, tid): tid for tid in tmdb_ids}
+            for future in as_completed(futures):
+                try:
+                    tid, movie = future.result()
+                    results[tid] = movie
+                except Exception as e:
+                    logger.warning(f"Batch fetch failed for id {futures[future]}: {e}")
+                    results[futures[future]] = None
+
+        return [results.get(tid) for tid in tmdb_ids]
 
     def search_movies(
         self,
@@ -110,7 +146,7 @@ class MovieService:
             if language:
                 params["language"] = language
 
-            response = requests.get(url, params=params, timeout=10)
+            response = self._session.get(url, params=params, timeout=10)
 
             if response.status_code == 200:
                 data = response.json()
@@ -157,7 +193,7 @@ class MovieService:
             if language:
                 params["language"] = language
 
-            response = requests.get(url, params=params, timeout=10)
+            response = self._session.get(url, params=params, timeout=10)
 
             if response.status_code == 200:
                 data = response.json()
@@ -213,7 +249,7 @@ class MovieService:
             if region:
                 params["region"] = region
 
-            response = requests.get(url, params=params, timeout=10)
+            response = self._session.get(url, params=params, timeout=10)
 
             if response.status_code == 200:
                 data = response.json()
@@ -276,7 +312,7 @@ class MovieService:
             if region:
                 params["region"] = region
 
-            response = requests.get(url, params=params, timeout=10)
+            response = self._session.get(url, params=params, timeout=10)
 
             if response.status_code == 200:
                 data = response.json()

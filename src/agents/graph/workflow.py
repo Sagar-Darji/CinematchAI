@@ -1,7 +1,7 @@
 """LangGraph Workflow - Orchestrates multi-agent recommendation system."""
 
 import time
-from typing import Any, Dict, List
+from typing import Any, Callable, Dict, List, Optional
 
 from langgraph.graph import END, StateGraph
 
@@ -61,7 +61,7 @@ def get_agents():
 
 
 def _add_trace_step(state, agent_name, start_time, summary, details=None):
-    """Helper to add a trace step if tracing is active."""
+    """Helper to add a trace step and emit a progress event."""
     trace_id = state.get("_trace_id")
     if trace_id:
         duration_ms = (time.time() - start_time) * 1000
@@ -75,6 +75,14 @@ def _add_trace_step(state, agent_name, start_time, summary, details=None):
             )
         except Exception as e:
             logger.warning(f"Failed to add trace step: {e}")
+
+    # Emit progress event for async streaming / UI trace display
+    cb = state.get("_progress_callback")
+    if cb:
+        try:
+            cb(agent_name, summary)
+        except Exception:
+            pass
 
 
 def supervisor_node(state: RecommendationState) -> RecommendationState:
@@ -306,15 +314,17 @@ def run_recommendation_workflow(
     user_ids: List[str] = None,
     context: Dict[str, Any] = None,
     is_cold_start: bool = False,
+    progress_callback: Optional[Callable[[str, str], None]] = None,
 ) -> Dict[str, Any]:
-    """
-    Run the complete recommendation workflow.
+    """Run the complete recommendation workflow.
 
     Args:
         user_id: Single user ID (optional).
         user_ids: List of user IDs for group recommendations (optional).
         context: Context information (time, mood, companion, etc.).
         is_cold_start: Whether this is a new user with no history.
+        progress_callback: Optional callable(step_name, detail) called after
+            each agent node completes — used for live streaming trace display.
 
     Returns:
         Final state with recommendations.
@@ -333,6 +343,7 @@ def run_recommendation_workflow(
         is_cold_start=is_cold_start,
         processing_steps=[],
         _trace_id=trace_id,
+        _progress_callback=progress_callback,
     )
 
     # Build and run workflow

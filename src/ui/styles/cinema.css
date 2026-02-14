@@ -1,0 +1,142 @@
+/* ============================================================
+   CinematchAI — Cinema Dark Theme
+   Inspired by IMAX lobbies and nothing-to-watch.port80.ch
+   ============================================================ */
+
+/* ---- Colour palette ---------------------------------------- */
+:root {
+  --bg-primary:   #0a0a0f;
+  --bg-card:      #12121a;
+  --bg-sidebar:   #0e0e16;
+  --accent-gold:  #f5c518;
+  --accent-red:   #e50914;
+  --text-primary: #ffffff;
+  --text-muted:   #8a8a9a;
+  --border:       #1e1e2e;
+  --hover-glow:   rgba(245, 197, 24, 0.15);
+}
+
+/* ---- Global background ------------------------------------- */
+.stApp, [data-testid="stAppViewContainer"] {
+  background-color: var(--bg-primary) !important;
+  color: var(--text-primary) !important;
+}
+
+/* ---- Sidebar ----------------------------------------------- */
+[data-testid="stSidebar"] {
+  background-color: var(--bg-sidebar) !important;
+  border-right: 1px solid var(--border) !important;
+}
+[data-testid="stSidebar"] * {
+  color: var(--text-primary) !important;
+}
+[data-testid="stSidebar"] .stSelectbox > div,
+[data-testid="stSidebar"] .stSlider,
+[data-testid="stSidebar"] .stTextInput > div {
+  background-color: var(--bg-card) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 6px !important;
+}
+
+/* ---- Buttons ----------------------------------------------- */
+.stButton > button {
+  background-color: var(--accent-red) !important;
+  color: #fff !important;
+  border: none !important;
+  border-radius: 6px !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.5px !important;
+  transition: opacity 0.2s;
+}
+.stButton > button:hover {
+  opacity: 0.85 !important;
+}
+
+/* ---- Movie card -------------------------------------------- */
+.movie-card {
+  background-color: var(--bg-card) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 12px !important;
+  padding: 16px !important;
+  margin-bottom: 16px !important;
+  transition: box-shadow 0.2s, border-color 0.2s;
+}
+.movie-card:hover {
+  border-color: var(--accent-gold) !important;
+  box-shadow: 0 0 16px var(--hover-glow) !important;
+}
+
+/* ---- Titles ----------------------------------------------- */
+h1, h2, h3 {
+  color: var(--text-primary) !important;
+}
+h1 {
+  background: linear-gradient(135deg, var(--accent-gold) 0%, #ffaa00 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  font-weight: 800 !important;
+}
+
+/* ---- Progress / score bar ---------------------------------- */
+.stProgress > div > div {
+  background-color: var(--accent-gold) !important;
+}
+
+/* ---- Expanders -------------------------------------------- */
+.streamlit-expanderHeader {
+  background-color: var(--bg-card) !important;
+  color: var(--text-primary) !important;
+  border-radius: 8px !important;
+}
+.streamlit-expanderContent {
+  background-color: var(--bg-card) !important;
+  border: 1px solid var(--border) !important;
+}
+
+/* ---- Info / success / warning boxes ----------------------- */
+.stAlert {
+  background-color: var(--bg-card) !important;
+  border-radius: 8px !important;
+}
+
+/* ---- Score badge ------------------------------------------ */
+.score-badge {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: 20px;
+  font-weight: 700;
+  font-size: 13px;
+  color: #000;
+}
+.score-high   { background-color: var(--accent-gold); }
+.score-medium { background-color: #ff9f43; }
+.score-low    { background-color: #888; color: #fff; }
+
+/* ---- Genre pill ------------------------------------------- */
+.genre-pill {
+  display: inline-block;
+  padding: 3px 10px;
+  margin: 2px;
+  border-radius: 14px;
+  font-size: 12px;
+  font-weight: 600;
+  background-color: var(--border);
+  color: var(--text-primary);
+  border: 1px solid #2a2a3e;
+}
+
+/* ---- Exploration badge ------------------------------------ */
+.exploration-badge {
+  background-color: var(--accent-red) !important;
+  color: white !important;
+  padding: 3px 8px !important;
+  border-radius: 12px !important;
+  font-size: 12px !important;
+  font-weight: bold !important;
+}
+
+/* ---- Scrollbar -------------------------------------------- */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: var(--bg-primary); }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--accent-gold); }

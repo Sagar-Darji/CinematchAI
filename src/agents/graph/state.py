@@ -1,6 +1,6 @@
 """LangGraph state definitions for multi-agent workflow."""
 
-from typing import Dict, List, Optional, TypedDict
+from typing import Any, Callable, Dict, List, Optional, TypedDict
 
 from src.core.models import Movie, Recommendation, UserProfile
 
@@ -44,6 +44,7 @@ class RecommendationState(TypedDict, total=False):
     agent_timings: Dict[str, float]
     _trace_id: Optional[str]
     _retrieval_source: Optional[str]
+    _progress_callback: Optional[Callable[[str, str], Any]]  # (step_name, detail)
 
 
 class GroupRecommendationState(TypedDict, total=False):

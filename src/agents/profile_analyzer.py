@@ -1,6 +1,7 @@
 """Profile Analyzer Agent - Analyzes user viewing history and builds profiles."""
 
 import json
+import math
 from collections import Counter
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -245,7 +246,8 @@ class ProfileAnalyzerAgent(BaseAgent):
         preferred_decades = [decade for decade, _ in decade_counts.most_common(3)]
 
         # Calculate exploration rate (variance in genres/years)
-        exploration_rate = min(len(genre_counts) / 20.0, 1.0)  # Normalize to 0-1
+        # Cap at 0.35 — never explore more than 35% of recommendations regardless of genre breadth
+        exploration_rate = min(len(genre_counts) / 20.0, 0.35)
 
         # Calculate nostalgia tendency (preference for older movies)
         current_year = datetime.now().year
@@ -396,12 +398,16 @@ class ProfileAnalyzerAgent(BaseAgent):
 
             logger.info(f"Computing profile embedding from {len(ratings_df)} ratings")
 
+            # Batch fetch all movies in parallel (fixes N+1 sequential API calls)
+            movie_ids = [int(r["movieId"]) for _, r in ratings_df.iterrows()]
+            movies_batch = movie_service.get_movies_batch(movie_ids, max_workers=5)
+            movie_lookup = {mid: movie for mid, movie in zip(movie_ids, movies_batch)}
+
             for _, rating in ratings_df.iterrows():
                 movie_id = rating["movieId"]
 
                 try:
-                    # Get movie details (cached from TMDB)
-                    movie = movie_service.get_movie_by_id(tmdb_id=int(movie_id))
+                    movie = movie_lookup.get(int(movie_id))
 
                     if movie and movie.metadata.overview:
                         # Generate embedding on-demand using text embedder
@@ -413,8 +419,20 @@ class ProfileAnalyzerAgent(BaseAgent):
                         embedding = text_embedder.embed_text(text)[0]  # embed_text returns array
 
                         if embedding is not None and len(embedding) > 0:
-                            # Weight by rating (higher ratings = more influence)
-                            weight = rating["rating"] / 5.0  # Normalize to 0-1
+                            # Weight by rating × temporal decay
+                            # Ratings decay with half-life ~70 days: exp(-0.01 * days_ago)
+                            rating_weight = rating["rating"] / 5.0
+                            ts = rating.get("timestamp")
+                            if ts is not None and hasattr(ts, "days") is False:
+                                try:
+                                    days_ago = (datetime.now() - pd.Timestamp(ts).to_pydatetime().replace(tzinfo=None)).days
+                                    days_ago = max(0, days_ago)
+                                except Exception:
+                                    days_ago = 0
+                            else:
+                                days_ago = 0
+                            decay = math.exp(-0.01 * days_ago)
+                            weight = rating_weight * decay
                             weighted_embeddings.append(np.array(embedding) * weight)
                             weights.append(weight)
 

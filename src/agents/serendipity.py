@@ -1,6 +1,5 @@
 """Serendipity Agent - Balances exploration vs exploitation and ensures diversity."""
 
-import random
 from typing import Any, Dict, List
 
 import numpy as np
@@ -84,124 +83,82 @@ class SerendipityAgent(BaseAgent):
     def _apply_diversity(
         self, candidates: List[Movie], exploration_rate: float
     ) -> List[Movie]:
-        """
-        Apply diversity to candidate list.
+        """Apply MMR (Maximal Marginal Relevance) diversity to candidates.
+
+        MMR balances relevance and diversity:
+            score(i) = λ * sim(i, query) − (1−λ) * max_sim(i, selected)
+
+        λ = 1 - exploration_rate (higher exploration = more diversity weight).
 
         Args:
-            candidates: Candidate movies.
-            exploration_rate: How much to diversify (0-1).
+            candidates: Candidate movies ranked by relevance (best first).
+            exploration_rate: How much to diversify (0–0.35).
 
         Returns:
-            Diversified candidate list.
+            Re-ranked list with MMR diversity applied.
         """
         if len(candidates) <= 5:
-            # Too few candidates to diversify
             return candidates
 
-        # Split into safe (exploitation) and exploratory
-        num_exploration = int(len(candidates) * exploration_rate)
-        num_safe = len(candidates) - num_exploration
+        # λ controls relevance vs diversity trade-off
+        # exploration_rate 0.35 → λ=0.65 (35% diversity weight)
+        lam = 1.0 - exploration_rate
 
-        # Safe picks: highest scoring candidates
-        safe_picks = candidates[:num_safe]
+        selected: List[Movie] = []
+        remaining = list(enumerate(candidates))  # (original_rank, movie)
 
-        # Exploratory picks: diverse from later candidates
-        exploratory_pool = candidates[num_safe:]
-        exploratory_picks = self._select_diverse_items(
-            exploratory_pool, num_exploration
-        )
+        while remaining:
+            best_idx = None
+            best_score = float("-inf")
 
-        # Combine and shuffle slightly
-        all_picks = safe_picks + exploratory_picks
+            for pool_idx, (orig_rank, movie) in enumerate(remaining):
+                # Relevance: inversely proportional to original rank (rank 0 = best)
+                relevance = 1.0 / (1.0 + orig_rank)
 
-        return all_picks
+                # Redundancy: max similarity to already-selected movies
+                if selected:
+                    max_sim = max(
+                        self._movie_similarity(movie, sel) for sel in selected
+                    )
+                else:
+                    max_sim = 0.0
 
-    def _select_diverse_items(
-        self, candidates: List[Movie], num_items: int
-    ) -> List[Movie]:
-        """
-        Select diverse items using genre and year diversity.
+                mmr_score = lam * relevance - (1.0 - lam) * max_sim
 
-        Args:
-            candidates: Candidate pool.
-            num_items: Number to select.
+                if mmr_score > best_score:
+                    best_score = mmr_score
+                    best_idx = pool_idx
 
-        Returns:
-            Diverse selection.
-        """
-        if not candidates or num_items == 0:
-            return []
-
-        selected = []
-        remaining = candidates.copy()
-
-        # Start with a random pick
-        if remaining:
-            selected.append(remaining.pop(random.randint(0, len(remaining) - 1)))
-
-        # Greedily select most diverse items
-        while len(selected) < num_items and remaining:
-            # Calculate diversity score for each remaining item
-            diversity_scores = []
-
-            for candidate in remaining:
-                score = self._calculate_diversity_score(candidate, selected)
-                diversity_scores.append(score)
-
-            # Select most diverse
-            max_idx = np.argmax(diversity_scores)
-            selected.append(remaining.pop(max_idx))
+            _, movie = remaining.pop(best_idx)
+            selected.append(movie)
 
         return selected
+
+    def _movie_similarity(self, a: Movie, b: Movie) -> float:
+        """Estimate similarity between two movies via genre Jaccard + year proximity."""
+        genres_a = set(a.metadata.genres or [])
+        genres_b = set(b.metadata.genres or [])
+        if genres_a or genres_b:
+            union = len(genres_a | genres_b)
+            intersection = len(genres_a & genres_b)
+            genre_sim = intersection / union if union > 0 else 0.0
+        else:
+            genre_sim = 0.5
+
+        year_a = a.metadata.year or 2000
+        year_b = b.metadata.year or 2000
+        year_sim = max(0.0, 1.0 - abs(year_a - year_b) / 50.0)
+
+        return 0.6 * genre_sim + 0.4 * year_sim
 
     def _calculate_diversity_score(
         self, candidate: Movie, selected: List[Movie]
     ) -> float:
-        """
-        Calculate how diverse a candidate is from selected items.
-
-        Args:
-            candidate: Candidate movie.
-            selected: Already selected movies.
-
-        Returns:
-            Diversity score (higher = more diverse).
-        """
+        """Calculate how diverse a candidate is from a list (1 - avg similarity)."""
         if not selected:
             return 1.0
-
-        diversity_score = 0.0
-
-        # Genre diversity
-        candidate_genres = set(candidate.metadata.genres or [])
-
-        for movie in selected:
-            movie_genres = set(movie.metadata.genres or [])
-
-            # Jaccard distance (1 - Jaccard similarity)
-            if candidate_genres or movie_genres:
-                intersection = len(candidate_genres & movie_genres)
-                union = len(candidate_genres | movie_genres)
-                genre_distance = 1 - (intersection / union if union > 0 else 0)
-            else:
-                genre_distance = 0.5
-
-            diversity_score += genre_distance
-
-        # Year diversity
-        candidate_year = candidate.metadata.year or 2000
-
-        for movie in selected:
-            movie_year = movie.metadata.year or 2000
-            year_diff = abs(candidate_year - movie_year)
-            # Normalize to 0-1 (50 years = max diversity)
-            year_diversity = min(year_diff / 50.0, 1.0)
-            diversity_score += year_diversity
-
-        # Average diversity
-        diversity_score /= len(selected) * 2  # Divided by 2 factors
-
-        return diversity_score
+        avg_sim = sum(self._movie_similarity(candidate, m) for m in selected) / len(selected)
+        return 1.0 - avg_sim
 
     def _identify_exploration_items(
         self, candidates: List[Movie], user_profile

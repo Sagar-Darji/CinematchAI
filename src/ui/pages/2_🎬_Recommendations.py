@@ -1,5 +1,6 @@
 """Recommendations Page - Main recommendation interface."""
 
+import time
 import streamlit as st
 import requests
 import sys
@@ -11,8 +12,10 @@ sys.path.append(str(Path(__file__).parent.parent.parent.parent))
 from src.ui.components.movie_card import render_movie_card
 from src.ui.components.onboarding import render_onboarding_flow
 from src.ui.session import restore_streamlit_session
+from src.ui.styles import inject_cinema_theme
 
 st.set_page_config(page_title="Recommendations - CineMatch AI", page_icon="🎬", layout="wide")
+inject_cinema_theme()
 
 API_BASE_URL = "http://localhost:8000"
 
@@ -236,16 +239,32 @@ else:
         progress_container = st.container()
         status_container = st.empty()
 
-        with progress_container:
-            agent_status = st.empty()
-            progress_bar = st.progress(0)
+        # Agent step icons and labels
+        AGENT_ICONS = {
+            "Profile Analyzer": "🧠",
+            "Context-Aware": "🌍",
+            "Retrieval": "🔍",
+            "Content Intelligence": "🎯",
+            "Serendipity": "✨",
+            "Explanation": "💬",
+            "Aggregation": "📊",
+            "Supervisor": "👁️",
+        }
+
+        trace_placeholder = st.empty()
+        status_placeholder = st.empty()
+
+        def _render_trace(steps_so_far, running_step=None):
+            lines = ["**🎬 CineMatch is thinking...**\n"]
+            for s in steps_so_far:
+                icon = AGENT_ICONS.get(s["step"], "✅")
+                lines.append(f"{icon} **{s['step']}** — {s['detail']}")
+            if running_step:
+                icon = AGENT_ICONS.get(running_step, "⚙️")
+                lines.append(f"{icon} **{running_step}** — *(processing...)*")
+            trace_placeholder.markdown("\n\n".join(lines))
 
         try:
-            agent_status.markdown("**Sending request to 6-agent pipeline...**")
-            status_container.info("Processing your request through Profile Analyzer, Context-Aware, Retrieval, Content Intelligence, Serendipity, and Explanation agents...")
-            progress_bar.progress(0.1)
-
-            # Make actual API call
             payload = {
                 "user_id": st.session_state.user_id,
                 "context": context if context else None,
@@ -253,40 +272,65 @@ else:
                 "use_hybrid": use_hybrid,
             }
 
-            response = requests.post(
-                f"{API_BASE_URL}/api/v1/recommendations",
+            # 1. Submit async job
+            submit_resp = requests.post(
+                f"{API_BASE_URL}/api/v1/recommendations/async",
                 json=payload,
-                timeout=120,
+                timeout=15,
             )
+            if submit_resp.status_code not in (200, 202):
+                st.error(f"Failed to submit job: {submit_resp.text}")
+                st.session_state.recommendations = []
+                st.stop()
 
-            if response.status_code == 200:
-                data = response.json()
-                st.session_state.recommendations = data.get("recommendations", [])
-                st.session_state.context_factors = data.get("context_factors", {})
-                st.session_state.processing_steps = data.get("processing_steps", [])
-                st.session_state.trace_id = data.get("trace_id")
+            job_id = submit_resp.json()["job_id"]
+            _render_trace([], running_step="Profile Analyzer")
 
-                progress_bar.progress(1.0)
-                agent_status.markdown("**Pipeline complete!**")
+            # 2. Poll for results with live trace updates
+            deadline = time.time() + 120
+            seen_steps = 0
 
-                # Show real processing steps
-                steps = data.get("processing_steps", [])
-                num_recs = len(st.session_state.recommendations)
+            while time.time() < deadline:
+                poll = requests.get(
+                    f"{API_BASE_URL}/api/v1/recommendations/result/{job_id}",
+                    timeout=10,
+                )
+                if poll.status_code != 200:
+                    break
 
-                summary_text = f"**Pipeline Results:** {num_recs} recommendations generated"
-                if steps:
-                    summary_text += f" in {len(steps)} steps"
-                status_container.success(summary_text)
+                data = poll.json()
+                steps = data.get("steps", [])
 
-                import time
-                time.sleep(1)
+                # Show any new steps
+                if len(steps) > seen_steps:
+                    seen_steps = len(steps)
+                    next_agents = ["Profile Analyzer", "Context-Aware", "Retrieval",
+                                   "Content Intelligence", "Serendipity", "Explanation", "Aggregation"]
+                    running = next_agents[seen_steps] if seen_steps < len(next_agents) else None
+                    _render_trace(steps, running_step=running)
 
-                # Clear status containers
-                agent_status.empty()
-                status_container.empty()
-                progress_bar.empty()
+                job_status = data.get("status")
+                if job_status == "complete":
+                    result = data.get("result", {})
+                    st.session_state.recommendations = result.get("recommendations", [])
+                    st.session_state.context_factors = result.get("context_factors", {})
+                    st.session_state.processing_steps = result.get("processing_steps", [])
+                    st.session_state.trace_id = result.get("trace_id")
+                    _render_trace(steps)
+                    num_recs = len(st.session_state.recommendations)
+                    status_placeholder.success(f"✅ Pipeline complete — {num_recs} recommendations ready!")
+                    time.sleep(1.5)
+                    trace_placeholder.empty()
+                    status_placeholder.empty()
+                    break
+                elif job_status == "failed":
+                    st.error(f"Pipeline failed: {data.get('error', 'unknown error')}")
+                    st.session_state.recommendations = []
+                    break
+
+                time.sleep(0.5)
             else:
-                st.error(f"Failed to get recommendations: {response.text}")
+                st.error("Timed out waiting for recommendations.")
                 st.session_state.recommendations = []
 
         except Exception as e:

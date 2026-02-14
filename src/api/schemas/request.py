@@ -1,6 +1,6 @@
 """API Request Schemas."""
 
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -9,7 +9,7 @@ class RecommendationRequest(BaseModel):
     """Request for single-user recommendations."""
 
     user_id: str = Field(..., description="User ID")
-    context: Optional[Dict[str, str]] = Field(
+    context: Optional[Dict[str, Any]] = Field(
         default=None,
         description="Context information (time_of_day, mood, companion, occasion)",
     )
@@ -40,7 +40,7 @@ class GroupRecommendationRequest(BaseModel):
     """Request for group recommendations."""
 
     user_ids: List[str] = Field(..., min_length=2, description="List of user IDs")
-    context: Optional[Dict[str, str]] = Field(
+    context: Optional[Dict[str, Any]] = Field(
         default=None, description="Shared context information"
     )
     aggregation_strategy: str = Field(
@@ -125,7 +125,7 @@ class UpdateContextRequest(BaseModel):
     """Request to update user context."""
 
     user_id: str = Field(..., description="User ID")
-    context: Dict[str, str] = Field(..., description="Updated context information")
+    context: Dict[str, Any] = Field(..., description="Updated context information")
 
     model_config = {
         "json_schema_extra": {

@@ -140,6 +140,31 @@ def render_movie_card(
                 with st.expander("💡 Why We Recommend This", expanded=False):
                     st.info(explanation)
 
+            # Watch Now (VidSrc embed)
+            tmdb_id = movie.get("tmdb_id")
+            if tmdb_id:
+                with st.expander("▶️ Watch Now", expanded=False):
+                    st.caption(
+                        "Streamed via VidSrc. Ad redirects are blocked by iframe sandbox. "
+                        "Content availability varies by region."
+                    )
+                    import streamlit.components.v1 as components
+                    components.html(
+                        f"""
+                        <iframe
+                            src="https://vidsrc.to/embed/movie/{tmdb_id}"
+                            width="100%"
+                            height="450"
+                            frameborder="0"
+                            referrerpolicy="no-referrer"
+                            sandbox="allow-scripts allow-same-origin allow-forms"
+                            allow="autoplay; fullscreen"
+                            loading="lazy"
+                        ></iframe>
+                        """,
+                        height=460,
+                    )
+
 
 def render_movie_grid(movies: list, explanations: Dict[str, str] = None):
     """

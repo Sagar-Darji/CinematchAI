@@ -48,8 +48,13 @@ def run_bulk(args):
     pipeline = EnrichmentPipeline()
     max_pages = args.max_pages
     target = args.target
+    languages = args.language or None  # None = all languages
 
-    print(f"\nBulk Enrichment -- Hindi-first Pipeline")
+    if languages:
+        lang_label = ", ".join(LANGUAGE_NAMES.get(l, l) for l in languages)
+        print(f"\nBulk Enrichment -- Languages: {lang_label}")
+    else:
+        print(f"\nBulk Enrichment -- All Languages (Hindi-first)")
     print(f"Target: {target} GB | Max pages this run: {max_pages}")
     print("=" * 60)
 
@@ -91,6 +96,7 @@ def run_bulk(args):
         target_gb=target,
         max_pages=max_pages,
         progress_callback=progress_cb,
+        languages=languages,
     )
 
     print()  # newline after progress
@@ -229,6 +235,10 @@ def main():
                         help="Max pages per bulk run (default: 500)")
     parser.add_argument("--target", type=float, default=15.0,
                         help="Target corpus size in GB (default: 15)")
+    parser.add_argument(
+        "--language", nargs="+", metavar="LANG",
+        help="Language codes to process (e.g. hi en ta). Omit for all languages."
+    )
 
     args = parser.parse_args()
 
