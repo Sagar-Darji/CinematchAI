@@ -3,6 +3,7 @@
 import streamlit as st
 import requests
 from typing import Dict, List
+from src.ui.session import save_session
 
 
 API_BASE_URL = "http://localhost:8000"
@@ -178,9 +179,10 @@ def _import_from_letterboxd(user_id: str, csv_content: str) -> bool:
                                 f"✅ Imported: {imported} | ❌ Failed: {failed}"
                             )
 
-                            # Save user ID to session
+                            # Save user ID to session (persistent)
                             st.session_state.user_id = user_id
                             st.session_state.onboarded = True
+                            save_session(user_id)
 
                             st.balloons()
                             time.sleep(2)
@@ -363,9 +365,10 @@ def _complete_onboarding(user_id: str, ratings: Dict[str, float]) -> bool:
             if response.status_code in [200, 201]:
                 st.success("✅ Onboarding complete! Redirecting...")
 
-                # Save user ID to session
+                # Save user ID to session (persistent)
                 st.session_state.user_id = user_id
                 st.session_state.onboarded = True
+                save_session(user_id)
 
                 # Clear onboarding data
                 del st.session_state.onboarding_ratings

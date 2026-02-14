@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse
 import time
 import uuid
 
-from src.api.routes import groups, health, movies, recommendations, users
+from src.api.routes import admin, groups, health, movies, recommendations, users
 from src.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -39,6 +39,36 @@ async def lifespan(app: FastAPI):
         logger.info("Connected to ChromaDB")
     except Exception as e:
         logger.warning(f"Failed to connect to ChromaDB: {e}")
+
+    # Initialize cloud vector DB (Zilliz + Qdrant)
+    try:
+        from src.services.cloud_vectordb import get_cloud_vectordb
+        cloud_db = get_cloud_vectordb()
+        availability = cloud_db.is_available()
+        logger.info(f"Cloud vector DB status: {availability}")
+    except Exception as e:
+        logger.warning(f"Cloud vector DB init skipped: {e}")
+
+    # Run light enrichment in background on startup
+    try:
+        from config.settings import get_settings
+        _settings = get_settings()
+        has_cloud = _settings.zilliz_uri or _settings.qdrant_url
+        if has_cloud and _settings.enrichment_on_startup:
+            import threading
+
+            def _startup_enrich():
+                try:
+                    from src.services.enrichment_pipeline import EnrichmentPipeline
+                    count = EnrichmentPipeline().run_light_cycle()
+                    logger.info(f"Startup enrichment: {count} new movies indexed")
+                except Exception as e:
+                    logger.warning(f"Startup enrichment failed: {e}")
+
+            threading.Thread(target=_startup_enrich, daemon=True).start()
+            logger.info("Startup enrichment launched in background")
+    except Exception as e:
+        logger.warning(f"Startup enrichment setup failed: {e}")
 
     logger.info("CineMatch AI API startup complete")
 
@@ -127,6 +157,7 @@ app.include_router(recommendations.router, prefix="/api/v1")
 app.include_router(groups.router, prefix="/api/v1")
 app.include_router(users.router, prefix="/api/v1")
 app.include_router(movies.router, prefix="/api/v1")
+app.include_router(admin.router, prefix="/api/v1")
 
 
 # Root endpoint

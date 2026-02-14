@@ -63,6 +63,15 @@ class ProfileAnalyzerAgent(BaseAgent):
             f"Profile Analyzer: Analyzed user {user_id}"
         ]
 
+        # Persist profile to database for non-cold-start users
+        if user_profile and not user_profile.is_cold_start:
+            try:
+                from src.services.user_service import get_user_service
+                get_user_service().save_user_profile(user_id, user_profile)
+                self.log_processing(f"Persisted profile for user {user_id}")
+            except Exception as e:
+                logger.warning(f"Failed to persist profile for {user_id}: {e}")
+
         return state
 
     def _load_user_data(self, user_id: str) -> Optional[Dict]:
@@ -183,7 +192,7 @@ class ProfileAnalyzerAgent(BaseAgent):
         temporal_patterns = self._extract_temporal_patterns(ratings_df, movies_df)
 
         # Calculate profile embedding (weighted average of movie embeddings)
-        profile_embedding = self._calculate_profile_embedding(ratings_df)
+        profile_embedding = self._calculate_profile_embedding(ratings_df, user_id=user_id)
 
         # Build profile
         profile = UserProfile(
@@ -350,14 +359,15 @@ class ProfileAnalyzerAgent(BaseAgent):
         else:
             return "night"
 
-    def _calculate_profile_embedding(self, ratings_df: pd.DataFrame) -> Optional[List[float]]:
+    def _calculate_profile_embedding(self, ratings_df: pd.DataFrame, user_id: str = None) -> Optional[List[float]]:
         """
         Calculate user profile embedding as weighted average of movie embeddings.
 
-        CRITICAL FIX: Generate embeddings on-demand for TMDB movies that don't have pre-computed embeddings.
+        Uses DB cache to avoid recomputing when rating count hasn't changed.
 
         Args:
             ratings_df: User ratings.
+            user_id: User ID for cache lookup.
 
         Returns:
             Profile embedding vector or None.
@@ -365,6 +375,17 @@ class ProfileAnalyzerAgent(BaseAgent):
         try:
             from src.services.movie_service import get_movie_service
             from src.core.embeddings.text_embedder import get_text_embedder
+            from src.services.user_service import get_user_service
+
+            total_ratings = len(ratings_df)
+
+            # Check cache first
+            if user_id:
+                user_service = get_user_service()
+                cached = user_service.get_cached_embedding(user_id)
+                if cached and cached["rating_count"] == total_ratings:
+                    logger.info(f"Using cached embedding for {user_id} (ratings={total_ratings})")
+                    return cached["embedding"]
 
             movie_service = get_movie_service()
             text_embedder = get_text_embedder()
@@ -373,7 +394,7 @@ class ProfileAnalyzerAgent(BaseAgent):
             weighted_embeddings = []
             weights = []
 
-            logger.info(f"Calculating profile embedding from {len(ratings_df)} ratings")
+            logger.info(f"Computing profile embedding from {len(ratings_df)} ratings")
 
             for _, rating in ratings_df.iterrows():
                 movie_id = rating["movieId"]
@@ -411,9 +432,19 @@ class ProfileAnalyzerAgent(BaseAgent):
             # Normalize
             profile_embedding = profile_embedding / np.linalg.norm(profile_embedding)
 
-            logger.info(f"✅ Generated profile embedding ({len(profile_embedding)}-dim) from {len(weighted_embeddings)} movies")
+            logger.info(f"Generated profile embedding ({len(profile_embedding)}-dim) from {len(weighted_embeddings)} movies")
 
-            return profile_embedding.tolist()
+            embedding_list = profile_embedding.tolist()
+
+            # Save to cache
+            if user_id:
+                try:
+                    user_service = get_user_service()
+                    user_service.save_embedding(user_id, embedding_list, total_ratings)
+                except Exception as e:
+                    logger.warning(f"Failed to cache embedding: {e}")
+
+            return embedding_list
 
         except Exception as e:
             logger.error(f"Failed to calculate profile embedding: {e}", exc_info=True)

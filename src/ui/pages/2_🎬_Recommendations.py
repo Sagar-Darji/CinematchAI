@@ -10,6 +10,7 @@ sys.path.append(str(Path(__file__).parent.parent.parent.parent))
 
 from src.ui.components.movie_card import render_movie_card
 from src.ui.components.onboarding import render_onboarding_flow
+from src.ui.session import restore_streamlit_session
 
 st.set_page_config(page_title="Recommendations - CineMatch AI", page_icon="🎬", layout="wide")
 
@@ -33,7 +34,7 @@ def _submit_feedback(movie_id: int, rating: float):
         )
 
         if response.status_code == 200:
-            st.toast("✅ Feedback saved! Your profile will improve.")
+            st.toast("Feedback saved! Your profile will improve.")
         else:
             st.error("Failed to save feedback")
 
@@ -41,18 +42,15 @@ def _submit_feedback(movie_id: int, rating: float):
         st.error(f"Error: {e}")
 
 
-# Initialize session state
-if "user_id" not in st.session_state:
-    st.session_state.user_id = None
-if "onboarded" not in st.session_state:
-    st.session_state.onboarded = False
+# Restore persistent session
+restore_streamlit_session()
 
 # Header
 st.title("🎬 Your Personalized Recommendations")
 
 # Check if user is onboarded
 if not st.session_state.onboarded:
-    st.info("👋 Welcome! Let's get you started with a quick onboarding.")
+    st.info("Welcome! Let's get you started with a quick onboarding.")
     onboarding_complete = render_onboarding_flow()
 
     if onboarding_complete:
@@ -233,69 +231,21 @@ else:
 
     # Get recommendations
     if "recommendations" not in st.session_state or refresh_button:
-        # Show agent processing steps in real-time
         st.markdown("### 🤖 AI Agent Processing Pipeline")
 
         progress_container = st.container()
         status_container = st.empty()
-        movie_analysis_container = st.empty()
 
         with progress_container:
             agent_status = st.empty()
             progress_bar = st.progress(0)
 
-        # Sample movies for visualization (simulated movie analysis)
-        sample_movies = [
-            ("Inception", 2010, "✓", "98% match", "success"),
-            ("The Dark Knight", 2008, "✓", "96% match", "success"),
-            ("Interstellar", 2014, "✓", "94% match", "success"),
-            ("Blade Runner 2049", 2017, "✓", "91% match", "success"),
-            ("The Prestige", 2006, "✓", "89% match", "success"),
-            ("Tenet", 2020, "?", "Analyzing themes...", "info"),
-            ("Transformers 5", 2017, "✗", "Low relevance (28%)", "error"),
-            ("Fast & Furious 9", 2021, "✗", "Genre mismatch", "error"),
-        ]
-
-        agent_steps = [
-            ("🧠 Profile Analyzer", "Analyzing your taste and preferences...", 0.15, []),
-            ("🎭 Context-Aware Agent", "Processing current context (time, mood, situation)...", 0.30, []),
-            ("🔍 RAG Retrieval", "Vector search in progress...", 0.50, sample_movies[:4]),
-            ("🎨 Content Intelligence", "Analyzing movie themes and styles...", 0.65, sample_movies[4:6]),
-            ("✨ Serendipity Agent", "Filtering for diversity...", 0.80, sample_movies[6:]),
-            ("💡 Explanation Agent", "Generating personalized explanations...", 0.95, []),
-        ]
-
         try:
-            import time
-
-            # Simulate agent steps with movie-level details
-            for i, (agent_name, status_text, progress, movies) in enumerate(agent_steps):
-                agent_status.markdown(f"**{agent_name}**")
-                status_container.info(status_text)
-                progress_bar.progress(progress)
-
-                # Show movie-level analysis
-                if movies:
-                    analysis_text = "**Movies being analyzed:**\n\n"
-                    for title, year, icon, match_text, status_type in movies:
-                        if icon == "✓":
-                            analysis_text += f"- {icon} **{title}** ({year}) — {match_text}\n"
-                        elif icon == "✗":
-                            analysis_text += f"- {icon} ~~{title}~~ ({year}) — {match_text}\n"
-                        else:
-                            analysis_text += f"- {icon} *{title}* ({year}) — {match_text}\n"
-
-                    movie_analysis_container.markdown(analysis_text)
-                    time.sleep(0.8)  # Longer pause to read movie details
-                else:
-                    movie_analysis_container.empty()
-                    time.sleep(0.4)
+            agent_status.markdown("**Sending request to 6-agent pipeline...**")
+            status_container.info("Processing your request through Profile Analyzer, Context-Aware, Retrieval, Content Intelligence, Serendipity, and Explanation agents...")
+            progress_bar.progress(0.1)
 
             # Make actual API call
-            agent_status.markdown("**🎬 Finalizing Recommendations**")
-            status_container.info("Compiling results from all agents...")
-            movie_analysis_container.empty()
-
             payload = {
                 "user_id": st.session_state.user_id,
                 "context": context if context else None,
@@ -314,21 +264,22 @@ else:
                 st.session_state.recommendations = data.get("recommendations", [])
                 st.session_state.context_factors = data.get("context_factors", {})
                 st.session_state.processing_steps = data.get("processing_steps", [])
+                st.session_state.trace_id = data.get("trace_id")
 
-                # Show completion with summary
                 progress_bar.progress(1.0)
-                agent_status.markdown("**✅ Complete!**")
+                agent_status.markdown("**Pipeline complete!**")
 
-                # Processing summary
+                # Show real processing steps
+                steps = data.get("processing_steps", [])
                 num_recs = len(st.session_state.recommendations)
-                summary_text = f"""**Processing Summary:**
-- 📊 Analyzed: 50 candidate movies
-- ✅ Kept: {num_recs} highly relevant movies
-- ✗ Filtered: {50 - num_recs} movies (low relevance/diversity)
-- 🎯 Match quality: Personalized for YOUR taste!
-"""
+
+                summary_text = f"**Pipeline Results:** {num_recs} recommendations generated"
+                if steps:
+                    summary_text += f" in {len(steps)} steps"
                 status_container.success(summary_text)
-                time.sleep(2)
+
+                import time
+                time.sleep(1)
 
                 # Clear status containers
                 agent_status.empty()
@@ -347,9 +298,39 @@ else:
     recommendations = st.session_state.get("recommendations", [])
 
     if recommendations:
+        # Data source badge & trace info
+        trace_id = st.session_state.get("trace_id")
+        if trace_id:
+            # Fetch trace to get data source
+            try:
+                trace_resp = requests.get(
+                    f"{API_BASE_URL}/api/v1/admin/traces/{trace_id}",
+                    timeout=5,
+                )
+                if trace_resp.status_code == 200:
+                    trace_data = trace_resp.json()
+                    source = trace_data.get("retrieval_source", "unknown")
+                    duration = trace_data.get("total_duration_ms")
+
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        if source == "chromadb_personalized":
+                            st.success("Data Source: ChromaDB (Personalized)")
+                        elif source == "tmdb_cold_start":
+                            st.warning("Data Source: TMDB API (Cold Start)")
+                        else:
+                            st.info(f"Data Source: {source}")
+                    with col2:
+                        if duration:
+                            st.info(f"Pipeline Duration: {duration:.0f}ms")
+                    with col3:
+                        st.caption(f"Trace: `{trace_id[:8]}`")
+            except Exception:
+                pass
+
         # Show context factors
         if st.session_state.get("context_factors"):
-            with st.expander("🔍 Detected Context", expanded=False):
+            with st.expander("Detected Context", expanded=False):
                 context_factors = st.session_state.context_factors
                 col1, col2, col3 = st.columns(3)
 
@@ -360,11 +341,32 @@ else:
                 with col3:
                     st.metric("Season", context_factors.get("season", "N/A").title())
 
-        # Show detailed processing steps
+        # Show real processing steps from API
         if st.session_state.get("processing_steps"):
-            with st.expander("🤖 Detailed AI Processing Log", expanded=False):
-                st.markdown("**6-Agent System Execution:**")
-                st.code("\n".join([f"✓ {step}" for step in st.session_state.processing_steps]), language="text")
+            with st.expander("AI Processing Log", expanded=False):
+                for step in st.session_state.processing_steps:
+                    st.write(f"- {step}")
+
+                # Show detailed trace steps if available
+                trace_id = st.session_state.get("trace_id")
+                if trace_id:
+                    try:
+                        trace_resp = requests.get(
+                            f"{API_BASE_URL}/api/v1/admin/traces/{trace_id}",
+                            timeout=5,
+                        )
+                        if trace_resp.status_code == 200:
+                            trace_data = trace_resp.json()
+                            steps = trace_data.get("steps", [])
+                            if steps:
+                                st.markdown("**Agent Timing:**")
+                                for s in steps:
+                                    agent = s.get("agent_name", "?")
+                                    dur = s.get("duration_ms", 0)
+                                    summary = s.get("summary", "")
+                                    st.write(f"  - **{agent}** ({dur:.0f}ms): {summary}")
+                    except Exception:
+                        pass
 
         st.markdown("---")
         st.markdown(f"### 🎯 Top {len(recommendations)} Recommendations")
@@ -392,11 +394,11 @@ else:
                 st.markdown("*How do you feel about this recommendation?*")
 
             with col2:
-                if st.button("👍 Loved it!", key=f"love_{movie.get('tmdb_id')}"):
+                if st.button("Loved it!", key=f"love_{movie.get('tmdb_id')}"):
                     _submit_feedback(movie.get("tmdb_id"), 5.0)
 
             with col3:
-                if st.button("👎 Not for me", key=f"dislike_{movie.get('tmdb_id')}"):
+                if st.button("Not for me", key=f"dislike_{movie.get('tmdb_id')}"):
                     _submit_feedback(movie.get("tmdb_id"), 1.0)
 
             st.markdown("---")

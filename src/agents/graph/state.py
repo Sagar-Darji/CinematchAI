@@ -42,6 +42,8 @@ class RecommendationState(TypedDict, total=False):
     processing_steps: List[str]
     errors: List[str]
     agent_timings: Dict[str, float]
+    _trace_id: Optional[str]
+    _retrieval_source: Optional[str]
 
 
 class GroupRecommendationState(TypedDict, total=False):

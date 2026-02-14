@@ -60,6 +60,7 @@ class RecommendationService:
                 workflow_type=final_state.get("workflow_type", "single_user"),
                 processing_steps=final_state.get("processing_steps", []),
                 context_factors=final_state.get("context_factors"),
+                trace_id=final_state.get("_trace_id"),
             )
 
             logger.info(f"Generated {len(recommendations)} recommendations")

@@ -1,8 +1,14 @@
 """CineMatch AI - Main Streamlit Application."""
 
+import sys
+from pathlib import Path
+
+sys.path.append(str(Path(__file__).parent.parent.parent))
+
 import streamlit as st
 import requests
 from typing import List, Dict
+from src.ui.session import restore_streamlit_session, save_session, clear_session
 
 # Page configuration
 st.set_page_config(
@@ -77,12 +83,8 @@ def display_movie_card(movie: Dict):
         st.caption(f"🎭 {genres}")
 
 
-# Initialize session state
-if "user_id" not in st.session_state:
-    st.session_state.user_id = None
-
-if "onboarded" not in st.session_state:
-    st.session_state.onboarded = False
+# Restore persistent session (survives refresh)
+restore_streamlit_session()
 
 # Header
 st.markdown('<h1 class="main-header">🎬 CineMatch AI</h1>', unsafe_allow_html=True)
@@ -142,6 +144,7 @@ if not st.session_state.onboarded:
             if existing_user:
                 st.session_state.user_id = existing_user
                 st.session_state.onboarded = True
+                save_session(existing_user)
                 st.success(f"Welcome back, {existing_user}!")
                 st.rerun()
             else:
@@ -258,6 +261,7 @@ with st.sidebar:
         if st.button("🚪 Logout", use_container_width=True):
             st.session_state.user_id = None
             st.session_state.onboarded = False
+            clear_session()
             st.rerun()
 
     st.markdown("---")

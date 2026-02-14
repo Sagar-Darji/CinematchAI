@@ -1,6 +1,7 @@
 """Movie Service - On-demand movie data from TMDB API (scalable to all movies)."""
 
-from typing import Dict, List, Optional
+import hashlib
+from typing import Any, Dict, List, Optional
 from datetime import datetime, timedelta
 
 import requests
@@ -293,6 +294,72 @@ class MovieService:
 
         except Exception as e:
             logger.error(f"Failed to get recent releases: {e}")
+            return []
+
+    def discover_by_criteria(self, params: Dict[str, Any], limit: int = 20) -> List[Movie]:
+        """Execute a TMDB discover query with arbitrary params.
+
+        Handles pagination (up to the number of pages in params['_pages']).
+        Uses diskcache with 6h TTL keyed by sorted params hash.
+
+        Args:
+            params: TMDB discover API parameters (may include internal keys prefixed with '_').
+            limit: Maximum movies to return.
+
+        Returns:
+            List of Movie objects.
+        """
+        # Separate internal keys from TMDB API params
+        pages = int(params.pop("_pages", 1))
+        strategy = params.pop("_strategy", "unknown")
+        target_k = params.pop("_target_k", limit)
+        actual_limit = min(limit, target_k)
+
+        # Build a stable cache key from the API params
+        api_params = {k: v for k, v in sorted(params.items()) if not k.startswith("_")}
+        param_hash = hashlib.md5(str(api_params).encode()).hexdigest()[:12]
+        cache_key = f"discover_{param_hash}"
+
+        cached = cache.get(cache_key)
+        if cached:
+            return cached[:actual_limit]
+
+        try:
+            all_movies: List[Movie] = []
+            seen_ids: set = set()
+
+            for page in range(1, pages + 1):
+                url = f"{self.base_url}/discover/movie"
+                request_params = {"api_key": self.api_key, **api_params, "page": page}
+
+                response = requests.get(url, params=request_params, timeout=10)
+                if response.status_code != 200:
+                    logger.warning(f"Discover API returned {response.status_code} for {strategy}")
+                    break
+
+                data = response.json()
+                for item in data.get("results", []):
+                    tmdb_id = str(item.get("id", ""))
+                    if tmdb_id in seen_ids:
+                        continue
+                    seen_ids.add(tmdb_id)
+                    movie = self._parse_tmdb_search_result(item)
+                    if movie:
+                        all_movies.append(movie)
+
+                if len(all_movies) >= actual_limit:
+                    break
+
+            result = all_movies[:actual_limit]
+
+            # Cache for 6 hours
+            cache.set(cache_key, result, expire=21600)
+
+            logger.info(f"Discover ({strategy}): {len(result)} movies fetched")
+            return result
+
+        except Exception as e:
+            logger.error(f"Discover ({strategy}) failed: {e}")
             return []
 
     def _parse_tmdb_movie(self, data: Dict) -> Movie:

@@ -9,7 +9,6 @@ from typing import Dict, List, Optional
 import numpy as np
 
 from config.settings import get_settings
-from src.core.models import UserPreferences, UserProfile
 from src.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -38,9 +37,21 @@ class UserService:
                 user_id TEXT PRIMARY KEY,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
-                profile_json TEXT NOT NULL
+                profile_json TEXT NOT NULL,
+                embedding_json TEXT,
+                embedding_rating_count INTEGER DEFAULT 0
             )
         """)
+
+        # Add columns if upgrading from older schema
+        try:
+            cursor.execute("ALTER TABLE users ADD COLUMN embedding_json TEXT")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+        try:
+            cursor.execute("ALTER TABLE users ADD COLUMN embedding_rating_count INTEGER DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass
 
         # Ratings table
         cursor.execute("""
@@ -71,7 +82,7 @@ class UserService:
 
         logger.info(f"Database initialized at {self.db_path}")
 
-    def get_user_profile(self, user_id: str) -> Optional[UserProfile]:
+    def get_user_profile(self, user_id: str) -> Optional[dict]:
         """
         Get user profile by ID.
 
@@ -98,7 +109,7 @@ class UserService:
         else:
             return None
 
-    def save_user_profile(self, user_id: str, profile: UserProfile):
+    def save_user_profile(self, user_id: str, profile):
         """
         Save user profile.
 
@@ -111,14 +122,16 @@ class UserService:
 
         now = datetime.utcnow().isoformat()
 
-        # Serialize profile (simplified)
+        # Serialize profile using Pydantic v2 model_dump
         profile_json = json.dumps(
             {
                 "user_id": user_id,
-                "preferences": profile.preferences.__dict__ if profile.preferences else {},
-                "temporal_patterns": profile.temporal_patterns,
-                "psychological_metrics": profile.psychological_metrics,
-                "created_at": now,
+                "preferences": profile.preferences.model_dump() if profile.preferences else {},
+                "temporal_patterns": profile.temporal_patterns.model_dump() if profile.temporal_patterns else {},
+                "total_ratings": profile.total_ratings,
+                "avg_rating_given": profile.avg_rating_given,
+                "is_cold_start": profile.is_cold_start,
+                "last_updated": now,
             }
         )
 
@@ -254,6 +267,58 @@ class UserService:
             return json.loads(row[0])
         else:
             return {}
+
+    def get_cached_embedding(self, user_id: str) -> Optional[Dict]:
+        """Get cached profile embedding if it exists and is current."""
+        conn = sqlite3.connect(str(self.db_path))
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT embedding_json, embedding_rating_count FROM users WHERE user_id = ?",
+            (user_id,),
+        )
+        row = cursor.fetchone()
+        conn.close()
+
+        if row and row[0]:
+            return {
+                "embedding": json.loads(row[0]),
+                "rating_count": row[1] or 0,
+            }
+        return None
+
+    def save_embedding(self, user_id: str, embedding: list, rating_count: int):
+        """Cache profile embedding with the rating count it was built from."""
+        conn = sqlite3.connect(str(self.db_path))
+        cursor = conn.cursor()
+        now = datetime.utcnow().isoformat()
+        cursor.execute(
+            """
+            UPDATE users SET embedding_json = ?, embedding_rating_count = ?, updated_at = ?
+            WHERE user_id = ?
+        """,
+            (json.dumps(embedding), rating_count, now, user_id),
+        )
+        conn.commit()
+        conn.close()
+        logger.info(f"Cached embedding for user_id={user_id} (ratings={rating_count})")
+
+    def count_users(self) -> int:
+        """Count total registered users."""
+        conn = sqlite3.connect(str(self.db_path))
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM users")
+        count = cursor.fetchone()[0]
+        conn.close()
+        return count
+
+    def count_ratings(self) -> int:
+        """Count total ratings across all users."""
+        conn = sqlite3.connect(str(self.db_path))
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM ratings")
+        count = cursor.fetchone()[0]
+        conn.close()
+        return count
 
 
 # Singleton instance

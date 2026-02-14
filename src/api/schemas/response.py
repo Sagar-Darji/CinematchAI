@@ -47,6 +47,9 @@ class RecommendationResponse(BaseModel):
     context_factors: Optional[Dict[str, Any]] = Field(
         default=None, description="Detected context factors"
     )
+    trace_id: Optional[str] = Field(
+        default=None, description="Pipeline trace ID for admin monitoring"
+    )
 
     model_config = {
         "json_schema_extra": {

@@ -2,7 +2,7 @@
 
 from functools import lru_cache
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -44,7 +44,7 @@ class Settings(BaseSettings):
         default=40, description="TMDB API rate limit (requests per 10 seconds)"
     )
 
-    # Vector Database
+    # Vector Database (Local)
     chroma_persist_dir: Path = Field(
         default=Path("./data/vectordb"), description="Chroma persistence directory"
     )
@@ -53,6 +53,31 @@ class Settings(BaseSettings):
     )
     chroma_collection_users: str = Field(
         default="cinematch_users", description="Chroma collection name for users"
+    )
+
+    # Zilliz Cloud (Primary cloud vector DB)
+    zilliz_uri: Optional[str] = Field(default=None, description="Zilliz Cloud endpoint URI")
+    zilliz_token: Optional[str] = Field(default=None, description="Zilliz Cloud API token")
+
+    # Qdrant Cloud (Secondary/backup cloud vector DB)
+    qdrant_url: Optional[str] = Field(default=None, description="Qdrant Cloud URL")
+    qdrant_api_key: Optional[str] = Field(default=None, description="Qdrant Cloud API key")
+
+    # Shared cloud vector DB settings
+    cloud_vectordb_collection: str = Field(
+        default="cinematch_movies", description="Cloud vector DB collection name"
+    )
+
+    # Enrichment Pipeline
+    enrichment_languages: List[str] = Field(
+        default=["en", "hi", "ta", "te", "ml", "kn", "bn", "mr", "gu", "pa"],
+        description="Languages for movie enrichment",
+    )
+    enrichment_interval_hours: int = Field(
+        default=6, description="Hours between enrichment cycles"
+    )
+    enrichment_on_startup: bool = Field(
+        default=True, description="Run light enrichment on API startup"
     )
 
     # API Settings

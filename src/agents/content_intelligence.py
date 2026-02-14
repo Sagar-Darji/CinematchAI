@@ -1,8 +1,11 @@
 """Content Intelligence Agent - Deep movie content analysis."""
 
+import hashlib
 import json
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import diskcache
 import pandas as pd
 
 from config.settings import get_settings
@@ -10,6 +13,12 @@ from src.agents.base_agent import BaseAgent
 from src.utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+# Persistent cache for LLM-analyzed content features (themes, micro-genres)
+_content_cache = diskcache.Cache(
+    str(Path(get_settings().data_dir) / "cache" / "content_features"),
+    size_limit=100 * 1024 * 1024,  # 100MB
+)
 
 
 class ContentIntelligenceAgent(BaseAgent):
@@ -251,19 +260,20 @@ class ContentIntelligenceAgent(BaseAgent):
 
         return reranked
 
+    def _content_cache_key(self, metadata, suffix: str) -> str:
+        """Build a stable cache key from movie ID + overview hash."""
+        overview_hash = hashlib.md5((metadata.overview or "").encode()).hexdigest()[:8]
+        return f"content:{metadata.tmdb_id}:{overview_hash}:{suffix}"
+
     def _extract_themes(self, metadata) -> List[str]:
-        """
-        Extract thematic elements from movie.
+        """Extract thematic elements from movie (cached)."""
+        cache_key = self._content_cache_key(metadata, "themes")
+        cached = _content_cache.get(cache_key)
+        if cached is not None:
+            return cached
 
-        Args:
-            metadata: Movie metadata.
-
-        Returns:
-            List of themes.
-        """
         themes = []
 
-        # Use LLM for theme extraction from overview
         if metadata.overview:
             prompt = f"""Analyze this movie plot and extract 3-5 core themes.
 
@@ -280,30 +290,24 @@ Return only the themes as a comma-separated list."""
                     system_prompt="You are a film analyst expert at identifying themes.",
                     max_tokens=100,
                 )
-
-                # Parse response
                 themes = [t.strip() for t in response.split(",") if t.strip()]
-
             except Exception as e:
                 logger.warning(f"Failed to extract themes via LLM: {e}")
-                # Fallback to genre-based themes
                 themes = self._genre_to_themes(metadata.genres)
 
-        return themes[:5]  # Limit to 5
+        result = themes[:5]
+        _content_cache.set(cache_key, result, expire=7 * 86400)  # 7 days
+        return result
 
     def _extract_micro_genres(self, metadata) -> List[str]:
-        """
-        Extract micro-genres (specific sub-categories).
+        """Extract micro-genres (cached)."""
+        cache_key = self._content_cache_key(metadata, "micro_genres")
+        cached = _content_cache.get(cache_key)
+        if cached is not None:
+            return cached
 
-        Args:
-            metadata: Movie metadata.
-
-        Returns:
-            List of micro-genres.
-        """
         micro_genres = []
 
-        # Combine genres with themes for micro-genre creation
         if metadata.overview and metadata.genres:
             prompt = f"""Create 2-3 specific micro-genres for this movie.
 
@@ -326,15 +330,14 @@ Return only the micro-genres as a comma-separated list."""
                     system_prompt="You are a creative film cataloger.",
                     max_tokens=80,
                 )
-
                 micro_genres = [mg.strip() for mg in response.split(",") if mg.strip()]
-
             except Exception as e:
                 logger.warning(f"Failed to extract micro-genres via LLM: {e}")
-                # Fallback to genre combinations
                 micro_genres = self._combine_genres(metadata.genres)
 
-        return micro_genres[:3]
+        result = micro_genres[:3]
+        _content_cache.set(cache_key, result, expire=7 * 86400)  # 7 days
+        return result
 
     def _analyze_tone(self, metadata) -> str:
         """
