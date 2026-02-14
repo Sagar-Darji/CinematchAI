@@ -1,9 +1,14 @@
-"""Image embedding generation using CLIP."""
+"""Image embedding generation using CLIP.
 
+Supports local file paths, URLs (e.g. TMDB CDN poster URLs), and PIL Images.
+"""
+
+import io
 from pathlib import Path
 from typing import List, Optional, Union
 
 import numpy as np
+import requests as _http
 import torch
 from PIL import Image
 from transformers import CLIPModel, CLIPProcessor
@@ -59,6 +64,18 @@ class ImageEmbedder:
 
         logger.info(f"Image embedder ready (dimension: {self.embedding_dim})")
 
+    @staticmethod
+    def _load_image(source: Union[str, Path, Image.Image]) -> Image.Image:
+        """Load a PIL Image from a file path, HTTP/HTTPS URL, or existing PIL Image."""
+        if isinstance(source, Image.Image):
+            return source.convert("RGB")
+        src_str = str(source)
+        if src_str.startswith("http://") or src_str.startswith("https://"):
+            resp = _http.get(src_str, timeout=5)
+            resp.raise_for_status()
+            return Image.open(io.BytesIO(resp.content)).convert("RGB")
+        return Image.open(source).convert("RGB")
+
     @torch.no_grad()
     def embed_image(
         self, image: Union[str, Path, Image.Image], normalize: bool = True
@@ -67,15 +84,14 @@ class ImageEmbedder:
         Generate embedding for a single image.
 
         Args:
-            image: Image path or PIL Image.
+            image: File path, HTTPS URL, or PIL Image.
             normalize: Normalize embedding to unit length.
 
         Returns:
             Image embedding vector.
         """
-        # Load image if path provided
-        if isinstance(image, (str, Path)):
-            image = Image.open(image).convert("RGB")
+        if not isinstance(image, Image.Image):
+            image = self._load_image(image)
 
         # Process image
         inputs = self.processor(images=image, return_tensors="pt").to(self.device)
@@ -119,18 +135,14 @@ class ImageEmbedder:
         for i in range(0, len(images), batch_size):
             batch = images[i : i + batch_size]
 
-            # Load images if paths provided
+            # Load images — supports paths, URLs, and PIL Images
             batch_images = []
             for img in batch:
-                if isinstance(img, (str, Path)):
-                    try:
-                        batch_images.append(Image.open(img).convert("RGB"))
-                    except Exception as e:
-                        logger.warning(f"Failed to load image {img}: {e}")
-                        # Use a blank image as fallback
-                        batch_images.append(Image.new("RGB", (224, 224), color="black"))
-                else:
-                    batch_images.append(img)
+                try:
+                    batch_images.append(self._load_image(img))
+                except Exception as e:
+                    logger.warning(f"Failed to load image {img}: {e}")
+                    batch_images.append(Image.new("RGB", (224, 224), color="black"))
 
             # Process batch
             inputs = self.processor(images=batch_images, return_tensors="pt").to(self.device)

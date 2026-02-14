@@ -1,12 +1,10 @@
 """Content Intelligence Agent - Deep movie content analysis."""
 
 import hashlib
-import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 import diskcache
-import pandas as pd
 
 from config.settings import get_settings
 from src.agents.base_agent import BaseAgent
@@ -341,33 +339,61 @@ Return only the micro-genres as a comma-separated list."""
 
     def _analyze_tone(self, metadata) -> str:
         """
-        Analyze overall tone of the movie.
+        Analyze overall tone using weighted multi-genre scoring.
+
+        Returns the tone with the highest cumulative weight across all genres,
+        preventing first-genre bias for multi-genre movies.
 
         Args:
             metadata: Movie metadata.
 
         Returns:
-            Tone description (light, dark, whimsical, serious, etc.).
+            Tone description (light, dark, whimsical, serious, intense, balanced).
         """
-        # Simple heuristic based on genres
-        genres = [g.lower() for g in metadata.genres]
+        genres = {g.lower() for g in (metadata.genres or [])}
 
-        if "comedy" in genres:
-            return "light"
-        elif "horror" in genres or "thriller" in genres:
-            return "dark"
-        elif "drama" in genres:
-            return "serious"
-        elif "animation" in genres or "family" in genres:
-            return "whimsical"
-        elif "action" in genres:
-            return "intense"
-        else:
+        # Per-genre tone weights; a genre can contribute to multiple tones
+        tone_weights: Dict[str, float] = {
+            "light": 0.0, "dark": 0.0, "whimsical": 0.0,
+            "serious": 0.0, "intense": 0.0, "balanced": 0.0,
+        }
+
+        _GENRE_TONE: Dict[str, Dict[str, float]] = {
+            "comedy":           {"light": 1.0, "whimsical": 0.3},
+            "horror":           {"dark": 1.0, "intense": 0.5},
+            "thriller":         {"dark": 0.8, "intense": 0.9},
+            "drama":            {"serious": 1.0, "balanced": 0.3},
+            "animation":        {"whimsical": 1.0, "light": 0.4},
+            "family":           {"whimsical": 0.8, "light": 0.6},
+            "action":           {"intense": 1.0, "balanced": 0.2},
+            "adventure":        {"intense": 0.6, "balanced": 0.5},
+            "romance":          {"light": 0.5, "serious": 0.4, "balanced": 0.4},
+            "science fiction":  {"serious": 0.5, "intense": 0.4, "balanced": 0.4},
+            "fantasy":          {"whimsical": 0.7, "balanced": 0.4},
+            "mystery":          {"dark": 0.6, "serious": 0.5},
+            "crime":            {"dark": 0.7, "intense": 0.5},
+            "war":              {"dark": 0.8, "serious": 0.7, "intense": 0.5},
+            "documentary":      {"serious": 0.9, "balanced": 0.3},
+            "history":          {"serious": 0.7, "balanced": 0.4},
+            "biography":        {"serious": 0.8, "balanced": 0.3},
+            "music":            {"light": 0.4, "balanced": 0.5},
+            "sport":            {"intense": 0.5, "balanced": 0.5},
+            "western":          {"intense": 0.5, "serious": 0.4, "balanced": 0.3},
+        }
+
+        for genre in genres:
+            for tone, weight in _GENRE_TONE.get(genre, {}).items():
+                tone_weights[tone] += weight
+
+        # If no genre matched, return balanced
+        if all(v == 0.0 for v in tone_weights.values()):
             return "balanced"
+
+        return max(tone_weights, key=lambda t: tone_weights[t])
 
     def _estimate_pacing(self, metadata) -> str:
         """
-        Estimate pacing of the movie.
+        Estimate pacing using weighted multi-genre scoring.
 
         Args:
             metadata: Movie metadata.
@@ -375,23 +401,40 @@ Return only the micro-genres as a comma-separated list."""
         Returns:
             Pacing category (fast, moderate, slow).
         """
-        genres = [g.lower() for g in metadata.genres]
+        genres = {g.lower() for g in (metadata.genres or [])}
 
-        # Fast pacing
-        if any(g in genres for g in ["action", "thriller", "horror"]):
-            return "fast"
+        pacing_weights = {"fast": 0.0, "moderate": 0.0, "slow": 0.0}
 
-        # Slow pacing
-        elif any(g in genres for g in ["drama", "documentary"]):
-            return "slow"
+        _GENRE_PACING: Dict[str, Dict[str, float]] = {
+            "action":           {"fast": 1.0},
+            "thriller":         {"fast": 0.8, "moderate": 0.2},
+            "horror":           {"fast": 0.6, "moderate": 0.4},
+            "adventure":        {"fast": 0.6, "moderate": 0.4},
+            "comedy":           {"moderate": 0.7, "fast": 0.3},
+            "animation":        {"moderate": 0.6, "fast": 0.3},
+            "drama":            {"slow": 0.7, "moderate": 0.3},
+            "romance":          {"slow": 0.5, "moderate": 0.5},
+            "documentary":      {"slow": 0.8, "moderate": 0.2},
+            "history":          {"slow": 0.7, "moderate": 0.3},
+            "biography":        {"slow": 0.6, "moderate": 0.4},
+            "mystery":          {"moderate": 0.6, "slow": 0.4},
+            "science fiction":  {"moderate": 0.5, "fast": 0.3, "slow": 0.2},
+            "fantasy":          {"moderate": 0.6, "slow": 0.3},
+            "crime":            {"moderate": 0.5, "fast": 0.3, "slow": 0.2},
+        }
 
-        # Moderate
-        else:
+        for genre in genres:
+            for pace, weight in _GENRE_PACING.get(genre, {}).items():
+                pacing_weights[pace] += weight
+
+        if all(v == 0.0 for v in pacing_weights.values()):
             return "moderate"
+
+        return max(pacing_weights, key=lambda p: pacing_weights[p])
 
     def _estimate_complexity(self, metadata) -> str:
         """
-        Estimate narrative complexity.
+        Estimate narrative complexity using weighted multi-genre scoring.
 
         Args:
             metadata: Movie metadata.
@@ -399,38 +442,68 @@ Return only the micro-genres as a comma-separated list."""
         Returns:
             Complexity level (simple, moderate, complex).
         """
-        genres = [g.lower() for g in metadata.genres]
+        genres = {g.lower() for g in (metadata.genres or [])}
 
-        # Complex
-        if any(g in genres for g in ["mystery", "thriller", "science fiction"]):
-            return "complex"
+        complexity_weights = {"simple": 0.0, "moderate": 0.0, "complex": 0.0}
 
-        # Simple
-        elif any(g in genres for g in ["comedy", "family", "animation"]):
-            return "simple"
+        _GENRE_COMPLEXITY: Dict[str, Dict[str, float]] = {
+            "mystery":          {"complex": 1.0},
+            "thriller":         {"complex": 0.8, "moderate": 0.2},
+            "science fiction":  {"complex": 0.7, "moderate": 0.3},
+            "crime":            {"complex": 0.5, "moderate": 0.5},
+            "drama":            {"moderate": 0.7, "complex": 0.2},
+            "history":          {"moderate": 0.6, "complex": 0.3},
+            "war":              {"moderate": 0.6, "complex": 0.3},
+            "biography":        {"moderate": 0.6, "complex": 0.2},
+            "romance":          {"moderate": 0.6, "simple": 0.3},
+            "action":           {"moderate": 0.5, "simple": 0.4},
+            "adventure":        {"moderate": 0.5, "simple": 0.4},
+            "comedy":           {"simple": 0.7, "moderate": 0.3},
+            "family":           {"simple": 0.8},
+            "animation":        {"simple": 0.6, "moderate": 0.3},
+            "horror":           {"moderate": 0.5, "simple": 0.3},
+            "documentary":      {"complex": 0.4, "moderate": 0.5},
+            "fantasy":          {"moderate": 0.5, "complex": 0.3},
+        }
 
-        # Moderate
-        else:
+        for genre in genres:
+            for level, weight in _GENRE_COMPLEXITY.get(genre, {}).items():
+                complexity_weights[level] += weight
+
+        if all(v == 0.0 for v in complexity_weights.values()):
             return "moderate"
 
+        return max(complexity_weights, key=lambda c: complexity_weights[c])
+
     def _genre_to_themes(self, genres: List[str]) -> List[str]:
-        """Map genres to common themes (fallback)."""
+        """Map genres to common themes (fallback for fast analysis)."""
         theme_map = {
-            "Action": ["heroism", "conflict"],
-            "Drama": ["human-nature", "relationships"],
-            "Comedy": ["humor", "satire"],
-            "Horror": ["fear", "survival"],
-            "Romance": ["love", "relationships"],
-            "Science Fiction": ["technology", "future"],
-            "Thriller": ["suspense", "mystery"],
+            "Action":           ["heroism", "conflict", "survival"],
+            "Adventure":        ["exploration", "discovery", "courage"],
+            "Drama":            ["human-nature", "relationships", "struggle"],
+            "Comedy":           ["humor", "satire", "absurdity"],
+            "Horror":           ["fear", "survival", "the-unknown"],
+            "Romance":          ["love", "relationships", "heartbreak"],
+            "Science Fiction":  ["technology", "future", "identity"],
+            "Thriller":         ["suspense", "deception", "danger"],
+            "Mystery":          ["secrets", "investigation", "truth"],
+            "Crime":            ["justice", "corruption", "morality"],
+            "Animation":        ["imagination", "growth", "wonder"],
+            "Family":           ["togetherness", "coming-of-age", "values"],
+            "Fantasy":          ["magic", "good-vs-evil", "destiny"],
+            "History":          ["legacy", "power", "sacrifice"],
+            "War":              ["honor", "tragedy", "brotherhood"],
+            "Biography":        ["ambition", "perseverance", "legacy"],
+            "Documentary":      ["truth", "society", "awareness"],
+            "Music":            ["passion", "identity", "expression"],
+            "Sport":            ["determination", "teamwork", "triumph"],
         }
 
         themes = []
         for genre in genres:
-            if genre in theme_map:
-                themes.extend(theme_map[genre])
+            themes.extend(theme_map.get(genre, []))
 
-        return list(set(themes))
+        return list(dict.fromkeys(themes))  # deduplicate preserving order
 
     def _combine_genres(self, genres: List[str]) -> List[str]:
         """Combine genres into micro-genres (fallback)."""

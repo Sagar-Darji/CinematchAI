@@ -141,6 +141,13 @@ class Settings(BaseSettings):
     hybrid_image_weight: float = Field(
         default=0.3, description="Weight for image embeddings in hybrid mode"
     )
+    use_multimodal_embeddings: bool = Field(
+        default=False,
+        description=(
+            "Blend CLIP poster embeddings with text embeddings for profile/retrieval. "
+            "Requires CLIP model download (~600 MB). Set to true to activate multimodal."
+        ),
+    )
 
     # Deployment
     deployment_env: str = Field(

@@ -105,7 +105,7 @@ class MovieService:
             futures = {pool.submit(_fetch, tid): tid for tid in tmdb_ids}
             for future in as_completed(futures):
                 try:
-                    tid, movie = future.result()
+                    tid, movie = future.result(timeout=30)
                     results[tid] = movie
                 except Exception as e:
                     logger.warning(f"Batch fetch failed for id {futures[future]}: {e}")
@@ -368,7 +368,7 @@ class MovieService:
                 url = f"{self.base_url}/discover/movie"
                 request_params = {"api_key": self.api_key, **api_params, "page": page}
 
-                response = requests.get(url, params=request_params, timeout=10)
+                response = self._session.get(url, params=request_params, timeout=10)
                 if response.status_code != 200:
                     logger.warning(f"Discover API returned {response.status_code} for {strategy}")
                     break

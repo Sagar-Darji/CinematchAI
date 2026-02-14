@@ -1,9 +1,10 @@
 """Explanation Agent - Generates natural language explanations for recommendations."""
 
+import re
 from typing import Any, Dict, List
 
 from src.agents.base_agent import BaseAgent
-from src.core.models import Explanation, Movie
+from src.core.models import Movie
 from src.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -131,21 +132,34 @@ Format your response EXACTLY as:
                 max_tokens=1500,
             )
 
-            # Parse response
+            # Robust multi-format parser — handles LLM format variations:
+            #   [12345]: text
+            #   12345: text
+            #   **[12345]**: text
+            #   1. [12345] text
+            #   [12345] - text
+            _PATTERN = re.compile(
+                r"""
+                (?:^\d+\.\s*)?          # optional numbered list prefix "1. "
+                \*{0,2}\[(\d+)\]\*{0,2} # [TMDB_ID] optionally wrapped in **
+                \s*[-:]\s*              # separator: colon or dash
+                (.+)                    # explanation text
+                """,
+                re.VERBOSE,
+            )
+            # Also match bare "12345: text" (no brackets)
+            _BARE_PATTERN = re.compile(r"^(\d{4,9}):\s*(.+)$")
+
             explanations = {}
             for line in response.strip().split("\n"):
                 line = line.strip()
                 if not line:
                     continue
-                # Match patterns like [12345]: text or 12345: text
-                if "]:" in line:
-                    bracket_start = line.find("[")
-                    bracket_end = line.find("]:")
-                    if bracket_start >= 0 and bracket_end > bracket_start:
-                        tmdb_id = line[bracket_start + 1:bracket_end].strip()
-                        text = line[bracket_end + 2:].strip()
-                        if tmdb_id and text:
-                            explanations[tmdb_id] = text
+                m = _PATTERN.match(line) or _BARE_PATTERN.match(line)
+                if m:
+                    tmdb_id, text = m.group(1).strip(), m.group(2).strip()
+                    if tmdb_id and text and tmdb_id not in explanations:
+                        explanations[tmdb_id] = text
 
             logger.info(f"Batch explanations: parsed {len(explanations)}/{len(movies)}")
             return explanations
@@ -260,49 +274,46 @@ Explain in 2-3 sentences why this movie is recommended. Be specific and mention 
     def _template_explanation(
         self, movie: Movie, user_profile, is_exploration: bool
     ) -> str:
-        """Generate template-based explanation (fallback)."""
+        """Generate template-based explanation (fallback when LLM unavailable)."""
         metadata = movie.metadata
+        movie_genres = metadata.genres or []
+        parts: List[str] = []
 
-        # Base explanation
-        parts = [f"Based on the {', '.join(metadata.genres[:2])} genres"]
+        # Base: genre lead (safe for empty genres)
+        if movie_genres:
+            parts.append(f"A {', '.join(movie_genres[:2])} film")
+        else:
+            parts.append(f'"{metadata.title}"')
 
-        # Add user-specific reasons
+        # User-specific reasons
         if user_profile and hasattr(user_profile, "preferences"):
             prefs = user_profile.preferences
-
-            # Check genre match
             user_genres = set(prefs.favorite_genres or [])
-            movie_genres = set(metadata.genres or [])
-            common_genres = user_genres & movie_genres
+            common_genres = user_genres & set(movie_genres)
 
             if common_genres:
                 parts.append(
-                    f"you enjoy ({', '.join(list(common_genres)[:2])})"
+                    f"matching your taste in {', '.join(sorted(common_genres)[:2])}"
                 )
+            if prefs.favorite_directors and metadata.director in prefs.favorite_directors:
+                parts.append(f"directed by your favourite {metadata.director}")
 
-            # Check director match
-            if (
-                prefs.favorite_directors
-                and metadata.director in prefs.favorite_directors
-            ):
-                parts.append(f"from one of your favorite directors")
-
-        # Add rating
+        # Rating signal
         if metadata.vote_average and metadata.vote_average > 7.0:
-            parts.append(
-                f"with a strong {metadata.vote_average:.1f}/10 rating"
-            )
+            parts.append(f"highly rated at {metadata.vote_average:.1f}/10")
 
-        # Exploration note
+        # Year signal
+        if metadata.year:
+            parts.append(f"from {metadata.year}")
+
+        # Exploration note (always last)
         if is_exploration:
-            parts.append(
-                "This is a bit different from your usual preferences, "
-                "but you might discover something new!"
+            return (
+                " ".join(parts) + ". "
+                "This is a step outside your usual picks — a fresh discovery you might love."
             )
 
-        explanation = ", ".join(parts) + "."
-
-        return explanation
+        return " ".join(parts) + "."
 
 
 def get_explanation_agent() -> ExplanationAgent:

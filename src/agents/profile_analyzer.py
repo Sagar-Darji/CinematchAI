@@ -378,6 +378,10 @@ class ProfileAnalyzerAgent(BaseAgent):
             from src.services.movie_service import get_movie_service
             from src.core.embeddings.text_embedder import get_text_embedder
             from src.services.user_service import get_user_service
+            from config.settings import get_settings as _get_settings
+
+            settings = _get_settings()
+            use_multimodal = settings.use_multimodal_embeddings
 
             total_ratings = len(ratings_df)
 
@@ -392,9 +396,16 @@ class ProfileAnalyzerAgent(BaseAgent):
             movie_service = get_movie_service()
             text_embedder = get_text_embedder()
 
-            # Calculate weighted average
-            weighted_embeddings = []
-            weights = []
+            # Lazy-load hybrid embedder only when multimodal is enabled
+            hybrid_embedder = None
+            if use_multimodal:
+                try:
+                    from src.core.embeddings.hybrid_embedder import get_hybrid_embedder
+                    hybrid_embedder = get_hybrid_embedder()
+                    logger.info("Multimodal embeddings enabled (text + CLIP poster)")
+                except Exception as e:
+                    logger.warning(f"Could not load hybrid embedder — falling back to text-only: {e}")
+                    use_multimodal = False
 
             logger.info(f"Computing profile embedding from {len(ratings_df)} ratings")
 
@@ -403,48 +414,82 @@ class ProfileAnalyzerAgent(BaseAgent):
             movies_batch = movie_service.get_movies_batch(movie_ids, max_workers=5)
             movie_lookup = {mid: movie for mid, movie in zip(movie_ids, movies_batch)}
 
+            # Pass 1: collect texts + weights + poster URLs (no embedding yet)
+            texts: list = []
+            weights: list = []
+            poster_urls: list = []
+
             for _, rating in ratings_df.iterrows():
                 movie_id = rating["movieId"]
+                movie = movie_lookup.get(int(movie_id))
 
-                try:
-                    movie = movie_lookup.get(int(movie_id))
-
-                    if movie and movie.metadata.overview:
-                        # Generate embedding on-demand using text embedder
-                        text = f"{movie.metadata.title}. {movie.metadata.overview}"
-                        if movie.metadata.genres:
-                            text += f" Genres: {', '.join(movie.metadata.genres)}"
-
-                        # Use text-only embedding (faster, no poster needed)
-                        embedding = text_embedder.embed_text(text)[0]  # embed_text returns array
-
-                        if embedding is not None and len(embedding) > 0:
-                            # Weight by rating × temporal decay
-                            # Ratings decay with half-life ~70 days: exp(-0.01 * days_ago)
-                            rating_weight = rating["rating"] / 5.0
-                            ts = rating.get("timestamp")
-                            if ts is not None and hasattr(ts, "days") is False:
-                                try:
-                                    days_ago = (datetime.now() - pd.Timestamp(ts).to_pydatetime().replace(tzinfo=None)).days
-                                    days_ago = max(0, days_ago)
-                                except Exception:
-                                    days_ago = 0
-                            else:
-                                days_ago = 0
-                            decay = math.exp(-0.01 * days_ago)
-                            weight = rating_weight * decay
-                            weighted_embeddings.append(np.array(embedding) * weight)
-                            weights.append(weight)
-
-                except Exception as e:
-                    logger.warning(f"Failed to embed movie {movie_id}: {e}")
+                if not movie or not movie.metadata.overview:
                     continue
 
-            if not weighted_embeddings:
-                logger.warning("No embeddings generated - profile will be cold-start")
+                text = f"{movie.metadata.title}. {movie.metadata.overview}"
+                if movie.metadata.genres:
+                    text += f" Genres: {', '.join(movie.metadata.genres)}"
+
+                # Temporal decay: weight = (rating/5) × exp(-0.01 × days_ago)
+                rating_weight = rating["rating"] / 5.0
+                ts = rating.get("timestamp")
+                days_ago = 0
+                if ts is not None:
+                    try:
+                        days_ago = max(
+                            0,
+                            (datetime.now() - pd.Timestamp(ts).to_pydatetime().replace(tzinfo=None)).days,
+                        )
+                    except Exception:
+                        days_ago = 0
+                weights.append(rating_weight * math.exp(-0.01 * days_ago))
+                texts.append(text)
+                # Store poster URL for multimodal (TMDB CDN)
+                poster_path = movie.metadata.poster_path or ""
+                poster_urls.append(
+                    f"https://image.tmdb.org/t/p/w185{poster_path}" if poster_path else ""
+                )
+
+            if not texts:
+                logger.warning("No movies with overviews found — profile will be cold-start")
                 return None
 
-            # Calculate weighted average
+            # Pass 2a: batch text encode (single forward pass for all texts)
+            raw_text_embeddings = []
+            try:
+                raw_text_embeddings = list(text_embedder.embed_batch(texts))  # (n, dim)
+            except Exception as e:
+                logger.warning(f"Batch encode failed, falling back to per-movie: {e}")
+                for text in texts:
+                    try:
+                        raw_text_embeddings.append(text_embedder.embed_text(text)[0])
+                    except Exception:
+                        raw_text_embeddings.append(None)
+
+            # Pass 2b: optional CLIP poster fusion
+            weighted_embeddings = []
+            for i, (text_emb, w, poster_url) in enumerate(zip(raw_text_embeddings, weights, poster_urls)):
+                if text_emb is None or len(text_emb) == 0:
+                    continue
+                if use_multimodal and hybrid_embedder and poster_url:
+                    try:
+                        final_emb = hybrid_embedder.embed_movie(
+                            title=texts[i].split(".")[0],
+                            overview=None,
+                            poster_path=poster_url,
+                        )
+                    except Exception:
+                        # CLIP fetch failed (e.g. no poster) — fall back to text-only
+                        final_emb = np.array(text_emb)
+                else:
+                    final_emb = np.array(text_emb)
+                weighted_embeddings.append(final_emb * w)
+
+            if not weighted_embeddings:
+                logger.warning("No embeddings generated — profile will be cold-start")
+                return None
+
+            # Weighted average
             profile_embedding = np.sum(weighted_embeddings, axis=0) / np.sum(weights)
 
             # Normalize
