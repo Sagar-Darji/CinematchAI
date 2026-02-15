@@ -1,0 +1,127 @@
+# ── ConfigMap ─────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cinematch-api-config
+  namespace: cinematch
+data:
+  LOG_FORMAT: "json"
+  LOG_LEVEL: "INFO"
+  API_HOST: "0.0.0.0"
+  API_PORT: "8000"
+  CHROMA_PERSIST_DIR: "/app/data/vectordb"
+  DATABASE_URL: "sqlite:////app/data/cinematch.db"
+  CACHE_DIR: "/app/cache"
+  LLM_PROVIDER: "groq"
+
+---
+# ── Secret (replace values with real secrets) ─────────────────────────────────
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cinematch-api-secrets
+  namespace: cinematch
+type: Opaque
+stringData:
+  GROQ_API_KEY: "your_groq_api_key_here"
+  TMDB_API_KEY: "your_tmdb_api_key_here"
+
+---
+# ── PersistentVolumeClaim for data ────────────────────────────────────────────
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: cinematch-data-pvc
+  namespace: cinematch
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 5Gi
+
+---
+# ── Deployment ────────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cinematch-api
+  namespace: cinematch
+  labels:
+    app: cinematch-api
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: cinematch-api
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: cinematch-api
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+        - name: api
+          image: cinematch-api:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+              name: http
+          envFrom:
+            - configMapRef:
+                name: cinematch-api-config
+            - secretRef:
+                name: cinematch-api-secrets
+          volumeMounts:
+            - name: data
+              mountPath: /app/data
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "1000m"
+              memory: "2Gi"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 40
+            periodSeconds: 30
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            failureThreshold: 3
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: cinematch-data-pvc
+
+---
+# ── Service ────────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: cinematch-api
+  namespace: cinematch
+  labels:
+    app: cinematch-api
+spec:
+  selector:
+    app: cinematch-api
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+  type: ClusterIP

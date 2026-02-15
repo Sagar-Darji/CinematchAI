@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from prometheus_fastapi_instrumentator import Instrumentator
 import time
 import uuid
 
@@ -158,6 +159,18 @@ app.include_router(groups.router, prefix="/api/v1")
 app.include_router(users.router, prefix="/api/v1")
 app.include_router(movies.router, prefix="/api/v1")
 app.include_router(admin.router, prefix="/api/v1")
+
+# ── Prometheus metrics endpoint at /metrics ───────────────────────────────────
+# Exposes: request count, latency histograms, in-flight requests, response sizes
+# Scraped by Prometheus every 15 s (see infra/monitoring/prometheus/prometheus.yml)
+Instrumentator(
+    should_group_status_codes=False,
+    should_ignore_untemplated=True,
+    should_respect_env_var=False,
+    should_instrument_requests_inprogress=True,
+    excluded_handlers=["/metrics", "/health", "/docs", "/openapi.json"],
+    inprogress_labels=True,
+).instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
 
 
 # Root endpoint

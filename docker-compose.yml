@@ -1,0 +1,169 @@
+name: cinematch
+
+# ── Shared networks ────────────────────────────────────────────────────────────
+networks:
+  app:
+    driver: bridge
+  monitoring:
+    driver: bridge
+
+# ── Named volumes ──────────────────────────────────────────────────────────────
+volumes:
+  vectordb_data:
+  sqlite_data:
+  cache_data:
+  prometheus_data:
+  grafana_data:
+  loki_data:
+
+# ─────────────────────────────────────────────────────────────────────────────
+services:
+
+  # ── FastAPI backend ──────────────────────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cinematch-api
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      LOG_FORMAT: json
+      CHROMA_PERSIST_DIR: /app/data/vectordb
+      DATABASE_URL: sqlite:////app/data/cinematch.db
+      CACHE_DIR: /app/cache
+    volumes:
+      - vectordb_data:/app/data/vectordb
+      - sqlite_data:/app/data
+      - cache_data:/app/cache
+    ports:
+      - "8000:8000"
+    networks:
+      - app
+      - monitoring
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+        tag: "cinematch-api"
+
+  # ── React frontend (nginx) ────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: ""   # nginx proxies /api/ → api:8000, so no host needed
+    container_name: cinematch-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    networks:
+      - app
+    depends_on:
+      api:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+  # ── Prometheus ─────────────────────────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:v2.51.2
+    container_name: cinematch-prometheus
+    restart: unless-stopped
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=15d"
+      - "--web.enable-lifecycle"
+      - "--web.console.libraries=/usr/share/prometheus/console_libraries"
+      - "--web.console.templates=/usr/share/prometheus/consoles"
+    volumes:
+      - ./infra/monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    networks:
+      - monitoring
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+  # ── Grafana ────────────────────────────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:10.4.2
+    container_name: cinematch-grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: cinematch
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_SERVER_ROOT_URL: "http://localhost:3001"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./infra/monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "3001:3000"
+    networks:
+      - monitoring
+    depends_on:
+      - prometheus
+      - loki
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+  # ── Loki (log aggregation) ─────────────────────────────────────────────────
+  loki:
+    image: grafana/loki:3.0.0
+    container_name: cinematch-loki
+    restart: unless-stopped
+    command: -config.file=/etc/loki/loki-config.yml
+    volumes:
+      - ./infra/monitoring/loki/loki-config.yml:/etc/loki/loki-config.yml:ro
+      - loki_data:/loki
+    ports:
+      - "3100:3100"
+    networks:
+      - monitoring
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+  # ── Promtail (log shipper: Docker → Loki) ────────────────────────────────────
+  promtail:
+    image: grafana/promtail:3.0.0
+    container_name: cinematch-promtail
+    restart: unless-stopped
+    command: -config.file=/etc/promtail/promtail-config.yml
+    volumes:
+      - ./infra/monitoring/promtail/promtail-config.yml:/etc/promtail/promtail-config.yml:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - monitoring
+    depends_on:
+      - loki
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"

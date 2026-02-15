@@ -1,0 +1,33 @@
+# Requires nginx-ingress-controller in the cluster.
+# Install: kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/cloud/deploy.yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: cinematch-ingress
+  namespace: cinematch
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "120"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "120"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: cinematch.local     # change to your actual domain in production
+      http:
+        paths:
+          # API — all /api/* requests go to FastAPI
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: cinematch-api
+                port:
+                  number: 8000
+          # Frontend — everything else goes to nginx SPA
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: cinematch-frontend
+                port:
+                  number: 80
