@@ -1,34 +1,39 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Search, X } from 'lucide-react'
-import { getTrending, searchMovies, getMoviesByGenre } from '@/lib/api'
-import type { Movie, Recommendation } from '@/lib/api'
-import { tmdbPoster, cn } from '@/lib/utils'
-import { MovieCard } from '@/components/ui/MovieCard'
+import { getTrending, searchMovies, discoverByGenre } from '@/lib/api'
+import type { Movie } from '@/lib/api'
+import { MovieCard, movieToRec } from '@/components/ui/MovieCard'
 
-const GENRES = ['Action','Comedy','Drama','Horror','Sci-Fi','Romance','Thriller','Animation','Documentary','Crime']
-
-// Convert a bare Movie into a Recommendation shape so MovieCard can handle it
-function toRec(movie: Movie, rank: number): Recommendation {
-  return { movie, score: (movie.vote_average ?? 5) / 10, rank, explanation: undefined, is_exploration: false }
-}
+const GENRES = ['Action','Comedy','Drama','Horror','Sci-Fi','Romance','Thriller','Animation','Documentary','Crime','Adventure','Mystery']
+const LANGUAGES = [
+  { label: 'All', code: '' },
+  { label: 'English', code: 'en' },
+  { label: 'Hindi', code: 'hi' },
+  { label: 'Korean', code: 'ko' },
+  { label: 'Japanese', code: 'ja' },
+  { label: 'Tamil', code: 'ta' },
+  { label: 'Telugu', code: 'te' },
+  { label: 'French', code: 'fr' },
+  { label: 'Spanish', code: 'es' },
+]
 
 export default function Browse() {
   const [movies, setMovies] = useState<Movie[]>([])
   const [loading, setLoading] = useState(true)
   const [query, setQuery] = useState('')
   const [activeGenre, setActiveGenre] = useState('')
-  const [selectedMovie, setSelectedMovie] = useState<Movie | null>(null)
+  const [activeLang, setActiveLang] = useState('')
 
-  const load = useCallback(async (q: string, genre: string) => {
+  const load = useCallback(async (q: string, genre: string, lang: string) => {
     setLoading(true)
     try {
       let results: Movie[]
       if (q.trim()) {
-        results = await searchMovies(q.trim(), 40)
+        results = await searchMovies(q.trim(), 40, lang || undefined)
       } else if (genre) {
-        results = await getMoviesByGenre(genre, 40)
+        results = await discoverByGenre(genre, 40, lang || undefined)
       } else {
-        results = await getTrending(40)
+        results = await getTrending(40, lang || undefined)
       }
       setMovies(results)
     } catch {
@@ -38,64 +43,84 @@ export default function Browse() {
     }
   }, [])
 
-  useEffect(() => { load('', '') }, [load])
+  useEffect(() => { load('', '', '') }, [load])
 
-  // Debounce search
+  // Debounce search; genre/lang changes are instant
   useEffect(() => {
-    const t = setTimeout(() => load(query, activeGenre), 400)
-    return () => clearTimeout(t)
-  }, [query, activeGenre, load])
+    if (query.trim()) {
+      const t = setTimeout(() => load(query, activeGenre, activeLang), 380)
+      return () => clearTimeout(t)
+    } else {
+      load(query, activeGenre, activeLang)
+    }
+  }, [query, activeGenre, activeLang, load])
 
   const handleGenre = (g: string) => {
     setActiveGenre(g === activeGenre ? '' : g)
     setQuery('')
   }
+  const handleLang = (code: string) => {
+    setActiveLang(code === activeLang ? '' : code)
+  }
 
   return (
-    <div className="p-6 md:p-8 min-h-screen" style={{ background: 'var(--bg-primary)' }}>
-      {/* Header */}
-      <div className="mb-8">
-        <h1 className="text-3xl font-black tracking-tight text-white mb-1">Browse</h1>
-        <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
-          9,600+ movies · 20+ languages
-        </p>
-      </div>
-
-      {/* Search + genre filter — nothing-to-watch style bar */}
-      <div className="space-y-3 mb-8">
+    <div className="min-h-screen" style={{ background: 'var(--bg-primary)' }}>
+      {/* Sticky filter bar — nothing-to-watch style */}
+      <div
+        className="sticky top-0 z-20 px-4 md:px-6 py-3 space-y-2.5"
+        style={{ background: 'rgba(10,10,15,0.92)', backdropFilter: 'blur(12px)', borderBottom: '1px solid var(--border)' }}
+      >
+        {/* Search */}
         <div
-          className="flex items-center gap-3 rounded-xl px-4 py-3"
+          className="flex items-center gap-2.5 rounded-xl px-4 py-2.5"
           style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}
         >
-          <Search size={16} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
+          <Search size={14} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
           <input
             type="text"
-            placeholder="Search by title, director, actor…"
+            placeholder="Search by title…"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             className="flex-1 bg-transparent text-sm outline-none"
             style={{ color: 'var(--text-primary)' }}
           />
           {query && (
-            <button onClick={() => setQuery('')} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)' }}>
-              <X size={14} />
+            <button onClick={() => setQuery('')} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: 0 }}>
+              <X size={13} />
             </button>
           )}
         </div>
 
-        <div className="flex flex-wrap gap-2">
+        {/* Language chips */}
+        <div className="flex gap-1.5 overflow-x-auto pb-0.5 scrollbar-none">
+          {LANGUAGES.map(({ label, code }) => (
+            <button
+              key={code}
+              onClick={() => handleLang(code)}
+              className="px-2.5 py-1 rounded-full text-[11px] font-semibold whitespace-nowrap flex-shrink-0"
+              style={{
+                background: activeLang === code ? 'var(--accent-gold)' : 'var(--bg-overlay)',
+                color: activeLang === code ? '#0a0a0f' : 'var(--text-muted)',
+                border: '1px solid var(--border)',
+                cursor: 'pointer',
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {/* Genre chips */}
+        <div className="flex gap-1.5 overflow-x-auto pb-0.5 scrollbar-none">
           {GENRES.map((g) => (
             <button
               key={g}
               onClick={() => handleGenre(g)}
-              className={cn(
-                'px-3 py-1.5 rounded-full text-xs font-semibold transition-all',
-                activeGenre === g ? 'text-black' : 'text-muted hover:opacity-100 opacity-70',
-              )}
+              className="px-2.5 py-1 rounded-full text-[11px] font-semibold whitespace-nowrap flex-shrink-0"
               style={{
-                background: activeGenre === g ? 'var(--accent-gold)' : 'var(--bg-card)',
+                background: activeGenre === g ? 'var(--accent-red)' : 'var(--bg-overlay)',
+                color: activeGenre === g ? '#ffffff' : 'var(--text-muted)',
                 border: '1px solid var(--border)',
-                color: activeGenre === g ? '#0a0a0f' : 'var(--text-muted)',
                 cursor: 'pointer',
               }}
             >
@@ -105,82 +130,33 @@ export default function Browse() {
         </div>
       </div>
 
-      {/* Poster grid — nothing-to-watch style */}
-      {loading ? (
-        <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-7 gap-3">
-          {Array.from({ length: 28 }).map((_, i) => (
-            <div key={i} className="skeleton aspect-[2/3] rounded-lg" />
-          ))}
-        </div>
-      ) : (
-        <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-7 gap-3">
-          {movies.map((movie, i) => {
-            const poster = tmdbPoster(movie.poster_path, 'w300')
-            return (
-              <button
-                key={movie.tmdb_id ?? i}
-                onClick={() => setSelectedMovie(selectedMovie?.tmdb_id === movie.tmdb_id ? null : movie)}
-                className="poster-card rounded-lg overflow-hidden text-left relative"
-                style={{
-                  background: 'var(--bg-card)',
-                  border: selectedMovie?.tmdb_id === movie.tmdb_id
-                    ? '2px solid var(--accent-gold)'
-                    : '1px solid var(--border)',
-                  cursor: 'pointer',
-                }}
-                title={movie.title}
-              >
-                {poster ? (
-                  <img
-                    src={poster}
-                    alt={movie.title}
-                    className="w-full aspect-[2/3] object-cover"
-                    loading="lazy"
-                  />
-                ) : (
-                  <div
-                    className="w-full aspect-[2/3] flex items-center justify-center text-[10px] text-center p-2"
-                    style={{ background: 'linear-gradient(135deg,#1a1a2e,#0f3460)', color: 'var(--accent-gold)' }}
-                  >
-                    {movie.title.slice(0, 25)}
-                  </div>
-                )}
-                {/* Hover overlay */}
-                <div className="absolute inset-0 opacity-0 hover:opacity-100 transition-opacity duration-200 flex flex-col justify-end p-2"
-                  style={{ background: 'linear-gradient(to top, rgba(0,0,0,0.9) 0%, transparent 60%)' }}>
-                  <p className="text-white text-[10px] font-bold leading-tight line-clamp-2">{movie.title}</p>
-                  {movie.year && <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>{movie.year}</p>}
-                </div>
-              </button>
-            )
-          })}
-        </div>
-      )}
-
-      {/* Inline expanded card */}
-      {selectedMovie && (
-        <div
-          className="mt-6 rounded-xl overflow-hidden animate-fade-in"
-          style={{ border: '1px solid var(--accent-gold)' }}
-        >
-          <div className="flex items-center justify-between px-4 py-3" style={{ background: 'var(--bg-overlay)' }}>
-            <span className="font-bold text-sm text-white">{selectedMovie.title}</span>
-            <button
-              onClick={() => setSelectedMovie(null)}
-              style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)' }}
-            >
-              <X size={16} />
-            </button>
+      {/* Poster grid */}
+      <div className="px-3 md:px-4 pt-4 pb-8">
+        {loading ? (
+          <div className="grid grid-cols-4 sm:grid-cols-5 md:grid-cols-6 lg:grid-cols-7 xl:grid-cols-8 gap-2">
+            {Array.from({ length: 32 }).map((_, i) => (
+              <div key={i} className="skeleton aspect-[2/3] rounded-lg" />
+            ))}
           </div>
-          <MovieCard rec={toRec(selectedMovie, 1)} />
-        </div>
-      )}
-
-      {!loading && movies.length === 0 && (
-        <div className="text-center py-20" style={{ color: 'var(--text-muted)' }}>
-          No movies found. Try a different search.
-        </div>
-      )}
+        ) : movies.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-24 text-center">
+            <div className="text-3xl mb-3">🎬</div>
+            <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
+              No movies found. Try a different search or filter.
+            </p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-4 sm:grid-cols-5 md:grid-cols-6 lg:grid-cols-7 xl:grid-cols-8 gap-2">
+            {movies.map((movie, i) => (
+              <MovieCard
+                key={movie.tmdb_id ?? i}
+                rec={movieToRec(movie, i + 1)}
+                compact={false}
+              />
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   )
 }

@@ -273,6 +273,49 @@ async def search_movies(
 
 
 @router.get(
+    "/discover",
+    status_code=status.HTTP_200_OK,
+)
+async def discover_movies(
+    genre: Optional[str] = Query(None, description="Genre name (e.g. Action, Comedy)"),
+    language: Optional[str] = Query(None, description="Language code (e.g. en, hi, ko)"),
+    limit: int = Query(40, ge=1, le=50, description="Number of results"),
+):
+    """
+    Discover movies by genre and/or language via TMDB.
+
+    Falls back to trending if no genre specified.
+    """
+    logger.info(f"GET /movies/discover: genre={genre}, language={language}, limit={limit}")
+    try:
+        service = get_movie_service()
+        # Use search with genre keyword, or trending as fallback
+        if genre:
+            movies = service.search_movies(query=genre, language=language, limit=limit)
+        else:
+            movies = service.get_trending_movies(time_window="week", language=language)
+            movies = movies[:limit]
+
+        movie_responses = [
+            MovieResponse(
+                tmdb_id=int(m.metadata.tmdb_id),
+                title=m.metadata.title,
+                year=m.metadata.year,
+                genres=m.metadata.genres,
+                overview=m.metadata.overview,
+                vote_average=m.metadata.vote_average,
+                director=m.metadata.director,
+                poster_path=m.metadata.poster_path,
+            )
+            for m in movies
+        ]
+        return {"movies": movie_responses, "count": len(movie_responses), "genre": genre, "language": language}
+    except Exception as e:
+        logger.error(f"Failed to discover movies: {e}")
+        raise HTTPException(status_code=500, detail="Failed to discover movies")
+
+
+@router.get(
     "/{tmdb_id}",
     status_code=status.HTTP_200_OK,
     responses={

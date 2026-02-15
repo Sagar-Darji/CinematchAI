@@ -1,6 +1,8 @@
+import { useEffect, useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import { Clapperboard, Sparkles, Search, User, Home } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { getSystemStats } from '@/lib/api'
 
 const NAV = [
   { to: '/', icon: Home, label: 'Home' },
@@ -10,6 +12,20 @@ const NAV = [
 ]
 
 export function Sidebar() {
+  const [movieCount, setMovieCount] = useState<number | null>(null)
+
+  useEffect(() => {
+    getSystemStats().then((s) => {
+      if (s?.chromadb_count) setMovieCount(s.chromadb_count)
+    }).catch(() => {})
+  }, [])
+
+  const countLabel = movieCount
+    ? movieCount >= 1000
+      ? `${(movieCount / 1000).toFixed(0)}K+ movies`
+      : `${movieCount} movies`
+    : 'movies'
+
   return (
     <aside
       style={{ background: 'var(--bg-card)', borderRight: '1px solid var(--border)' }}
@@ -33,9 +49,7 @@ export function Sidebar() {
             className={({ isActive }) =>
               cn(
                 'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors',
-                isActive
-                  ? 'text-white'
-                  : 'hover:text-white',
+                isActive ? 'text-white' : 'hover:text-white',
               )
             }
             style={({ isActive }) => ({
@@ -49,9 +63,9 @@ export function Sidebar() {
         ))}
       </nav>
 
-      {/* Footer */}
+      {/* Footer with live movie count */}
       <div className="px-4 py-4 border-t text-xs hidden md:block" style={{ borderColor: 'var(--border)', color: 'var(--text-muted)' }}>
-        v2.0.0 · 9,600+ movies
+        v2.0.0 · {countLabel}
       </div>
     </aside>
   )

@@ -130,6 +130,43 @@ async def submit_feedback(request: FeedbackRequest):
         )
 
 
+@router.get(
+    "/{user_id}",
+    status_code=status.HTTP_200_OK,
+)
+async def get_user(user_id: str):
+    """Get basic user profile: rating count, genre breakdown, embedding status."""
+    user_service = get_user_service()
+    ratings = user_service.get_user_ratings(user_id)
+
+    # Build genre counts from ratings
+    genres: dict[str, int] = {}
+    try:
+        from src.services.movie_service import get_movie_service
+        movie_service = get_movie_service()
+        for r in ratings[:50]:
+            try:
+                movie = movie_service.get_movie_by_id(int(r["movie_id"]))
+                if movie:
+                    for g in movie.metadata.genres or []:
+                        genres[g] = genres.get(g, 0) + 1
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    profile_data = user_service.get_user_profile(user_id)
+    has_embedding = bool(profile_data and isinstance(profile_data, dict) and profile_data.get("embedding"))
+
+    return {
+        "user_id": user_id,
+        "total_ratings": len(ratings),
+        "genres": genres,
+        "embedding_ready": has_embedding,
+        "is_cold_start": len(ratings) < 5,
+    }
+
+
 @router.put(
     "/{user_id}/context",
     status_code=status.HTTP_200_OK,

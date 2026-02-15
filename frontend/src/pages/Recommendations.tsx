@@ -1,11 +1,10 @@
 import { useState, useEffect } from 'react'
-import { SlidersHorizontal, RefreshCw } from 'lucide-react'
+import { SlidersHorizontal, RefreshCw, ChevronDown, ChevronUp } from 'lucide-react'
 import { submitRecommendationJob, pollJobStatus } from '@/lib/api'
 import { useUserStore } from '@/store/useUserStore'
 import { useRecommendationStore } from '@/store/useRecommendationStore'
 import { MovieCard } from '@/components/ui/MovieCard'
 import { TraceDisplay } from '@/components/recommendations/TraceDisplay'
-import { MovieReveal } from '@/components/recommendations/MovieReveal'
 import { cn } from '@/lib/utils'
 
 const ALL_AGENTS = [
@@ -28,7 +27,6 @@ export default function Recommendations() {
     setContextFactors,
   } = useRecommendationStore()
 
-  // Sidebar controls
   const [mood, setMood] = useState('')
   const [companion, setCompanion] = useState('')
   const [language, setLanguage] = useState('')
@@ -37,9 +35,7 @@ export default function Recommendations() {
   const [yearMin, setYearMin] = useState('')
   const [yearMax, setYearMax] = useState('')
   const [sidebarOpen, setSidebarOpen] = useState(false)
-
-  // Reveal state
-  const [showReveal, setShowReveal] = useState(false)
+  const [traceCollapsed, setTraceCollapsed] = useState(false)
 
   const isRunning = isPolling || jobStatus === 'running' || jobStatus === 'pending'
   const isDone = jobStatus === 'complete'
@@ -58,7 +54,7 @@ export default function Recommendations() {
   const startJob = async () => {
     if (!userId) return
     reset()
-    setShowReveal(false)
+    setTraceCollapsed(false)
     setIsPolling(true)
     setJobStatus('pending')
 
@@ -74,13 +70,11 @@ export default function Recommendations() {
         setJobStatus(data.status)
 
         if (data.status === 'complete') {
-          const result = data.result!
-          setRecommendations(result.recommendations)
-          setContextFactors(result.context_factors ?? {})
+          setRecommendations(data.result!.recommendations)
+          setContextFactors(data.result!.context_factors ?? {})
           setIsPolling(false)
-          // Brief reveal animation before showing full cards
-          setShowReveal(true)
-          setTimeout(() => setShowReveal(false), 2400)
+          // Auto-collapse trace so cards get focus
+          setTimeout(() => setTraceCollapsed(true), 1800)
           return
         }
         if (data.status === 'failed') {
@@ -96,7 +90,6 @@ export default function Recommendations() {
     }
   }
 
-  // Auto-start if no recs yet
   useEffect(() => {
     if (userId && recommendations.length === 0 && !isPolling && jobStatus === null) {
       startJob()
@@ -106,21 +99,26 @@ export default function Recommendations() {
   const currentRunningStep = ALL_AGENTS[steps.length] ?? null
 
   return (
-    <div className="flex min-h-screen relative">
+    <div className="flex min-h-screen relative" style={{ background: 'var(--bg-primary)' }}>
       {/* Main content */}
-      <div className="flex-1 p-6 md:p-8 max-w-3xl">
+      <div className="flex-1 p-5 md:p-8 max-w-3xl">
         {/* Header */}
         <div className="flex items-center justify-between mb-8">
           <div>
-            <h1 className="text-3xl font-black tracking-tight text-white">For You</h1>
-            <p className="text-sm mt-1" style={{ color: 'var(--text-muted)' }}>
-              {userId ? `Personalized for ${userId}` : 'Sign in on Home to personalize'}
+            <p className="text-xs font-bold tracking-[0.25em] uppercase mb-1" style={{ color: 'var(--accent-gold)' }}>
+              AI-Curated
             </p>
+            <h1 className="text-3xl font-black tracking-tight text-white">For You</h1>
+            {userId && (
+              <p className="text-sm mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                Personalized for {userId}
+              </p>
+            )}
           </div>
           <div className="flex gap-2">
             <button
               onClick={() => setSidebarOpen((v) => !v)}
-              className="p-2 rounded-lg transition-colors"
+              className="p-2 rounded-lg"
               style={{
                 background: sidebarOpen ? 'var(--bg-overlay)' : 'var(--bg-card)',
                 border: '1px solid var(--border)',
@@ -129,16 +127,13 @@ export default function Recommendations() {
               }}
               title="Filters"
             >
-              <SlidersHorizontal size={18} />
+              <SlidersHorizontal size={17} />
             </button>
             <button
               onClick={startJob}
               disabled={isRunning || !userId}
-              className={cn(
-                'flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold transition-all disabled:opacity-40',
-                isRunning && 'cursor-not-allowed',
-              )}
-              style={{ background: 'var(--accent-gold)', color: '#0a0a0f', border: 'none', cursor: 'pointer' }}
+              className={cn('flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold disabled:opacity-40')}
+              style={{ background: 'var(--accent-gold)', color: '#0a0a0f', border: 'none', cursor: isRunning ? 'not-allowed' : 'pointer' }}
             >
               <RefreshCw size={14} className={isRunning ? 'animate-spin' : ''} />
               {isRunning ? 'Running…' : 'Refresh'}
@@ -146,12 +141,20 @@ export default function Recommendations() {
           </div>
         </div>
 
-        {/* Trace (while running or just complete) */}
-        {(isRunning || (isDone && showReveal)) && (
+        {/* Trace panel — shows while running, collapsible when done */}
+        {(isRunning || (isDone && steps.length > 0)) && (
           <div className="mb-6">
-            {showReveal && recommendations.length > 0 ? (
-              <MovieReveal recommendations={recommendations} />
-            ) : (
+            {isDone && !isRunning && (
+              <button
+                onClick={() => setTraceCollapsed((v) => !v)}
+                className="flex items-center gap-2 text-xs font-semibold mb-2"
+                style={{ color: 'var(--text-muted)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+              >
+                {traceCollapsed ? <ChevronDown size={12} /> : <ChevronUp size={12} />}
+                {traceCollapsed ? 'Show pipeline trace' : 'Hide pipeline trace'}
+              </button>
+            )}
+            {!traceCollapsed && (
               <TraceDisplay
                 steps={steps}
                 runningStep={isRunning ? currentRunningStep : null}
@@ -165,42 +168,42 @@ export default function Recommendations() {
         {jobStatus === 'failed' && (
           <div
             className="rounded-xl p-4 mb-6 text-sm"
-            style={{ background: 'rgba(229,9,20,0.1)', border: '1px solid rgba(229,9,20,0.3)', color: '#ff6b6b' }}
+            style={{ background: 'rgba(229,9,20,0.08)', border: '1px solid rgba(229,9,20,0.25)', color: '#ff6b6b' }}
           >
             Pipeline failed. Check that the API server is running on port 8000.
           </div>
         )}
 
-        {/* Recommendation cards — unveil.fr single-column full-width */}
-        {!showReveal && recommendations.length > 0 && (
-          <div className="space-y-4">
-            <p className="text-xs font-bold tracking-widest uppercase mb-4" style={{ color: 'var(--text-muted)' }}>
+        {/* Recommendation cards — staggered fade in */}
+        {recommendations.length > 0 && (
+          <div className="space-y-2.5">
+            <p className="text-xs font-bold tracking-[0.2em] uppercase mb-4" style={{ color: 'var(--text-muted)' }}>
               {recommendations.length} picks · AI-curated
             </p>
             {recommendations.map((rec, i) => (
-              <MovieCard key={rec.movie.tmdb_id ?? i} rec={rec} rank={i + 1} />
+              <MovieCard key={rec.movie.tmdb_id ?? i} rec={rec} rank={i + 1} compact />
             ))}
           </div>
         )}
 
         {/* Empty state */}
-        {!isRunning && !showReveal && recommendations.length === 0 && jobStatus !== 'failed' && (
-          <div className="flex flex-col items-center justify-center py-20 text-center">
-            <div className="text-4xl mb-4">🎬</div>
+        {!isRunning && recommendations.length === 0 && jobStatus !== 'failed' && (
+          <div className="flex flex-col items-center justify-center py-24 text-center">
+            <div className="text-5xl mb-4">🎬</div>
             <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
-              {userId ? 'Click Refresh to generate recommendations.' : 'Enter a username on the Home page first.'}
+              {userId ? 'Starting recommendation engine…' : 'Enter a username on Home first.'}
             </p>
           </div>
         )}
       </div>
 
-      {/* Filters sidebar — slides in from right */}
+      {/* Filters sidebar */}
       {sidebarOpen && (
         <aside
           className="w-72 border-l p-6 space-y-5 flex-shrink-0"
           style={{ background: 'var(--bg-card)', borderColor: 'var(--border)' }}
         >
-          <h2 className="font-bold text-sm uppercase tracking-widest" style={{ color: 'var(--accent-gold)' }}>
+          <h2 className="font-bold text-xs uppercase tracking-widest" style={{ color: 'var(--accent-gold)' }}>
             Customize
           </h2>
 
@@ -229,7 +232,7 @@ export default function Recommendations() {
 
           <div className="space-y-1">
             <label className="block text-xs font-medium" style={{ color: 'var(--text-muted)' }}>
-              Natural language context
+              Context (freeform)
             </label>
             <textarea
               rows={3}
@@ -252,7 +255,7 @@ export default function Recommendations() {
           <button
             onClick={() => { setSidebarOpen(false); startJob() }}
             disabled={isRunning || !userId}
-            className="w-full py-2.5 rounded-xl text-sm font-bold disabled:opacity-40 transition-opacity"
+            className="w-full py-2.5 rounded-xl text-sm font-bold disabled:opacity-40"
             style={{ background: 'var(--accent-gold)', color: '#0a0a0f', border: 'none', cursor: 'pointer' }}
           >
             Apply & Refresh
