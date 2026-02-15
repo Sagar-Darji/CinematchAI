@@ -5,6 +5,7 @@ import { useUserStore } from '@/store/useUserStore'
 import { useRecommendationStore } from '@/store/useRecommendationStore'
 import { MovieCard } from '@/components/ui/MovieCard'
 import { TraceDisplay } from '@/components/recommendations/TraceDisplay'
+import { PageLoader } from '@/components/ui/PageLoader'
 import { cn } from '@/lib/utils'
 
 const ALL_AGENTS = [
@@ -98,8 +99,17 @@ export default function Recommendations() {
 
   const currentRunningStep = ALL_AGENTS[steps.length] ?? null
 
+  // Pipeline progress for the top bar: 0-85 while running, 100 when done
+  const pipelinePct = isDone
+    ? 100
+    : isRunning
+    ? Math.max(5, Math.round((steps.length / 7) * 85))
+    : 0
+
   return (
     <div className="flex min-h-screen relative" style={{ background: 'var(--bg-primary)' }}>
+      <PageLoader visible={isRunning} value={pipelinePct} />
+
       {/* Main content */}
       <div className="flex-1 p-5 md:p-8 max-w-3xl">
         {/* Header */}

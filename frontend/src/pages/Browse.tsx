@@ -3,6 +3,7 @@ import { Search, X } from 'lucide-react'
 import { getTrending, searchMovies, discoverByGenre } from '@/lib/api'
 import type { Movie } from '@/lib/api'
 import { MovieCard, movieToRec } from '@/components/ui/MovieCard'
+import { PageLoader } from '@/components/ui/PageLoader'
 
 const GENRES = ['Action','Comedy','Drama','Horror','Sci-Fi','Romance','Thriller','Animation','Documentary','Crime','Adventure','Mystery']
 const LANGUAGES = [
@@ -65,6 +66,8 @@ export default function Browse() {
 
   return (
     <div className="min-h-screen" style={{ background: 'var(--bg-primary)' }}>
+      <PageLoader visible={loading} />
+
       {/* Sticky filter bar — nothing-to-watch style */}
       <div
         className="sticky top-0 z-20 px-4 md:px-6 py-3 space-y-2.5"

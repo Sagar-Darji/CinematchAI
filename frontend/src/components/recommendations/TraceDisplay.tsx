@@ -10,6 +10,8 @@ const ALL_AGENTS = [
   { key: 'Aggregation',          icon: '📊', label: 'Aggregation' },
 ]
 
+const TOTAL = ALL_AGENTS.length
+
 interface Step {
   step: string
   detail: string
@@ -23,47 +25,68 @@ interface TraceDisplayProps {
 
 export function TraceDisplay({ steps, runningStep, isComplete }: TraceDisplayProps) {
   const completedSet = new Set(steps.map((s) => s.step))
-  const [visibleSteps, setVisibleSteps] = useState(0)
+  const [visibleCount, setVisibleCount] = useState(0)
 
-  // Reveal completed steps one at a time for a cascading effect
+  // Cascade: each new completed step appears after a short delay
   useEffect(() => {
-    if (steps.length > visibleSteps) {
-      const t = setTimeout(() => setVisibleSteps((n) => n + 1), 120)
+    if (steps.length > visibleCount) {
+      const t = setTimeout(() => setVisibleCount((n) => n + 1), 110)
       return () => clearTimeout(t)
     }
-  }, [steps.length, visibleSteps])
+  }, [steps.length, visibleCount])
 
-  const shownCount = Math.max(visibleSteps, steps.length)
+  const done = completedSet.size
+  const progressPct = isComplete ? 100 : Math.round((done / TOTAL) * 100)
 
   return (
     <div
       className="rounded-2xl overflow-hidden"
       style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}
     >
-      {/* Header bar */}
+      {/* Header with progress */}
       <div
-        className="flex items-center gap-2.5 px-5 py-3.5 border-b"
+        className="px-5 py-3.5 border-b"
         style={{ borderColor: 'var(--border)', background: 'var(--bg-overlay)' }}
       >
-        <span className="text-sm font-black tracking-wide" style={{ color: 'var(--accent-gold)' }}>
-          {isComplete ? 'Pipeline complete' : 'AI pipeline running'}
-        </span>
+        <div className="flex items-center justify-between mb-2.5">
+          <span className="text-sm font-black tracking-wide" style={{ color: 'var(--accent-gold)' }}>
+            {isComplete ? 'Pipeline complete' : 'AI pipeline running'}
+          </span>
+          <span className="text-xs font-bold tabular-nums" style={{ color: isComplete ? 'var(--accent-gold)' : 'var(--text-muted)' }}>
+            {done} / {TOTAL}
+          </span>
+        </div>
+
+        {/* Progress bar */}
+        <div className="h-1 rounded-full overflow-hidden" style={{ background: 'var(--border)' }}>
+          <div
+            className="h-full rounded-full"
+            style={{
+              width: `${progressPct}%`,
+              background: isComplete
+                ? 'var(--accent-gold)'
+                : 'linear-gradient(90deg, var(--accent-gold) 0%, #fde68a 100%)',
+              transition: 'width 0.5s cubic-bezier(0.4,0,0.2,1)',
+              boxShadow: progressPct > 0 ? '0 0 8px rgba(245,197,24,0.4)' : 'none',
+            }}
+          />
+        </div>
+
+        {/* Pulsing dots while running */}
         {!isComplete && (
-          <span className="flex gap-1 ml-auto">
+          <div className="flex gap-1 mt-2">
             {[0, 1, 2].map((i) => (
               <span
                 key={i}
-                className="w-1.5 h-1.5 rounded-full"
+                className="w-1.5 h-1.5 rounded-full inline-block"
                 style={{
                   background: 'var(--accent-gold)',
-                  animation: `pulse 1.2s ease-in-out ${i * 0.2}s infinite`,
-                  opacity: 0.6,
+                  animation: `pulseGlow 1.2s ease-in-out ${i * 0.2}s infinite`,
                 }}
               />
             ))}
-          </span>
+          </div>
         )}
-        {isComplete && <span className="ml-auto text-xs" style={{ color: 'var(--text-muted)' }}>✓ done</span>}
       </div>
 
       {/* Steps list */}
@@ -72,37 +95,46 @@ export function TraceDisplay({ steps, runningStep, isComplete }: TraceDisplayPro
           const isCompleted = completedSet.has(key)
           const isRunning = key === runningStep
           const detail = steps.find((s) => s.step === key)?.detail
-          const shouldShow = isCompleted || isRunning || idx <= shownCount
+          // Show step only after its cascade delay
+          const revealed = isCompleted || isRunning || idx < visibleCount + (isRunning ? 1 : 0) || idx <= done
 
           return (
             <div
               key={key}
-              className="flex items-start gap-4 px-5 py-3 transition-all duration-300"
+              className="flex items-start gap-4 px-5 py-3"
               style={{
-                opacity: !shouldShow ? 0.18 : 1,
+                opacity: revealed ? 1 : 0.15,
+                transition: 'opacity 0.25s ease',
                 background: isRunning ? 'rgba(245,197,24,0.04)' : 'transparent',
               }}
             >
-              {/* Status dot */}
-              <div className="mt-0.5 flex-shrink-0">
+              {/* Icon / status */}
+              <div className="mt-0.5 w-5 flex-shrink-0 text-center">
                 {isCompleted ? (
-                  <span className="text-base">{icon}</span>
+                  <span className="text-base leading-none">{icon}</span>
                 ) : isRunning ? (
-                  <span className="text-base" style={{ animation: 'pulse 1s ease-in-out infinite' }}>⚙️</span>
+                  <span
+                    className="text-base leading-none inline-block"
+                    style={{ animation: 'pulseGlow 0.9s ease-in-out infinite' }}
+                  >⚙️</span>
                 ) : (
                   <span
-                    className="block w-4 h-4 rounded-full border-2 mt-0.5"
-                    style={{ borderColor: 'var(--border)' }}
+                    className="block w-3.5 h-3.5 rounded-full border-2 mx-auto mt-0.5"
+                    style={{ borderColor: 'var(--border-hover)' }}
                   />
                 )}
               </div>
 
-              {/* Content */}
+              {/* Label + detail */}
               <div className="flex-1 min-w-0">
                 <p
                   className="text-sm font-semibold leading-snug"
                   style={{
-                    color: isCompleted ? 'var(--text-primary)' : isRunning ? 'var(--accent-gold)' : 'var(--text-muted)',
+                    color: isCompleted
+                      ? 'var(--text-primary)'
+                      : isRunning
+                      ? 'var(--accent-gold)'
+                      : 'var(--text-muted)',
                   }}
                 >
                   {label}
@@ -113,15 +145,15 @@ export function TraceDisplay({ steps, runningStep, isComplete }: TraceDisplayPro
                   </p>
                 )}
                 {isRunning && (
-                  <p className="text-xs mt-0.5" style={{ color: 'var(--accent-gold)', opacity: 0.7 }}>
+                  <p className="text-xs mt-0.5" style={{ color: 'var(--accent-gold)', opacity: 0.65 }}>
                     processing…
                   </p>
                 )}
               </div>
 
-              {/* Right indicator */}
+              {/* Checkmark */}
               {isCompleted && (
-                <span className="text-xs font-bold flex-shrink-0 mt-0.5" style={{ color: 'var(--accent-gold)' }}>✓</span>
+                <span className="text-xs font-bold mt-0.5 flex-shrink-0" style={{ color: 'var(--accent-gold)' }}>✓</span>
               )}
             </div>
           )

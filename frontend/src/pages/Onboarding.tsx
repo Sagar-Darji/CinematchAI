@@ -189,8 +189,26 @@ export default function Onboarding() {
               Rated {Object.keys(ratings).length} of 20 · Need at least 5
             </p>
             {loadingMovies ? (
-              <div className="flex items-center justify-center py-20">
-                <Loader2 size={32} className="animate-spin" style={{ color: 'var(--accent-gold)' }} />
+              /* Skeleton cards while movies load */
+              <div className="space-y-3 max-h-[55vh] overflow-y-auto pr-1">
+                {Array.from({ length: 10 }).map((_, i) => (
+                  <div
+                    key={i}
+                    className="flex items-center gap-4 rounded-xl p-3"
+                    style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}
+                  >
+                    <div className="skeleton w-10 h-14 rounded flex-shrink-0" />
+                    <div className="flex-1 space-y-2 min-w-0">
+                      <div className="skeleton-text" style={{ width: `${55 + (i % 5) * 8}%` }} />
+                      <div className="skeleton-text w-24" style={{ opacity: 0.5 }} />
+                    </div>
+                    <div className="flex gap-1 flex-shrink-0">
+                      {[0,1,2,3,4].map((s) => (
+                        <div key={s} className="skeleton w-4 h-4 rounded" />
+                      ))}
+                    </div>
+                  </div>
+                ))}
               </div>
             ) : (
               <div className="space-y-3 max-h-[55vh] overflow-y-auto pr-1">
