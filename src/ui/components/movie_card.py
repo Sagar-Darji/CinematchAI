@@ -1,6 +1,7 @@
 """Movie Card Component - Reusable movie display card."""
 
 import streamlit as st
+import streamlit.components.v1 as components
 from typing import Dict, Any, Optional
 
 
@@ -12,7 +13,9 @@ def render_movie_card(
     is_exploration: bool = False,
 ):
     """
-    Render a movie card with poster, metadata, and explanation.
+    Render a movie card with poster, metadata, expandable details, and VidSrc embed.
+
+    CSS is NOT injected here — call inject_cinema_theme() once at page level.
 
     Args:
         movie: Movie dictionary with metadata.
@@ -21,134 +24,101 @@ def render_movie_card(
         score: Optional recommendation score.
         is_exploration: Whether this is an exploratory recommendation.
     """
-    with st.container():
-        # Add border styling
-        st.markdown(
-            """
-            <style>
-            .movie-card {
-                border: 1px solid #e0e0e0;
-                border-radius: 10px;
-                padding: 15px;
-                margin-bottom: 15px;
-                background-color: #fafafa;
-            }
-            .movie-title {
-                font-size: 20px;
-                font-weight: bold;
-                margin-bottom: 5px;
-            }
-            .movie-metadata {
-                font-size: 14px;
-                color: #666;
-                margin-bottom: 10px;
-            }
-            .exploration-badge {
-                background-color: #ff6b6b;
-                color: white;
-                padding: 3px 8px;
-                border-radius: 12px;
-                font-size: 12px;
-                font-weight: bold;
-            }
-            </style>
-            """,
-            unsafe_allow_html=True,
-        )
+    tmdb_id = movie.get("tmdb_id") or movie.get("id") or 0
 
+    with st.container():
         cols = st.columns([1, 3])
 
-        # Left column: Poster
+        # Left: Poster
         with cols[0]:
             poster_path = movie.get("poster_path")
-            if poster_path and poster_path != "N/A":
-                # Use TMDB image CDN
-                poster_url = f"https://image.tmdb.org/t/p/w200{poster_path}"
-                st.image(poster_url, use_container_width=True)
+            if poster_path and str(poster_path) not in ("N/A", "None", ""):
+                st.image(f"https://image.tmdb.org/t/p/w300{poster_path}", use_container_width=True)
             else:
-                # Placeholder
+                title_short = (movie.get("title") or "?")[:25]
                 st.markdown(
                     f"""
                     <div style="
-                        width: 100%;
-                        aspect-ratio: 2/3;
-                        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                        display: flex;
-                        align-items: center;
-                        justify-content: center;
-                        border-radius: 8px;
-                        color: white;
-                        font-size: 14px;
-                        text-align: center;
-                        padding: 10px;
-                    ">
-                        {movie.get('title', 'Unknown')[:30]}
+                        width:100%;aspect-ratio:2/3;
+                        background:linear-gradient(135deg,#1a1a2e 0%,#16213e 50%,#0f3460 100%);
+                        display:flex;align-items:center;justify-content:center;
+                        border-radius:8px;color:#f5c518;font-size:13px;
+                        text-align:center;padding:8px;border:1px solid #1e1e2e;
+                    ">{title_short}</div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+        # Right: Info
+        with cols[1]:
+            title = movie.get("title") or "Unknown Title"
+            year = movie.get("year") or ""
+
+            rank_prefix = f"#{rank} " if rank else ""
+            st.markdown(f"### {rank_prefix}{title}")
+
+            # Metadata pills
+            parts = []
+            if year:
+                parts.append(f"📅 {year}")
+            genres = movie.get("genres") or []
+            if genres:
+                parts.append(f"🎭 {', '.join(genres[:3])}")
+            vote_avg = movie.get("vote_average")
+            if vote_avg:
+                parts.append(f"⭐ {float(vote_avg):.1f}/10")
+            director = movie.get("director")
+            if director:
+                parts.append(f"🎬 {director}")
+            if parts:
+                st.caption(" · ".join(parts))
+
+            # Exploration badge
+            if is_exploration:
+                st.markdown(
+                    '<span style="background:#e50914;color:white;padding:2px 8px;'
+                    'border-radius:10px;font-size:11px;font-weight:bold;">🔍 Discovery Pick</span>',
+                    unsafe_allow_html=True,
+                )
+
+            # Animated match score bar (pure HTML — no st.progress to avoid version issues)
+            if score is not None:
+                pct = int(score * 100)
+                bar_color = "#f5c518" if pct >= 70 else ("#e50914" if pct >= 40 else "#8a8a9a")
+                st.markdown(
+                    f"""
+                    <div style="margin:6px 0 4px">
+                        <div style="display:flex;align-items:center;gap:8px">
+                            <span style="color:#8a8a9a;font-size:11px;min-width:70px">Match score</span>
+                            <div style="flex:1;background:#1e1e2e;border-radius:4px;height:6px">
+                                <div style="width:{pct}%;background:{bar_color};height:6px;
+                                     border-radius:4px;transition:width 0.8s ease"></div>
+                            </div>
+                            <span style="color:{bar_color};font-size:13px;font-weight:bold;min-width:36px">{pct}%</span>
+                        </div>
                     </div>
                     """,
                     unsafe_allow_html=True,
                 )
 
-        # Right column: Metadata and explanation
-        with cols[1]:
-            # Title and rank
-            title = movie.get("title", "Unknown Title")
-            year = movie.get("year", "")
-
-            if rank:
-                st.markdown(f"### #{rank} {title}")
-            else:
-                st.markdown(f"### {title}")
-
-            # Metadata row
-            metadata_parts = []
-            if year:
-                metadata_parts.append(f"📅 {year}")
-
-            genres = movie.get("genres", [])
-            if genres:
-                metadata_parts.append(f"🎭 {', '.join(genres[:3])}")
-
-            vote_average = movie.get("vote_average")
-            if vote_average:
-                metadata_parts.append(f"⭐ {vote_average:.1f}/10")
-
-            director = movie.get("director")
-            if director:
-                metadata_parts.append(f"🎬 {director}")
-
-            st.markdown(" • ".join(metadata_parts))
-
-            # Exploration badge
-            if is_exploration:
-                st.markdown(
-                    '<span class="exploration-badge">🔍 Exploration Pick</span>',
-                    unsafe_allow_html=True,
-                )
-
-            # Score (if provided)
-            if score is not None:
-                st.progress(score, text=f"Match Score: {score*100:.0f}%")
-
-            # Overview
-            overview = movie.get("overview", "")
+            # Plot summary
+            overview = movie.get("overview") or ""
             if overview:
                 with st.expander("📖 Plot Summary"):
                     st.write(overview)
 
             # Explanation
             if explanation:
-                with st.expander("💡 Why We Recommend This", expanded=False):
+                with st.expander("💡 Why This Was Recommended"):
                     st.info(explanation)
 
-            # Watch Now (VidSrc embed)
-            tmdb_id = movie.get("tmdb_id")
+            # Watch Now embed (VidSrc — sandboxed against ad redirects)
             if tmdb_id:
-                with st.expander("▶️ Watch Now", expanded=False):
+                with st.expander("▶️ Watch Now"):
                     st.caption(
-                        "Streamed via VidSrc. Ad redirects are blocked by iframe sandbox. "
-                        "Content availability varies by region."
+                        "Streamed via VidSrc · Ad redirects blocked by iframe sandbox · "
+                        "Availability varies by region."
                     )
-                    import streamlit.components.v1 as components
                     components.html(
                         f"""
                         <iframe
@@ -160,36 +130,80 @@ def render_movie_card(
                             sandbox="allow-scripts allow-same-origin allow-forms"
                             allow="autoplay; fullscreen"
                             loading="lazy"
+                            style="border-radius:8px;"
                         ></iframe>
                         """,
                         height=460,
                     )
 
 
-def render_movie_grid(movies: list, explanations: Dict[str, str] = None):
+def render_movie_grid(
+    movies: list,
+    explanations: Dict[str, str] = None,
+    scores: Dict[str, float] = None,
+    cols_per_row: int = 2,
+):
     """
-    Render movies in a grid layout.
+    Render movies in a grid using render_movie_card.
 
     Args:
         movies: List of movie dictionaries.
-        explanations: Optional dict of movie_id -> explanation.
+        explanations: Optional dict of tmdb_id → explanation.
+        scores: Optional dict of tmdb_id → score.
+        cols_per_row: Number of columns per row.
     """
     explanations = explanations or {}
+    scores = scores or {}
 
-    # Display in rows of 2
-    for i in range(0, len(movies), 2):
-        cols = st.columns(2)
-
-        for j, col in enumerate(cols):
+    for i in range(0, len(movies), cols_per_row):
+        row_cols = st.columns(cols_per_row)
+        for j, col in enumerate(row_cols):
             idx = i + j
             if idx < len(movies):
                 movie = movies[idx]
-                movie_id = str(movie.get("tmdb_id", ""))
-                explanation = explanations.get(movie_id)
-
+                movie_id = str(movie.get("tmdb_id") or movie.get("id") or idx)
                 with col:
                     render_movie_card(
                         movie=movie,
-                        explanation=explanation,
+                        explanation=explanations.get(movie_id),
+                        score=scores.get(movie_id),
                         rank=idx + 1,
                     )
+
+
+def render_movie_poster_grid(movies: list, cols_per_row: int = 6):
+    """
+    Compact poster-only grid for home/trending sections.
+
+    Clicking the title expands a mini-card inline.
+
+    Args:
+        movies: List of movie dicts.
+        cols_per_row: Columns per row.
+    """
+    for i in range(0, len(movies), cols_per_row):
+        row_cols = st.columns(cols_per_row)
+        for j, col in enumerate(row_cols):
+            idx = i + j
+            if idx < len(movies):
+                movie = movies[idx]
+                with col:
+                    poster_path = movie.get("poster_path")
+                    if poster_path:
+                        st.image(
+                            f"https://image.tmdb.org/t/p/w300{poster_path}",
+                            use_container_width=True,
+                        )
+                    else:
+                        st.image(
+                            "https://via.placeholder.com/300x450?text=No+Poster",
+                            use_container_width=True,
+                        )
+                    title = (movie.get("title") or "")[:20]
+                    st.caption(f"**{title}**")
+                    if movie.get("vote_average"):
+                        st.caption(f"⭐ {float(movie['vote_average']):.1f}")
+
+                    # Inline expander with full card on click
+                    with st.expander("Details"):
+                        render_movie_card(movie=movie)

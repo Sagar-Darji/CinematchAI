@@ -255,14 +255,80 @@ else:
         status_placeholder = st.empty()
 
         def _render_trace(steps_so_far, running_step=None):
-            lines = ["**🎬 CineMatch is thinking...**\n"]
-            for s in steps_so_far:
-                icon = AGENT_ICONS.get(s["step"], "✅")
-                lines.append(f"{icon} **{s['step']}** — {s['detail']}")
-            if running_step:
-                icon = AGENT_ICONS.get(running_step, "⚙️")
-                lines.append(f"{icon} **{running_step}** — *(processing...)*")
-            trace_placeholder.markdown("\n\n".join(lines))
+            """Render ChatGPT-style animated step trace."""
+            ALL_AGENTS = [
+                "Profile Analyzer", "Context-Aware", "Retrieval",
+                "Content Intelligence", "Serendipity", "Explanation", "Aggregation",
+            ]
+            completed_set = {s["step"] for s in steps_so_far}
+
+            rows = []
+            for agent in ALL_AGENTS:
+                icon = AGENT_ICONS.get(agent, "⚙️")
+                if agent in completed_set:
+                    detail = next((s["detail"] for s in steps_so_far if s["step"] == agent), "Done")
+                    rows.append(
+                        f'<div style="display:flex;gap:10px;align-items:baseline;margin:4px 0;'
+                        f'color:#c8c8d8;">'
+                        f'<span style="font-size:16px">{icon}</span>'
+                        f'<span style="color:#f5c518;font-weight:600">{agent}</span>'
+                        f'<span style="color:#8a8a9a;font-size:12px">— {detail}</span>'
+                        f'</div>'
+                    )
+                elif agent == running_step:
+                    rows.append(
+                        f'<div style="display:flex;gap:10px;align-items:baseline;margin:4px 0;'
+                        f'animation:pulse 1.2s infinite;">'
+                        f'<span style="font-size:16px">⚙️</span>'
+                        f'<span style="color:#ffffff;font-weight:600">{agent}</span>'
+                        f'<span style="color:#8a8a9a;font-size:12px">— processing…</span>'
+                        f'</div>'
+                    )
+                else:
+                    rows.append(
+                        f'<div style="display:flex;gap:10px;align-items:baseline;margin:4px 0;'
+                        f'color:#3a3a4a;">'
+                        f'<span style="font-size:16px">○</span>'
+                        f'<span>{agent}</span>'
+                        f'</div>'
+                    )
+
+            html = (
+                '<style>@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}</style>'
+                '<div style="background:#12121a;border:1px solid #1e1e2e;border-radius:10px;'
+                'padding:16px 20px;margin:8px 0;font-family:monospace;">'
+                '<div style="color:#f5c518;font-weight:700;font-size:14px;margin-bottom:12px;">'
+                '🎬 CineMatch is thinking…</div>'
+                + "".join(rows)
+                + '</div>'
+            )
+            trace_placeholder.markdown(html, unsafe_allow_html=True)
+
+        def _render_movie_reveal(recommendations):
+            """Cascade-reveal movie titles after pipeline completes."""
+            titles_html = "".join(
+                f'<div style="animation:slideIn 0.4s ease {i*0.12:.2f}s both;'
+                f'background:#12121a;border:1px solid #1e1e2e;border-radius:8px;'
+                f'padding:10px 16px;margin:4px 0;display:flex;align-items:center;gap:12px;">'
+                f'<span style="color:#f5c518;font-weight:700;min-width:28px">#{i+1}</span>'
+                f'<span style="color:#fff;font-weight:600">{rec.get("movie", {}).get("title", "?")}</span>'
+                f'<span style="color:#8a8a9a;font-size:12px">'
+                f'({rec.get("movie", {}).get("year", "")}) · '
+                f'{", ".join((rec.get("movie", {}).get("genres") or [])[:2])}</span>'
+                f'<span style="color:#f5c518;font-size:12px;margin-left:auto">'
+                f'{int(rec.get("score", 0) * 100)}% match</span>'
+                f'</div>'
+                for i, rec in enumerate(recommendations[:10])
+            )
+            trace_placeholder.markdown(
+                '<style>@keyframes slideIn{from{opacity:0;transform:translateX(-20px)}'
+                'to{opacity:1;transform:translateX(0)}}</style>'
+                '<div style="padding:4px 0">'
+                '<div style="color:#f5c518;font-weight:700;font-size:14px;margin-bottom:10px;">'
+                '✅ Pipeline complete — your picks:</div>'
+                + titles_html + '</div>',
+                unsafe_allow_html=True,
+            )
 
         try:
             payload = {
@@ -319,7 +385,10 @@ else:
                     _render_trace(steps)
                     num_recs = len(st.session_state.recommendations)
                     status_placeholder.success(f"✅ Pipeline complete — {num_recs} recommendations ready!")
-                    time.sleep(1.5)
+                    time.sleep(1.2)
+                    # Cascade-reveal movie titles before showing full cards
+                    _render_movie_reveal(st.session_state.recommendations)
+                    time.sleep(2.2)  # let cascade animation play
                     trace_placeholder.empty()
                     status_placeholder.empty()
                     break

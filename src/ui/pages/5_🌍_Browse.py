@@ -1,14 +1,22 @@
 """Browse Page - Explore movies by language and region."""
 
+import sys
+from pathlib import Path
+sys.path.append(str(Path(__file__).parent.parent.parent.parent))
+
 import streamlit as st
 import requests
 from typing import List, Dict, Optional
+
+from src.ui.components.movie_card import render_movie_card
+from src.ui.styles import inject_cinema_theme
 
 st.set_page_config(
     page_title="Browse - CineMatch AI",
     page_icon="🌍",
     layout="wide",
 )
+inject_cinema_theme()
 
 # Constants
 API_BASE_URL = "http://localhost:8000/api/v1"
@@ -126,28 +134,36 @@ def search_movies(query: str, language: Optional[str] = None, year: Optional[int
     return []
 
 
-def display_movie_card(movie: Dict, show_details: bool = True):
-    """Display a movie card."""
-    poster_url = (
-        f"https://image.tmdb.org/t/p/w300{movie['poster_path']}"
-        if movie.get("poster_path")
-        else "https://via.placeholder.com/300x450?text=No+Poster"
-    )
-
-    st.image(poster_url, use_container_width=True)
-
-    title = movie["title"]
-    year = movie.get("year", "N/A")
-    st.markdown(f"**{title}**")
-    st.caption(f"📅 {year}")
-
-    if movie.get("vote_average"):
-        st.caption(f"⭐ {movie['vote_average']:.1f}/10")
-
-    if show_details:
-        genres = ", ".join(movie.get("genres", [])[:2])
-        if genres:
-            st.caption(f"🎭 {genres}")
+def _browse_grid(movies: List[Dict], cols: int = 3, tab_key: str = ""):
+    """Render a grid of movie cards with poster + expandable full details."""
+    for i in range(0, len(movies), cols):
+        row = st.columns(cols)
+        for j, col in enumerate(row):
+            idx = i + j
+            if idx < len(movies):
+                movie = movies[idx]
+                tmdb_id = movie.get("tmdb_id") or movie.get("id") or idx
+                with col:
+                    poster_path = movie.get("poster_path")
+                    if poster_path:
+                        st.image(
+                            f"https://image.tmdb.org/t/p/w300{poster_path}",
+                            use_container_width=True,
+                        )
+                    else:
+                        st.image(
+                            "https://via.placeholder.com/300x450?text=No+Poster",
+                            use_container_width=True,
+                        )
+                    st.caption(f"**{(movie.get('title') or '')[:22]}**")
+                    if movie.get("vote_average"):
+                        st.caption(f"⭐ {float(movie['vote_average']):.1f}/10")
+                    year = movie.get("year")
+                    if year:
+                        st.caption(f"📅 {year}")
+                    # Expandable full card with VidSrc + explanation
+                    with st.expander(f"🎬 Details & Watch"):
+                        render_movie_card(movie=movie)
 
 
 # Header
@@ -181,10 +197,7 @@ with tab1:
     trending_movies = fetch_trending(time_window=time_window, language=selected_lang, limit=12)
 
     if trending_movies:
-        cols = st.columns(4)
-        for idx, movie in enumerate(trending_movies):
-            with cols[idx % 4]:
-                display_movie_card(movie)
+        _browse_grid(trending_movies, cols=4, tab_key="trending")
     else:
         st.info("Start the API server to browse trending movies!")
         st.code("python -m uvicorn src.api.main:app --reload --port 8000", language="bash")
@@ -205,10 +218,7 @@ with tab2:
         )
 
         if movies:
-            cols = st.columns(4)
-            for idx, movie in enumerate(movies[:8]):
-                with cols[idx % 4]:
-                    display_movie_card(movie, show_details=True)
+            _browse_grid(movies[:8], cols=4, tab_key=config["language"])
         else:
             st.info(f"No {section_name} movies available. Start the API server!")
 
@@ -250,10 +260,7 @@ with tab3:
     )
 
     if recent_movies:
-        cols = st.columns(4)
-        for idx, movie in enumerate(recent_movies):
-            with cols[idx % 4]:
-                display_movie_card(movie)
+        _browse_grid(recent_movies, cols=4, tab_key="recent")
     else:
         st.info("No recent releases found. Try different filters!")
 
@@ -296,10 +303,7 @@ with tab4:
 
         if search_results:
             st.success(f"Found {len(search_results)} results")
-            cols = st.columns(4)
-            for idx, movie in enumerate(search_results):
-                with cols[idx % 4]:
-                    display_movie_card(movie)
+            _browse_grid(search_results, cols=3, tab_key="search")
         else:
             st.warning(f"No results found for '{search_query}'")
     else:
