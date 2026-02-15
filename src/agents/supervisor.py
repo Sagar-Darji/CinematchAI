@@ -169,7 +169,8 @@ class SupervisorAgent(BaseAgent):
 
         final_recommendations = []
 
-        for idx, movie in enumerate(diverse_candidates[:10], start=1):
+        num_recs = state.get("num_recommendations", 10)
+        for idx, movie in enumerate(diverse_candidates[:num_recs], start=1):
             movie_id = str(movie.metadata.tmdb_id)
             explanation_text = explanations.get(movie_id, "Recommended based on your preferences.")
 

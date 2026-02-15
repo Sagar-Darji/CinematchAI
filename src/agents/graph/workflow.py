@@ -306,6 +306,18 @@ def build_recommendation_workflow() -> StateGraph:
     return compiled_workflow
 
 
+# Cached compiled workflow (singleton)
+_compiled_workflow = None
+
+
+def _get_cached_workflow():
+    """Get or build the compiled workflow (singleton)."""
+    global _compiled_workflow
+    if _compiled_workflow is None:
+        _compiled_workflow = build_recommendation_workflow()
+    return _compiled_workflow
+
+
 # Main execution function
 
 
@@ -314,6 +326,7 @@ def run_recommendation_workflow(
     user_ids: List[str] = None,
     context: Dict[str, Any] = None,
     is_cold_start: bool = False,
+    k: int = 10,
     progress_callback: Optional[Callable[[str, str], None]] = None,
 ) -> Dict[str, Any]:
     """Run the complete recommendation workflow.
@@ -341,13 +354,14 @@ def run_recommendation_workflow(
         user_ids=user_ids or ([user_id] if user_id else []),
         context=context or {},
         is_cold_start=is_cold_start,
+        num_recommendations=k,
         processing_steps=[],
         _trace_id=trace_id,
         _progress_callback=progress_callback,
     )
 
-    # Build and run workflow
-    workflow = build_recommendation_workflow()
+    # Build and run workflow (cached singleton)
+    workflow = _get_cached_workflow()
 
     try:
         # Execute workflow (increase recursion limit for multi-agent pipeline)

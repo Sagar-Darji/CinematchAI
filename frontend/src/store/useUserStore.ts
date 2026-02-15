@@ -8,6 +8,7 @@ interface UserState {
   setUserId: (id: string) => void
   setOnboarded: (v: boolean) => void
   setRatingCount: (n: number) => void
+  logout: () => void
 }
 
 export const useUserStore = create<UserState>()(
@@ -19,6 +20,7 @@ export const useUserStore = create<UserState>()(
       setUserId: (id) => set({ userId: id }),
       setOnboarded: (v) => set({ isOnboarded: v }),
       setRatingCount: (n) => set({ ratingCount: n }),
+      logout: () => set({ userId: '', isOnboarded: false, ratingCount: 0 }),
     }),
     { name: 'cinematch-user' },
   ),

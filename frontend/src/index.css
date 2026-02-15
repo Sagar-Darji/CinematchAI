@@ -146,6 +146,24 @@ html, body, #root {
   letter-spacing: 0.04em;
 }
 
+/* ── FilmStack info panel ─────────────────────────────────────────────────── */
+@keyframes filmInfoIn {
+  from { opacity: 0; transform: translateY(18px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.animate-film-info { animation: filmInfoIn 0.45s cubic-bezier(0.4,0,0.2,1) both; }
+
+/* ── TraceDisplay step reveal ─────────────────────────────────────────────── */
+@keyframes stepReveal {
+  from { opacity: 0; transform: translateX(-12px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+.animate-step-in { animation: stepReveal 0.3s ease both; }
+
+/* ── Typewriter cursor ─────────────────────────────────────────────────────── */
+@keyframes blink { 0%,100% { opacity: 1; } 50% { opacity: 0; } }
+.cursor-blink { animation: blink 0.9s step-end infinite; }
+
 /* ── Score bar ────────────────────────────────────────────────────────────── */
 .score-bar-track {
   height: 5px;

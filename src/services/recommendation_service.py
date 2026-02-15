@@ -86,6 +86,7 @@ class RecommendationService:
                 user_id=user_id,
                 context=context,
                 is_cold_start=False,
+                k=k,
             )
 
             # Convert to response format
@@ -261,6 +262,7 @@ class RecommendationService:
                     user_id=user_id,
                     context=context,
                     is_cold_start=False,
+                    k=k,
                     progress_callback=_progress,
                 )
                 recommendations = self._convert_recommendations(

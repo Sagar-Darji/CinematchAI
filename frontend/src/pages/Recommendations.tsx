@@ -3,7 +3,7 @@ import { SlidersHorizontal, RefreshCw, ChevronDown, ChevronUp } from 'lucide-rea
 import { submitRecommendationJob, pollJobStatus } from '@/lib/api'
 import { useUserStore } from '@/store/useUserStore'
 import { useRecommendationStore } from '@/store/useRecommendationStore'
-import { MovieCard } from '@/components/ui/MovieCard'
+import { FilmStack } from '@/components/recommendations/FilmStack'
 import { TraceDisplay } from '@/components/recommendations/TraceDisplay'
 import { PageLoader } from '@/components/ui/PageLoader'
 import { cn } from '@/lib/utils'
@@ -19,6 +19,9 @@ const LANGUAGE_MAP: Record<string, string> = {
   Korean: 'ko', Japanese: 'ja', French: 'fr', Spanish: 'es', German: 'de',
   Italian: 'it', Chinese: 'zh', Arabic: 'ar', Portuguese: 'pt', Russian: 'ru',
 }
+
+const MOODS = ['happy', 'sad', 'stressed', 'bored', 'thoughtful', 'energetic', 'nostalgic', 'adventurous']
+const COMPANIONS = ['alone', 'partner', 'friends', 'family']
 
 export default function Recommendations() {
   const userId = useUserStore((s) => s.userId)
@@ -74,7 +77,6 @@ export default function Recommendations() {
           setRecommendations(data.result!.recommendations)
           setContextFactors(data.result!.context_factors ?? {})
           setIsPolling(false)
-          // Auto-collapse trace so cards get focus
           setTimeout(() => setTraceCollapsed(true), 1800)
           return
         }
@@ -98,206 +100,206 @@ export default function Recommendations() {
   }, [userId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const currentRunningStep = ALL_AGENTS[steps.length] ?? null
-
-  // Pipeline progress for the top bar: 0-85 while running, 100 when done
   const pipelinePct = isDone
     ? 100
     : isRunning
     ? Math.max(5, Math.round((steps.length / 7) * 85))
     : 0
 
+  const activeFilters = [mood, companion, language, naturalCtx, yearMin, yearMax].filter(Boolean).length
+
   return (
     <div className="flex min-h-screen relative" style={{ background: 'var(--bg-primary)' }}>
       <PageLoader visible={isRunning} value={pipelinePct} />
 
-      {/* Main content */}
-      <div className="flex-1 p-5 md:p-8 max-w-3xl">
-        {/* Header */}
-        <div className="flex items-center justify-between mb-8">
+      <div className="flex-1 min-w-0">
+        {/* Sticky header */}
+        <div
+          className="sticky top-0 z-20 flex items-center justify-between px-5 md:px-8 py-4 border-b"
+          style={{ background: 'rgba(10,10,15,0.92)', backdropFilter: 'blur(12px)', borderColor: 'var(--border)' }}
+        >
           <div>
-            <p className="text-xs font-bold tracking-[0.25em] uppercase mb-1" style={{ color: 'var(--accent-gold)' }}>
-              AI-Curated
-            </p>
-            <h1 className="text-3xl font-black tracking-tight text-white">For You</h1>
-            {userId && (
-              <p className="text-sm mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                Personalized for {userId}
-              </p>
-            )}
+            <p className="text-[10px] font-bold tracking-[0.3em] uppercase" style={{ color: 'var(--accent-gold)' }}>AI-Curated</p>
+            <h1 className="text-xl font-black tracking-tight text-white leading-none">
+              For You
+              {userId && <span className="text-sm font-normal ml-2" style={{ color: 'var(--text-muted)' }}>· {userId}</span>}
+            </h1>
           </div>
-          <div className="flex gap-2">
+
+          <div className="flex items-center gap-2">
             <button
               onClick={() => setSidebarOpen((v) => !v)}
-              className="p-2 rounded-lg"
+              className="relative p-2.5 rounded-xl"
               style={{
                 background: sidebarOpen ? 'var(--bg-overlay)' : 'var(--bg-card)',
-                border: '1px solid var(--border)',
-                color: 'var(--text-muted)',
+                border: `1px solid ${sidebarOpen ? 'var(--accent-gold)' : 'var(--border)'}`,
+                color: sidebarOpen ? 'var(--accent-gold)' : 'var(--text-muted)',
                 cursor: 'pointer',
               }}
-              title="Filters"
             >
-              <SlidersHorizontal size={17} />
+              <SlidersHorizontal size={16} />
+              {activeFilters > 0 && (
+                <span className="absolute -top-1.5 -right-1.5 w-4 h-4 flex items-center justify-center rounded-full text-[9px] font-black"
+                  style={{ background: 'var(--accent-gold)', color: '#0a0a0f' }}>
+                  {activeFilters}
+                </span>
+              )}
             </button>
             <button
               onClick={startJob}
               disabled={isRunning || !userId}
-              className={cn('flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold disabled:opacity-40')}
+              className={cn('flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold disabled:opacity-40')}
               style={{ background: 'var(--accent-gold)', color: '#0a0a0f', border: 'none', cursor: isRunning ? 'not-allowed' : 'pointer' }}
             >
-              <RefreshCw size={14} className={isRunning ? 'animate-spin' : ''} />
+              <RefreshCw size={13} className={isRunning ? 'animate-spin' : ''} />
               {isRunning ? 'Running…' : 'Refresh'}
             </button>
           </div>
         </div>
 
-        {/* Trace panel — shows while running, collapsible when done */}
-        {(isRunning || (isDone && steps.length > 0)) && (
-          <div className="mb-6">
-            {isDone && !isRunning && (
-              <button
-                onClick={() => setTraceCollapsed((v) => !v)}
-                className="flex items-center gap-2 text-xs font-semibold mb-2"
-                style={{ color: 'var(--text-muted)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
-              >
-                {traceCollapsed ? <ChevronDown size={12} /> : <ChevronUp size={12} />}
-                {traceCollapsed ? 'Show pipeline trace' : 'Hide pipeline trace'}
-              </button>
-            )}
-            {!traceCollapsed && (
-              <TraceDisplay
-                steps={steps}
-                runningStep={isRunning ? currentRunningStep : null}
-                isComplete={isDone}
-              />
-            )}
-          </div>
-        )}
+        <div className="px-4 md:px-8 py-6 pb-16">
+          {/* Trace */}
+          {(isRunning || (isDone && steps.length > 0)) && (
+            <div className="mb-10 max-w-2xl mx-auto">
+              {isDone && !isRunning && (
+                <button
+                  onClick={() => setTraceCollapsed((v) => !v)}
+                  className="flex items-center gap-1.5 text-xs font-semibold mb-2 mx-auto"
+                  style={{ color: 'var(--text-muted)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+                >
+                  {traceCollapsed ? <ChevronDown size={12} /> : <ChevronUp size={12} />}
+                  {traceCollapsed ? 'Show pipeline trace' : 'Hide pipeline trace'}
+                </button>
+              )}
+              {!traceCollapsed && (
+                <TraceDisplay steps={steps} runningStep={isRunning ? currentRunningStep : null} isComplete={isDone} />
+              )}
+            </div>
+          )}
 
-        {/* Error */}
-        {jobStatus === 'failed' && (
-          <div
-            className="rounded-xl p-4 mb-6 text-sm"
-            style={{ background: 'rgba(229,9,20,0.08)', border: '1px solid rgba(229,9,20,0.25)', color: '#ff6b6b' }}
-          >
-            Pipeline failed. Check that the API server is running on port 8000.
-          </div>
-        )}
+          {/* Error */}
+          {jobStatus === 'failed' && (
+            <div className="rounded-xl p-4 mb-6 text-sm max-w-lg mx-auto"
+              style={{ background: 'rgba(229,9,20,0.08)', border: '1px solid rgba(229,9,20,0.25)', color: '#ff6b6b' }}>
+              Pipeline failed. Check the API server is running on port 8000.
+            </div>
+          )}
 
-        {/* Recommendation cards — staggered fade in */}
-        {recommendations.length > 0 && (
-          <div className="space-y-2.5">
-            <p className="text-xs font-bold tracking-[0.2em] uppercase mb-4" style={{ color: 'var(--text-muted)' }}>
-              {recommendations.length} picks · AI-curated
-            </p>
-            {recommendations.map((rec, i) => (
-              <MovieCard key={rec.movie.tmdb_id ?? i} rec={rec} rank={i + 1} compact />
-            ))}
-          </div>
-        )}
+          {/* Film stack */}
+          {recommendations.length > 0 && !isRunning && (
+            <FilmStack recs={recommendations} />
+          )}
 
-        {/* Empty state */}
-        {!isRunning && recommendations.length === 0 && jobStatus !== 'failed' && (
-          <div className="flex flex-col items-center justify-center py-24 text-center">
-            <div className="text-5xl mb-4">🎬</div>
-            <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
-              {userId ? 'Starting recommendation engine…' : 'Enter a username on Home first.'}
-            </p>
-          </div>
-        )}
+          {!isRunning && recommendations.length === 0 && jobStatus !== 'failed' && (
+            <div className="flex flex-col items-center justify-center py-32 text-center">
+              <div className="text-6xl mb-5">🎬</div>
+              <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
+                {userId ? 'Starting the AI recommendation engine…' : 'Sign in on the Home page first.'}
+              </p>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Filters sidebar */}
       {sidebarOpen && (
-        <aside
-          className="w-72 border-l p-6 space-y-5 flex-shrink-0"
-          style={{ background: 'var(--bg-card)', borderColor: 'var(--border)' }}
-        >
-          <h2 className="font-bold text-xs uppercase tracking-widest" style={{ color: 'var(--accent-gold)' }}>
-            Customize
-          </h2>
+        <aside className="w-72 flex-shrink-0 border-l p-5 space-y-4 overflow-y-auto"
+          style={{ background: 'var(--bg-card)', borderColor: 'var(--border)' }}>
+          <div className="flex items-center justify-between">
+            <h2 className="font-black text-xs uppercase tracking-widest" style={{ color: 'var(--accent-gold)' }}>Customize</h2>
+            {activeFilters > 0 && (
+              <button
+                onClick={() => { setMood(''); setCompanion(''); setLanguage(''); setNaturalCtx(''); setYearMin(''); setYearMax('') }}
+                className="text-[10px] font-semibold"
+                style={{ color: 'var(--text-muted)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>
+                Clear all
+              </button>
+            )}
+          </div>
 
-          <FilterSelect label="Mood" value={mood} onChange={setMood}
-            options={['happy','sad','stressed','bored','thoughtful','energetic','nostalgic','adventurous']} />
+          {/* Mood */}
+          <div className="space-y-1.5">
+            <label className="block text-xs font-medium" style={{ color: 'var(--text-muted)' }}>Mood</label>
+            <div className="flex flex-wrap gap-1.5">
+              {MOODS.map((m) => (
+                <button key={m} onClick={() => setMood(mood === m ? '' : m)}
+                  className="px-2.5 py-1 rounded-full text-[11px] font-semibold capitalize"
+                  style={{ background: mood === m ? 'var(--accent-gold)' : 'var(--bg-overlay)', color: mood === m ? '#0a0a0f' : 'var(--text-muted)', border: '1px solid var(--border)', cursor: 'pointer' }}>
+                  {m}
+                </button>
+              ))}
+            </div>
+          </div>
 
-          <FilterSelect label="Watching with" value={companion} onChange={setCompanion}
-            options={['alone','partner','friends','family']} />
+          {/* Companion */}
+          <div className="space-y-1.5">
+            <label className="block text-xs font-medium" style={{ color: 'var(--text-muted)' }}>Watching with</label>
+            <div className="flex flex-wrap gap-1.5">
+              {COMPANIONS.map((c) => (
+                <button key={c} onClick={() => setCompanion(companion === c ? '' : c)}
+                  className="px-2.5 py-1 rounded-full text-[11px] font-semibold capitalize"
+                  style={{ background: companion === c ? 'var(--accent-gold)' : 'var(--bg-overlay)', color: companion === c ? '#0a0a0f' : 'var(--text-muted)', border: '1px solid var(--border)', cursor: 'pointer' }}>
+                  {c}
+                </button>
+              ))}
+            </div>
+          </div>
 
-          <FilterSelect label="Language" value={language} onChange={setLanguage}
-            options={Object.keys(LANGUAGE_MAP)} />
+          {/* Language */}
+          <div className="space-y-1.5">
+            <label className="block text-xs font-medium" style={{ color: 'var(--text-muted)' }}>Language</label>
+            <select value={language} onChange={(e) => setLanguage(e.target.value)}
+              className="w-full px-3 py-2 rounded-lg text-xs outline-none"
+              style={{ background: 'var(--bg-overlay)', border: '1px solid var(--border)', color: language ? 'var(--text-primary)' : 'var(--text-muted)' }}>
+              <option value="">Any language</option>
+              {Object.keys(LANGUAGE_MAP).map((l) => <option key={l} value={l}>{l}</option>)}
+            </select>
+          </div>
 
-          <div className="space-y-1">
+          {/* Year range */}
+          <div className="space-y-1.5">
             <label className="block text-xs font-medium" style={{ color: 'var(--text-muted)' }}>Year range</label>
             <div className="flex gap-2">
-              <input type="number" placeholder="From" value={yearMin}
-                onChange={(e) => setYearMin(e.target.value)} min={1900} max={2026}
-                className="w-full px-3 py-2 rounded-lg text-xs outline-none"
+              <input type="number" placeholder="From" value={yearMin} onChange={(e) => setYearMin(e.target.value)}
+                min={1900} max={2026} className="w-full px-3 py-2 rounded-lg text-xs outline-none"
                 style={{ background: 'var(--bg-overlay)', border: '1px solid var(--border)', color: 'var(--text-primary)' }} />
-              <input type="number" placeholder="To" value={yearMax}
-                onChange={(e) => setYearMax(e.target.value)} min={1900} max={2026}
-                className="w-full px-3 py-2 rounded-lg text-xs outline-none"
+              <input type="number" placeholder="To" value={yearMax} onChange={(e) => setYearMax(e.target.value)}
+                min={1900} max={2026} className="w-full px-3 py-2 rounded-lg text-xs outline-none"
                 style={{ background: 'var(--bg-overlay)', border: '1px solid var(--border)', color: 'var(--text-primary)' }} />
             </div>
           </div>
 
-          <div className="space-y-1">
-            <label className="block text-xs font-medium" style={{ color: 'var(--text-muted)' }}>
-              Context (freeform)
-            </label>
-            <textarea
-              rows={3}
-              placeholder="e.g. 'Something mind-bending like Inception'"
-              value={naturalCtx}
-              onChange={(e) => setNaturalCtx(e.target.value)}
+          {/* Freeform */}
+          <div className="space-y-1.5">
+            <label className="block text-xs font-medium" style={{ color: 'var(--text-muted)' }}>Freeform context</label>
+            <textarea rows={3} placeholder="e.g. 'something mind-bending like Inception'"
+              value={naturalCtx} onChange={(e) => setNaturalCtx(e.target.value)}
               className="w-full px-3 py-2 rounded-lg text-xs outline-none resize-none"
-              style={{ background: 'var(--bg-overlay)', border: '1px solid var(--border)', color: 'var(--text-primary)' }}
-            />
+              style={{ background: 'var(--bg-overlay)', border: '1px solid var(--border)', color: 'var(--text-primary)' }} />
           </div>
 
-          <div className="space-y-1">
+          {/* k slider */}
+          <div className="space-y-1.5">
             <label className="block text-xs font-medium" style={{ color: 'var(--text-muted)' }}>
-              Results: {k}
+              Results: <span style={{ color: 'var(--accent-gold)', fontWeight: 700 }}>{k}</span>
             </label>
             <input type="range" min={5} max={20} value={k} onChange={(e) => setK(+e.target.value)}
               className="w-full accent-yellow-400" />
+            <div className="flex justify-between text-[10px]" style={{ color: 'var(--text-muted)' }}>
+              <span>5</span><span>20</span>
+            </div>
           </div>
 
           <button
             onClick={() => { setSidebarOpen(false); startJob() }}
             disabled={isRunning || !userId}
-            className="w-full py-2.5 rounded-xl text-sm font-bold disabled:opacity-40"
+            className="w-full py-3 rounded-xl text-sm font-black disabled:opacity-40 transition-all hover:brightness-110"
             style={{ background: 'var(--accent-gold)', color: '#0a0a0f', border: 'none', cursor: 'pointer' }}
           >
             Apply & Refresh
           </button>
         </aside>
       )}
-    </div>
-  )
-}
-
-function FilterSelect({
-  label, value, onChange, options,
-}: {
-  label: string
-  value: string
-  onChange: (v: string) => void
-  options: string[]
-}) {
-  return (
-    <div className="space-y-1">
-      <label className="block text-xs font-medium" style={{ color: 'var(--text-muted)' }}>{label}</label>
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="w-full px-3 py-2 rounded-lg text-xs outline-none"
-        style={{ background: 'var(--bg-overlay)', border: '1px solid var(--border)', color: 'var(--text-primary)' }}
-      >
-        <option value="">Any</option>
-        {options.map((o) => (
-          <option key={o} value={o}>{o.charAt(0).toUpperCase() + o.slice(1)}</option>
-        ))}
-      </select>
     </div>
   )
 }
