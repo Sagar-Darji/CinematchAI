@@ -131,6 +131,40 @@ async def submit_feedback(request: FeedbackRequest):
 
 
 @router.get(
+    "/onboarding-movies",
+    status_code=status.HTTP_200_OK,
+)
+async def get_onboarding_movies(k: int = 20):
+    """
+    Get diverse popular movies for onboarding flow.
+
+    - **k**: Number of movies (default: 20, max: 50)
+
+    Returns a curated list of movies for new users to rate.
+    """
+    logger.info(f"GET /users/onboarding-movies: k={k}")
+
+    if k > 50:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Maximum k=50",
+        )
+
+    try:
+        service = get_onboarding_service()
+        movies = service.get_onboarding_movies(k=k)
+
+        return {"movies": movies, "count": len(movies)}
+
+    except Exception as e:
+        logger.error(f"Failed to get onboarding movies: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to get onboarding movies",
+        )
+
+
+@router.get(
     "/{user_id}",
     status_code=status.HTTP_200_OK,
 )
@@ -201,40 +235,6 @@ async def update_context(user_id: str, request: UpdateContextRequest):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to update context",
-        )
-
-
-@router.get(
-    "/onboarding-movies",
-    status_code=status.HTTP_200_OK,
-)
-async def get_onboarding_movies(k: int = 20):
-    """
-    Get diverse popular movies for onboarding flow.
-
-    - **k**: Number of movies (default: 20, max: 50)
-
-    Returns a curated list of movies for new users to rate.
-    """
-    logger.info(f"GET /users/onboarding-movies: k={k}")
-
-    if k > 50:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Maximum k=50",
-        )
-
-    try:
-        service = get_onboarding_service()
-        movies = service.get_onboarding_movies(k=k)
-
-        return {"movies": movies, "count": len(movies)}
-
-    except Exception as e:
-        logger.error(f"Failed to get onboarding movies: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to get onboarding movies",
         )
 
 
