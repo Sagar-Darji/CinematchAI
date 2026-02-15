@@ -1,366 +1,509 @@
-"""CinematchAI Admin CLI — Rich-powered terminal interface.
+"""CinematchAI — Interactive Terminal Console (Rich UI).
 
-Usage:
+Run:
+    python -m scripts.cinematch_cli
     python scripts/cinematch_cli.py
-    python scripts/cinematch_cli.py --stats
-    python scripts/cinematch_cli.py --bulk --language hi en --max-pages 50
-    python scripts/cinematch_cli.py --progress
-    python scripts/cinematch_cli.py --test-llm
-    python scripts/cinematch_cli.py --user USER_ID
+
+Fully interactive — press a number key, no commands to type.
 """
 
-import argparse
 import sys
+import time
 from pathlib import Path
 
 project_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(project_root))
 
-from rich import box
-from rich.console import Console
-from rich.live import Live
-from rich.panel import Panel
-from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
-from rich.table import Table
-from rich.text import Text
+try:
+    from rich import box
+    from rich.align import Align
+    from rich.console import Console
+    from rich.live import Live
+    from rich.panel import Panel
+    from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
+    from rich.prompt import Confirm, IntPrompt, Prompt
+    from rich.table import Table
+    from rich.text import Text
+except ImportError:
+    print("Install rich first:  pip install rich")
+    sys.exit(1)
 
 console = Console()
 
-APP_BANNER = """
-[bold yellow]╔══════════════════════════════════════════════════════════╗[/bold yellow]
-[bold yellow]║[/bold yellow]  [bold white]🎬  CinematchAI Admin CLI  v2.0.0[/bold white]                        [bold yellow]║[/bold yellow]
-[bold yellow]╚══════════════════════════════════════════════════════════╝[/bold yellow]
-"""
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _fmt_mb(mb: float) -> str:
+    return f"{mb/1024:.2f} GB" if mb >= 1024 else f"{mb:.1f} MB"
 
 
-def _format_size(mb: float) -> str:
-    if mb >= 1024:
-        return f"{mb/1024:.2f} GB"
-    return f"{mb:.1f} MB"
+def _pause():
+    console.print()
+    Prompt.ask("[dim]  Press Enter to return to menu[/]", default="")
 
 
-def show_banner(corpus_count: int = 0, llm_provider: str = "?"):
-    console.print(APP_BANNER)
-    console.print(
-        f"  [dim]{corpus_count:,} movies · LLM: {llm_provider}[/dim]\n"
-    )
+def _banner():
+    console.clear()
+    console.print(Panel(
+        Align.center(
+            Text.from_markup(
+                "[bold yellow]🎬  CineMatch AI  v2.0.0[/]\n"
+                "[dim]Interactive Admin Console — press a number, no commands needed[/]"
+            )
+        ),
+        border_style="yellow",
+        padding=(0, 6),
+    ))
 
 
-def cmd_stats(args):
-    """Show corpus statistics."""
-    from src.services.enrichment_pipeline import EnrichmentPipeline, LANGUAGE_NAMES
+def _main_menu() -> str:
+    table = Table(box=None, show_header=False, padding=(0, 2))
+    table.add_column(style="bold yellow", min_width=4)
+    table.add_column(style="white", min_width=28)
+    table.add_column(style="dim")
 
-    with console.status("[bold green]Loading corpus stats...", spinner="dots"):
+    items = [
+        ("1", "📊  Corpus Stats",         "counts, language distribution, backend health"),
+        ("2", "🌍  Bulk Enrichment",       "interactive language + page config, then runs"),
+        ("3", "📈  Job Progress",          "live view of pending / done / failed jobs"),
+        ("4", "🔄  Overnight Rotation",    "prune stale movies, refresh corpus"),
+        ("5", "🔍  Search Index",          "look up any movie by title or TMDB ID"),
+        ("6", "🗑️   Clear Job Queue",       "choose pending, failed, or all"),
+        ("7", "🧪  Test Recommendation",   "run full AI pipeline for any user_id"),
+        ("8", "🔌  LLM Health Check",      "test Groq + Ollama latency"),
+        ("0", "🚪  Exit",                  ""),
+    ]
+    for key, label, hint in items:
+        table.add_row(f"[{key}]", label, hint)
+
+    console.print(Panel(table, title="[bold]Main Menu[/]", border_style="bright_black"))
+    return Prompt.ask("[bold yellow]  Choose[/]", choices=[str(i) for i in range(9)], default="0")
+
+
+# ── Action: Corpus Stats ──────────────────────────────────────────────────────
+
+def action_stats():
+    console.rule("[yellow]Corpus Stats[/]")
+    with console.status("[bold green]Loading…"):
+        from src.services.enrichment_pipeline import EnrichmentPipeline, LANGUAGE_NAMES
         pipeline = EnrichmentPipeline()
         tracker_count = pipeline.tracker.count()
+        est_mb = tracker_count * 16 / 1024
+        counts = pipeline.cloud_db.count()
+        availability = pipeline.cloud_db.is_available()
         dist = pipeline.get_language_distribution()
-        reg = pipeline.tracker.get_page_registry_stats()
 
-    show_banner(tracker_count)
-
-    # Summary panel
-    est_mb = tracker_count * 16 / 1024
+    # Summary
     console.print(Panel(
-        f"[bold white]{tracker_count:,}[/bold white] movies indexed  •  "
-        f"[bold yellow]{_format_size(est_mb)}[/bold yellow] estimated\n"
-        f"[dim]Page registry: {reg['total_cached_pages']} pages cached, "
-        f"{reg['pages_with_results']} with results, "
-        f"{reg['total_fetches']} total fetches[/dim]",
-        title="[bold]Corpus Summary[/bold]",
+        f"[bold white]{tracker_count:,}[/] movies indexed  ·  "
+        f"[bold yellow]{_fmt_mb(est_mb)}[/] estimated",
         border_style="yellow",
     ))
 
-    # Language table
+    # Backends
+    b = Table("Backend", "Vectors", "Status", border_style="bright_black", box=box.SIMPLE)
+    for backend, cnt in counts.items():
+        up = availability.get(backend, False)
+        b.add_row(backend, f"{cnt:,}", "[green]● UP[/]" if up else "[red]● DOWN[/]")
+    console.print(b)
+
+    # Languages
     if dist:
-        table = Table(
-            title="Language Distribution",
-            box=box.ROUNDED,
-            border_style="dim",
-            header_style="bold yellow",
-        )
-        table.add_column("Language", style="white", width=14)
-        table.add_column("Code", justify="center", width=6)
-        table.add_column("Movies", justify="right", width=8)
-        table.add_column("Share", justify="right", width=8)
-        table.add_column("Bar", width=30)
-
         total = max(tracker_count, 1)
-        for lang, count in sorted(dist.items(), key=lambda x: -x[1]):
+        l_tbl = Table("Language", "Count", "Share", "Distribution",
+                      border_style="bright_black", box=box.ROUNDED, header_style="bold yellow")
+        for lang, cnt in sorted(dist.items(), key=lambda x: -x[1]):
             name = LANGUAGE_NAMES.get(lang, lang)
-            pct = count / total * 100
+            pct = cnt / total * 100
             bar_len = int(pct / 2)
-            bar = "[yellow]" + "█" * bar_len + "[/yellow]" + "[dim]" + "░" * (50 - bar_len) + "[/dim]"
-            table.add_row(name, lang, f"{count:,}", f"{pct:.1f}%", bar)
+            bar = "[yellow]" + "█" * bar_len + "[/][dim]" + "░" * (50 - bar_len) + "[/]"
+            l_tbl.add_row(name, f"{cnt:,}", f"{pct:.1f}%", bar)
+        console.print(l_tbl)
 
-        console.print(table)
+    _pause()
 
 
-def cmd_bulk(args):
-    """Run bulk enrichment with rich progress display."""
-    from src.services.enrichment_pipeline import EnrichmentPipeline, LANGUAGE_NAMES
+# ── Action: Bulk Enrichment ───────────────────────────────────────────────────
 
-    languages = args.language or None
-    max_pages = args.max_pages
-    target = args.target
+def action_bulk():
+    console.rule("[yellow]Bulk Enrichment[/]")
+    from src.services.enrichment_pipeline import LANGUAGE_NAMES
 
-    if languages:
-        lang_label = ", ".join(LANGUAGE_NAMES.get(l, l) for l in languages)
-    else:
-        lang_label = "All languages (Hindi-first)"
+    # Show language picker table
+    lang_items = sorted(LANGUAGE_NAMES.items(), key=lambda x: x[1])
+    l_tbl = Table("Key", "Code", "Language", box=box.SIMPLE, border_style="bright_black")
+    l_tbl.add_row("[bold yellow]0[/]", "—", "ALL languages")
+    for i, (code, name) in enumerate(lang_items):
+        l_tbl.add_row(f"[yellow]{i+1}[/]", code, name)
+    console.print(l_tbl)
 
-    show_banner()
-    console.print(Panel(
-        f"[bold white]Languages:[/bold white] {lang_label}\n"
-        f"[bold white]Max pages:[/bold white] {max_pages}  •  "
-        f"[bold white]Target:[/bold white] {target} GB",
-        title="[bold]Bulk Enrichment[/bold]",
-        border_style="yellow",
-    ))
+    raw = Prompt.ask(
+        "\n  Language key(s) [0=all, or space-separated numbers like '1 3 7']",
+        default="0",
+    ).strip()
 
+    selected_langs: list[str] | None = None
+    if raw != "0":
+        selected_langs = []
+        for part in raw.split():
+            try:
+                idx = int(part) - 1
+                selected_langs.append(lang_items[idx][0])
+            except (ValueError, IndexError):
+                console.print(f"  [red]Invalid key: {part}[/]")
+
+    max_pages = IntPrompt.ask("  Max pages this run", default=500)
+    target = float(Prompt.ask("  Target corpus size (GB)", default="15"))
+
+    lang_label = ", ".join(LANGUAGE_NAMES.get(c, c) for c in selected_langs) if selected_langs else "ALL"
+    console.print(f"\n  Languages: [yellow]{lang_label}[/]  ·  Pages: [yellow]{max_pages}[/]  ·  Target: [yellow]{target} GB[/]\n")
+
+    if not Confirm.ask("  Start bulk enrichment?", default=False):
+        console.print("[dim]  Cancelled.[/]")
+        _pause()
+        return
+
+    from src.services.enrichment_pipeline import EnrichmentPipeline
     pipeline = EnrichmentPipeline()
 
-    progress = Progress(
+    prog = Progress(
         SpinnerColumn(),
         TextColumn("[bold yellow]{task.description}"),
-        BarColumn(bar_width=40),
+        BarColumn(bar_width=36),
         TextColumn("{task.completed}/{task.total} pages"),
-        TextColumn("[green]+{task.fields[new_movies]} new[/green]"),
-        TextColumn("[dim]skip:{task.fields[skipped]} fetch:{task.fields[fetched]}[/dim]"),
+        TextColumn("[green]+{task.fields[new]} new[/]"),
         TimeElapsedColumn(),
         console=console,
     )
-
-    task = progress.add_task(
-        "Processing...", total=max_pages, new_movies=0, skipped=0, fetched=0
-    )
+    task = prog.add_task("Starting…", total=max_pages, new=0)
 
     def _cb(info):
         job = info.get("current_job", {})
         lang = LANGUAGE_NAMES.get(job.get("language", "?"), "?")
-        decade = job.get("decade_start", "")
-        genre = job.get("genre_id", "")
-        decade_str = f"{decade}s" if decade else "all"
-        genre_str = f"g={genre}" if genre else "popular"
-        desc = f"{lang} | {genre_str} | {decade_str}"
-        progress.update(
-            task,
-            completed=info["pages_processed"],
-            description=desc,
-            new_movies=info["total_new"],
-            skipped=info.get("pages_skipped", 0),
-            fetched=info.get("pages_fetched", 0),
-        )
+        prog.update(task, completed=info["pages_processed"],
+                    description=lang, new=info["total_new"])
 
-    with progress:
+    with prog:
         result = pipeline.run_bulk_local(
-            target_gb=target,
-            max_pages=max_pages,
-            progress_callback=_cb,
-            languages=languages,
+            target_gb=target, max_pages=max_pages,
+            progress_callback=_cb, languages=selected_langs,
         )
 
-    console.print()
     console.print(Panel(
-        f"[bold green]✓ Done![/bold green]  "
-        f"[bold white]{result['total_new']}[/bold white] new movies in "
-        f"[bold white]{result['elapsed']:.1f}s[/bold white]\n"
-        f"Pages processed: [white]{result['pages_processed']}[/white]  "
-        f"(fetched: [white]{result.get('pages_fetched', '?')}[/white], "
-        f"skipped: [white]{result.get('pages_skipped', '?')}[/white])\n"
-        f"Total corpus: [bold yellow]{result['total_indexed']:,}[/bold yellow] movies  "
-        f"([dim]{_format_size(result['total_indexed'] * 16 / 1024)}[/dim])",
-        title="[bold]Results[/bold]",
+        f"[bold green]✓ Done![/]  {result['total_new']:,} new movies in {result['elapsed']:.1f}s\n"
+        f"Total corpus: [yellow]{result['total_indexed']:,}[/] movies  "
+        f"([dim]{_fmt_mb(result['total_indexed'] * 16 / 1024)}[/])",
         border_style="green",
     ))
+    _pause()
 
 
-def cmd_progress(args):
-    """Show job queue progress."""
-    from src.services.enrichment_pipeline import EnrichmentPipeline, LANGUAGE_NAMES
+# ── Action: Job Progress ──────────────────────────────────────────────────────
 
-    with console.status("[bold green]Fetching progress...", spinner="dots"):
+def action_progress():
+    console.rule("[yellow]Job Progress[/]")
+    with console.status("[bold green]Loading…"):
+        from src.services.enrichment_pipeline import EnrichmentPipeline, LANGUAGE_NAMES
         pipeline = EnrichmentPipeline()
-        prog = pipeline.get_bulk_progress()
+        progress = pipeline.get_bulk_progress()
 
-    show_banner(prog["total_indexed"])
-
-    reg = prog.get("page_registry", {})
-    if reg.get("total_cached_pages", 0) > 0:
-        console.print(Panel(
-            f"[white]{reg['total_cached_pages']}[/white] pages cached  •  "
-            f"[white]{reg['pages_with_results']}[/white] with results  •  "
-            f"[white]{reg['empty_pages']}[/white] empty  •  "
-            f"[white]{reg['total_fetches']}[/white] total fetches",
-            title="[bold]Page Registry[/bold]",
-            border_style="dim",
-        ))
-
-    if prog["total_jobs"] == 0:
+    if progress["total_jobs"] == 0:
         console.print(
-            f"[dim]No jobs in queue.[/dim]  "
-            f"Corpus: [bold yellow]{prog['total_indexed']:,}[/bold yellow] movies  "
-            f"([dim]{_format_size(prog['est_size_mb'])}[/dim])"
+            f"  [dim]No jobs in queue.[/]  Corpus: [yellow]{progress['total_indexed']:,}[/] movies"
         )
+        _pause()
         return
 
-    table = Table(
-        title=f"Job Queue — {prog['done']}/{prog['total_jobs']} done ({prog['pct_complete']:.1f}%)",
-        box=box.ROUNDED,
-        border_style="dim",
-        header_style="bold yellow",
-    )
-    table.add_column("Language", width=14)
-    table.add_column("P", justify="center", width=4)
-    table.add_column("Done", justify="right", width=7)
-    table.add_column("Pending", justify="right", width=8)
-    table.add_column("Failed", justify="right", width=7)
-    table.add_column("Movies", justify="right", width=8)
-    table.add_column("Progress", width=24)
+    done = progress["done"]
+    total = progress["total_jobs"]
+    console.print(f"  Overall: [yellow]{done}/{total}[/] ({done/total*100:.1f}%)  ·  "
+                  f"Corpus: [yellow]{progress['total_indexed']:,}[/] movies "
+                  f"([dim]{_fmt_mb(progress['est_size_mb'])}[/])\n")
 
-    for lp in prog["by_language"]:
-        lang = LANGUAGE_NAMES.get(lp["language"], lp["language"])
+    tbl = Table("Language", "Pri", "Done", "Pending", "Failed", "Movies", "Progress",
+                border_style="bright_black", box=box.ROUNDED, header_style="bold yellow")
+    for lp in progress["by_language"]:
+        name = LANGUAGE_NAMES.get(lp["language"], lp["language"])
         pct = (lp["done"] / lp["total"] * 100) if lp["total"] > 0 else 0
-        bar_len = int(pct / 5)
-        bar = "█" * bar_len + "░" * (20 - bar_len)
-        table.add_row(
-            lang,
-            str(lp["priority"]),
-            str(lp["done"]),
-            str(lp["pending"]),
-            f"[red]{lp['failed']}[/red]" if lp["failed"] else "0",
+        bar = "[yellow]" + "█" * int(pct / 5) + "[/][dim]" + "░" * (20 - int(pct / 5)) + "[/]"
+        tbl.add_row(
+            name, str(lp["priority"]),
+            str(lp["done"]), str(lp["pending"]),
+            f"[red]{lp['failed']}[/]" if lp["failed"] else "0",
             str(lp.get("movies_found", 0)),
-            f"[yellow]{bar}[/yellow] {pct:.0f}%",
+            f"{bar} {pct:.0f}%",
         )
-
-    console.print(table)
-    console.print(
-        f"\n  Corpus: [bold yellow]{prog['total_indexed']:,}[/bold yellow] movies  "
-        f"([dim]{_format_size(prog['est_size_mb'])}[/dim])"
-    )
+    console.print(tbl)
+    _pause()
 
 
-def cmd_test_llm(args):
-    """Test LLM connectivity and latency."""
-    import time
-    from src.utils.llm_client import get_llm_client
+# ── Action: Rotation ──────────────────────────────────────────────────────────
 
-    show_banner()
-    console.print("[bold]LLM Health Check[/bold]\n")
+def action_rotation():
+    console.rule("[yellow]Overnight Rotation[/]")
+    with console.status("[bold green]Loading candidates…"):
+        from src.services.enrichment_pipeline import EnrichmentPipeline, LANGUAGE_NAMES
+        pipeline = EnrichmentPipeline()
+        tracker_count = pipeline.tracker.count()
+        candidates = pipeline.tracker.get_rotation_candidates(keep_days=30)
 
+    console.print(f"  Corpus: [yellow]{tracker_count:,}[/] movies")
+    console.print(f"  Rotation candidates (unused >30 days): [yellow]{len(candidates)}[/]")
+
+    if not candidates:
+        console.print("[dim]  Nothing to remove.[/]")
+        _pause()
+        return
+
+    by_lang: dict[str, int] = {}
+    for c in candidates:
+        lang = c.get("original_language", "?")
+        by_lang[lang] = by_lang.get(lang, 0) + 1
+
+    tbl = Table("Language", "Candidates", box=box.SIMPLE, border_style="bright_black")
+    for lang, cnt in sorted(by_lang.items(), key=lambda x: -x[1]):
+        tbl.add_row(LANGUAGE_NAMES.get(lang, lang), str(cnt))
+    console.print(tbl)
+
+    target = float(Prompt.ask("\n  Target corpus size to keep (GB)", default="15"))
+    if not Confirm.ask(f"  Proceed with rotation (keep ≈{target} GB)?", default=False):
+        console.print("[dim]  Cancelled.[/]")
+        _pause()
+        return
+
+    with console.status("[bold green]Running rotation…"):
+        result = pipeline.rotate_unused(keep_gb=target)
+    console.print(f"[green]  ✓ Removed {result['removed']:,} movies[/]")
+    _pause()
+
+
+# ── Action: Search Index ──────────────────────────────────────────────────────
+
+def action_search():
+    console.rule("[yellow]Search Index[/]")
+    query = Prompt.ask("  Title or TMDB ID").strip()
+    if not query:
+        _pause()
+        return
+
+    import sqlite3
+    from src.services.enrichment_pipeline import _IndexedTracker
+    tracker = _IndexedTracker()
+
+    with sqlite3.connect(str(tracker.db_path)) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute("SELECT * FROM enrichment_log WHERE tmdb_id = ?", (query,)).fetchall()
+        if not rows:
+            rows = conn.execute(
+                "SELECT * FROM enrichment_log WHERE source LIKE ? LIMIT 20",
+                (f"%{query}%",),
+            ).fetchall()
+
+    if not rows:
+        console.print(f"  [dim]No results for '{query}'[/]")
+        _pause()
+        return
+
+    tbl = Table("TMDB ID", "Language", "Source", "Usage", "Last Used",
+                border_style="bright_black", box=box.SIMPLE)
+    for r in rows:
+        rd = dict(r)
+        tbl.add_row(
+            str(rd.get("tmdb_id", "?")),
+            rd.get("original_language", "?"),
+            (rd.get("source") or "")[:40],
+            str(rd.get("usage_count", 0) or 0),
+            rd.get("last_used_at") or "never",
+        )
+    console.print(tbl)
+    _pause()
+
+
+# ── Action: Clear Queue ───────────────────────────────────────────────────────
+
+def action_clear_queue():
+    console.rule("[yellow]Clear Job Queue[/]")
+    from src.services.enrichment_pipeline import EnrichmentPipeline
+    pipeline = EnrichmentPipeline()
+    job_counts = pipeline.tracker.count_jobs()
+    total = sum(job_counts.values())
+
+    if total == 0:
+        console.print("  [dim]Queue is already empty.[/]")
+        _pause()
+        return
+
+    console.print(f"  Current queue: {job_counts}")
+    console.print()
+
+    tbl = Table(box=None, show_header=False, padding=(0, 2))
+    tbl.add_column(style="bold yellow", min_width=4)
+    tbl.add_column(style="white")
+    for key, label in [("1","Clear ALL jobs"),("2","Clear only FAILED jobs"),
+                       ("3","Clear only PENDING jobs"),("0","Cancel")]:
+        tbl.add_row(f"[{key}]", label)
+    console.print(tbl)
+
+    choice = Prompt.ask("  Choose", choices=["0","1","2","3"], default="0")
+
+    if choice == "1":
+        if Confirm.ask("  Clear [bold red]ALL[/] jobs?", default=False):
+            pipeline.tracker.clear_jobs()
+            console.print("[green]  ✓ All jobs cleared.[/]")
+    elif choice == "2":
+        pipeline.tracker.clear_jobs(status="failed")
+        console.print("[green]  ✓ Failed jobs cleared.[/]")
+    elif choice == "3":
+        pipeline.tracker.clear_jobs(status="pending")
+        console.print("[green]  ✓ Pending jobs cleared.[/]")
+    else:
+        console.print("[dim]  Cancelled.[/]")
+    _pause()
+
+
+# ── Action: Test Recommendation ───────────────────────────────────────────────
+
+def action_test_rec():
+    console.rule("[yellow]Test Recommendation Pipeline[/]")
+    import requests as _http
+
+    user_id = Prompt.ask("  User ID to test").strip()
+    if not user_id:
+        _pause()
+        return
+    k = IntPrompt.ask("  Number of recommendations", default=5)
+
+    api = "http://localhost:8000/api/v1"
+    console.print(f"\n  Submitting job for [yellow]{user_id}[/]…")
+    try:
+        resp = _http.post(f"{api}/recommendations/async",
+                          json={"user_id": user_id, "k": k}, timeout=15)
+        if resp.status_code not in (200, 202):
+            console.print(f"[red]  API error: {resp.text}[/]")
+            _pause()
+            return
+        job_id = resp.json()["job_id"]
+    except Exception as e:
+        console.print(f"[red]  Cannot reach API at port 8000: {e}[/]")
+        _pause()
+        return
+
+    ALL_AGENTS = ["Profile Analyzer","Context-Aware","Retrieval",
+                  "Content Intelligence","Serendipity","Explanation","Aggregation"]
+    data: dict = {}
+    deadline = time.time() + 90
+
+    with Live(console=console, refresh_per_second=4) as live:
+        while time.time() < deadline:
+            try:
+                poll = _http.get(f"{api}/recommendations/result/{job_id}", timeout=10)
+                data = poll.json()
+                steps = data.get("steps", [])
+                done_set = {s["step"] for s in steps}
+
+                lines = ["[bold yellow]🎬 CineMatch pipeline:[/]\n"]
+                for i, agent in enumerate(ALL_AGENTS):
+                    if agent in done_set:
+                        detail = next((s["detail"] for s in steps if s["step"] == agent), "done")
+                        lines.append(f"  [green]✓[/] [yellow]{agent}[/] [dim]— {detail}[/]")
+                    elif i == len(done_set):
+                        lines.append(f"  [blink]⚙[/] [bold]{agent}[/] [dim]— processing…[/]")
+                    else:
+                        lines.append(f"  [dim]○ {agent}[/]")
+                live.update(Panel("\n".join(lines), border_style="bright_black"))
+
+                if data["status"] == "complete":
+                    break
+                if data["status"] == "failed":
+                    console.print(f"[red]  Pipeline failed: {data.get('error')}[/]")
+                    _pause()
+                    return
+                time.sleep(0.6)
+            except Exception:
+                time.sleep(1)
+
+    recs = data.get("result", {}).get("recommendations", [])
+    if not recs:
+        console.print("[dim]  No recommendations returned.[/]")
+        _pause()
+        return
+
+    tbl = Table("#", "Title", "Year", "Genres", "Score",
+                border_style="bright_black", box=box.ROUNDED, header_style="bold yellow", min_width=65)
+    for rec in recs:
+        m = rec["movie"]
+        genres = ", ".join((m.get("genres") or [])[:3])
+        pct = int(rec.get("score", 0) * 100)
+        color = "yellow" if pct >= 70 else ("red" if pct >= 40 else "dim")
+        tbl.add_row(str(rec.get("rank","?")), m.get("title","?"), str(m.get("year","")),
+                    genres, f"[{color}]{pct}%[/]")
+    console.print(tbl)
+    _pause()
+
+
+# ── Action: LLM Health Check ──────────────────────────────────────────────────
+
+def action_llm_check():
+    console.rule("[yellow]LLM Health Check[/]")
     test_prompt = "Reply with exactly: OK"
 
     for provider_name in ["groq", "ollama"]:
         try:
             from config.settings import get_settings
             s = get_settings()
-            if provider_name == "groq" and not s.groq_api_key:
-                console.print(f"  [yellow]groq[/yellow]   [dim]SKIP — no API key[/dim]")
+            if provider_name == "groq" and not getattr(s, "groq_api_key", None):
+                console.print(f"  [yellow]groq[/]   [dim]SKIP — no API key[/]")
                 continue
 
-            from src.utils.llm_client import LLMProvider
+            from src.utils.llm_client import get_llm_client, LLMProvider
             provider = LLMProvider.GROQ if provider_name == "groq" else LLMProvider.OLLAMA
             client = get_llm_client(provider=provider, use_fast_model=True)
 
             t0 = time.time()
             resp = client.generate(test_prompt, max_tokens=10)
             latency = (time.time() - t0) * 1000
-
             console.print(
-                f"  [green]✓[/green] [bold]{provider_name}[/bold]  "
-                f"[dim]{client.model}[/dim]  →  "
-                f"[white]{resp.strip()[:30]}[/white]  "
-                f"[dim]({latency:.0f}ms)[/dim]"
+                f"  [green]✓[/] [bold]{provider_name}[/]  [dim]{client.model}[/]  →  "
+                f"[white]{resp.strip()[:30]}[/]  [dim]({latency:.0f}ms)[/]"
             )
         except Exception as e:
-            console.print(f"  [red]✗[/red] [bold]{provider_name}[/bold]  [red]{e}[/red]")
+            console.print(f"  [red]✗[/] [bold]{provider_name}[/]  [red]{e}[/]")
+
+    _pause()
 
 
-def cmd_user(args):
-    """Show user profile and taste summary."""
-    from src.services.user_service import get_user_service
-    from src.services.enrichment_pipeline import LANGUAGE_NAMES
+# ── Main loop ─────────────────────────────────────────────────────────────────
 
-    user_id = args.user_id
-    show_banner()
-
-    with console.status(f"[bold green]Loading profile for {user_id}...", spinner="dots"):
-        try:
-            svc = get_user_service()
-            ratings = svc.get_user_ratings(user_id)
-        except Exception as e:
-            console.print(f"[red]Error loading user: {e}[/red]")
-            return
-
-    if not ratings:
-        console.print(f"[yellow]No ratings found for user '{user_id}'[/yellow]")
-        return
-
-    total = len(ratings)
-    avg = sum(r["rating"] for r in ratings) / total
-    top = sorted(ratings, key=lambda r: -r["rating"])[:5]
-
-    console.print(Panel(
-        f"[bold white]User:[/bold white] {user_id}\n"
-        f"[bold white]Ratings:[/bold white] {total}  •  "
-        f"[bold white]Avg:[/bold white] {avg:.2f}/5.0",
-        title="[bold]User Profile[/bold]",
-        border_style="yellow",
-    ))
-
-    table = Table(title="Top Rated Movies", box=box.SIMPLE, header_style="bold yellow")
-    table.add_column("Movie ID", width=10)
-    table.add_column("Rating", justify="right", width=8)
-
-    for r in top:
-        stars = "★" * int(r["rating"])
-        table.add_row(str(r.get("movie_id", r.get("movieId", "?"))), f"[yellow]{stars}[/yellow] {r['rating']}")
-
-    console.print(table)
+ACTIONS = {
+    "1": action_stats,
+    "2": action_bulk,
+    "3": action_progress,
+    "4": action_rotation,
+    "5": action_search,
+    "6": action_clear_queue,
+    "7": action_test_rec,
+    "8": action_llm_check,
+}
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="CinematchAI Admin CLI",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
+    _banner()
 
-    group = parser.add_mutually_exclusive_group()
-    group.add_argument("--stats", action="store_true", help="Show corpus statistics")
-    group.add_argument("--bulk", action="store_true", help="Run bulk enrichment")
-    group.add_argument("--progress", action="store_true", help="Show job queue progress")
-    group.add_argument("--test-llm", action="store_true", help="Test LLM connectivity")
-    group.add_argument("--user", dest="user_id", metavar="USER_ID", help="Inspect user profile")
-
-    parser.add_argument("--language", nargs="+", metavar="LANG",
-                        help="Language codes for bulk (e.g. hi en ta)")
-    parser.add_argument("--max-pages", type=int, default=100,
-                        help="Max pages for bulk run (default: 100)")
-    parser.add_argument("--target", type=float, default=15.0,
-                        help="Target corpus size in GB (default: 15)")
-
-    args = parser.parse_args()
-
-    if args.stats:
-        cmd_stats(args)
-    elif args.bulk:
-        cmd_bulk(args)
-    elif args.progress:
-        cmd_progress(args)
-    elif args.test_llm:
-        cmd_test_llm(args)
-    elif args.user_id:
-        cmd_user(args)
-    else:
-        # Interactive menu
-        show_banner()
-        console.print("[bold white]Commands:[/bold white]")
-        console.print("  [yellow]--stats[/yellow]          Corpus statistics")
-        console.print("  [yellow]--bulk[/yellow]           Run bulk enrichment")
-        console.print("  [yellow]--progress[/yellow]       Job queue progress")
-        console.print("  [yellow]--test-llm[/yellow]       Test LLM connectivity")
-        console.print("  [yellow]--user USER_ID[/yellow]   Inspect user profile")
-        console.print()
-        console.print("[dim]Run with --help for full options.[/dim]")
+    while True:
+        choice = _main_menu()
+        if choice == "0":
+            console.print("\n[yellow]  Goodbye! 🎬[/]\n")
+            break
+        action = ACTIONS.get(choice)
+        if action:
+            try:
+                console.print()
+                action()
+            except KeyboardInterrupt:
+                console.print("\n[dim]  Interrupted — returning to menu.[/]")
+            except Exception as e:
+                console.print(f"\n[red]  Error:[/] {e}")
+                _pause()
 
 
 if __name__ == "__main__":
