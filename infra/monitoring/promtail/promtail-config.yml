@@ -1,3 +1,19 @@
+# ── Promtail — Linux bare-metal only ─────────────────────────────────────────
+#
+# This config is for running CinematchAI on a Linux host (e.g. a VPS / CI server)
+# where /var/lib/docker/containers is directly accessible.
+#
+# On macOS Docker Desktop, that path lives inside a VM and is NOT readable by
+# Promtail on the host.  Use the Loki Docker driver plugin instead:
+#
+#   make plugin   # installs grafana/loki-docker-driver once
+#   make up       # docker-compose uses `driver: loki` on api + frontend
+#
+# To use THIS file on Linux:
+#   1. Uncomment the promtail service in docker-compose.yml
+#   2. Change api/frontend logging driver back to json-file
+# ─────────────────────────────────────────────────────────────────────────────
+
 server:
   http_listen_port: 9080
   grpc_listen_port: 0
@@ -9,13 +25,12 @@ clients:
   - url: http://loki:3100/loki/api/v1/push
 
 scrape_configs:
-  # ── Docker container logs ─────────────────────────────────────────────────────
   - job_name: docker-containers
     docker_sd_configs:
       - host: unix:///var/run/docker.sock
         refresh_interval: 5s
     relabel_configs:
-      # Drop containers without the "cinematch" tag prefix
+      # Keep only containers whose name starts with /cinematch-
       - source_labels: [__meta_docker_container_name]
         regex: /cinematch-.*
         action: keep
@@ -24,11 +39,10 @@ scrape_configs:
         target_label: app
         regex: /(.+)
         replacement: $1
-      # Pass through Docker log stream label
       - source_labels: [__meta_docker_container_log_stream]
         target_label: stream
     pipeline_stages:
-      # Try to parse JSON logs (from LOG_FORMAT=json containers)
+      # Parse JSON fields emitted by LOG_FORMAT=json
       - json:
           expressions:
             level: level
@@ -37,6 +51,5 @@ scrape_configs:
       - labels:
           level:
           logger:
-      # Fall back: keep raw line as-is if JSON parsing fails
       - output:
           source: message

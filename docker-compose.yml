@@ -47,12 +47,18 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
+    # Loki Docker driver pushes logs directly to Loki over HTTP.
+    # Works on macOS + Linux without filesystem access to /var/lib/docker/containers.
+    # Run `make plugin` once to install the driver before `make up`.
     logging:
-      driver: json-file
+      driver: loki
       options:
-        max-size: "10m"
-        max-file: "3"
-        tag: "cinematch-api"
+        loki-url: "http://localhost:3100/loki/api/v1/push"
+        loki-batch-size: "400"
+        loki-retries: "3"
+        loki-timeout: "2s"
+        labels: "app=cinematch-api,env=local"
+        keep-file: "true"           # also keep local json-file copy as fallback
 
   # ── React frontend (nginx) ────────────────────────────────────────────────────
   frontend:
@@ -71,10 +77,14 @@ services:
       api:
         condition: service_healthy
     logging:
-      driver: json-file
+      driver: loki
       options:
-        max-size: "5m"
-        max-file: "2"
+        loki-url: "http://localhost:3100/loki/api/v1/push"
+        loki-batch-size: "400"
+        loki-retries: "3"
+        loki-timeout: "2s"
+        labels: "app=cinematch-frontend,env=local"
+        keep-file: "true"
 
   # ── Prometheus ─────────────────────────────────────────────────────────────
   prometheus:
@@ -148,22 +158,21 @@ services:
         max-size: "5m"
         max-file: "2"
 
-  # ── Promtail (log shipper: Docker → Loki) ────────────────────────────────────
-  promtail:
-    image: grafana/promtail:3.0.0
-    container_name: cinematch-promtail
-    restart: unless-stopped
-    command: -config.file=/etc/promtail/promtail-config.yml
-    volumes:
-      - ./infra/monitoring/promtail/promtail-config.yml:/etc/promtail/promtail-config.yml:ro
-      - /var/lib/docker/containers:/var/lib/docker/containers:ro
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-    networks:
-      - monitoring
-    depends_on:
-      - loki
-    logging:
-      driver: json-file
-      options:
-        max-size: "5m"
-        max-file: "2"
+  # ── Promtail (Linux bare-metal only) ─────────────────────────────────────────
+  # On macOS Docker Desktop /var/lib/docker/containers is inside a VM — Promtail
+  # can't reach it.  We use the Loki Docker driver plugin instead (see api/frontend
+  # logging sections above).  Uncomment this block only when running on Linux.
+  #
+  # promtail:
+  #   image: grafana/promtail:3.0.0
+  #   container_name: cinematch-promtail
+  #   restart: unless-stopped
+  #   command: -config.file=/etc/promtail/promtail-config.yml
+  #   volumes:
+  #     - ./infra/monitoring/promtail/promtail-config.yml:/etc/promtail/promtail-config.yml:ro
+  #     - /var/lib/docker/containers:/var/lib/docker/containers:ro
+  #     - /var/run/docker.sock:/var/run/docker.sock:ro
+  #   networks:
+  #     - monitoring
+  #   depends_on:
+  #     - loki

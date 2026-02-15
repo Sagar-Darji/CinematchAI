@@ -3,7 +3,7 @@
 #  Usage: make <target>
 # ─────────────────────────────────────────────────────────────────────────────
 
-.PHONY: help up down restart build build-api build-frontend \
+.PHONY: help plugin up down restart build build-api build-frontend \
         logs logs-api logs-frontend logs-monitor \
         monitor ps shell-api shell-frontend \
         k8s-apply k8s-delete k8s-status \
@@ -27,7 +27,13 @@ help:  ## Show this help message
 
 # ── Docker Compose ────────────────────────────────────────────────────────────
 
-up: ## Start all services (api, frontend, prometheus, grafana, loki, promtail)
+plugin: ## Install Loki Docker driver plugin (run ONCE before `make up`)
+	@echo "$(BOLD)Installing Loki Docker driver plugin…$(RESET)"
+	@docker plugin install grafana/loki-docker-driver:3.0.0 --alias loki --grant-all-permissions || \
+	  echo "$(GOLD)Plugin already installed — continuing$(RESET)"
+	@docker plugin ls | grep loki
+
+up: ## Start all services — run `make plugin` first if using Loki log driver
 	$(COMPOSE) up -d --remove-orphans
 	@echo ""
 	@echo "$(BOLD)$(GOLD)Services started:$(RESET)"
@@ -36,6 +42,7 @@ up: ## Start all services (api, frontend, prometheus, grafana, loki, promtail)
 	@echo "  API docs  → http://localhost:8000/docs"
 	@echo "  Grafana   → http://localhost:3001  (admin / cinematch)"
 	@echo "  Prometheus→ http://localhost:9090"
+	@echo "  Loki      → http://localhost:3100"
 
 down: ## Stop and remove all containers
 	$(COMPOSE) down
@@ -67,7 +74,7 @@ logs-frontend: ## Tail frontend (nginx) logs only
 	$(COMPOSE) logs -f --tail=50 frontend
 
 logs-monitor: ## Tail Prometheus + Grafana + Loki logs
-	$(COMPOSE) logs -f --tail=30 prometheus grafana loki promtail
+	$(COMPOSE) logs -f --tail=30 prometheus grafana loki
 
 # ── Shells ────────────────────────────────────────────────────────────────────
 
