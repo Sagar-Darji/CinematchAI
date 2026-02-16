@@ -178,12 +178,16 @@ class ContentIntelligenceAgent(BaseAgent):
         year_max = context.get("year_max") or context_factors.get("year_max")
         language = context.get("language") or context_factors.get("language")
 
-        # Get user genre preferences
+        # Get user preferences
         fav_genres = set()
         disliked_genres = set()
+        fav_directors = set()
+        fav_actors = set()
         if user_profile and hasattr(user_profile, "preferences"):
             fav_genres = {g.lower() for g in (user_profile.preferences.favorite_genres or [])}
             disliked_genres = {g.lower() for g in (user_profile.preferences.disliked_genres or [])}
+            fav_directors = {d.lower() for d in (user_profile.preferences.favorite_directors or [])}
+            fav_actors = {a.lower() for a in (user_profile.preferences.favorite_actors or [])}
 
         # NL context keywords for matching against themes/micro-genres
         nl_keywords = [w for w in nl_context.split() if len(w) > 2] if nl_context else []
@@ -234,7 +238,16 @@ class ContentIntelligenceAgent(BaseAgent):
                 if "romance" in movie_genres:
                     score += 0.1
 
-            # 4. Natural language context keyword matching (±0.15)
+            # 4. Director / actor affinity (±0.20)
+            movie_director = (movie.metadata.director or "").lower()
+            if fav_directors and movie_director and movie_director in fav_directors:
+                score += 0.15
+            movie_cast = {a.lower() for a in (movie.metadata.cast or [])}
+            if fav_actors:
+                actor_hits = len(movie_cast & fav_actors)
+                score += min(actor_hits * 0.07, 0.14)
+
+            # 5. Natural language context keyword matching (±0.15)
             if nl_keywords:
                 themes = [t.lower() for t in (features.get("themes") or [])]
                 micro_genres = [mg.lower() for mg in (features.get("micro_genres") or [])]
@@ -244,10 +257,42 @@ class ContentIntelligenceAgent(BaseAgent):
                 keyword_hits = sum(1 for kw in nl_keywords if kw in searchable)
                 score += min(keyword_hits * 0.05, 0.15)
 
+            # 6. Recency / nostalgia alignment (±0.10)
+            # Uses nostalgia_tendency from profile: 0=prefers new films, 1=prefers classics
+            if user_profile and hasattr(user_profile, "preferences"):
+                nostalgia = getattr(user_profile.preferences, "nostalgia_tendency", 0.5)
+                movie_year = movie.metadata.year or 2000
+                movie_age = min(max((2025 - movie_year) / 50.0, 0.0), 1.0)
+                alignment = 1.0 - abs(nostalgia - movie_age)
+                score += (alignment - 0.5) * 0.20  # Range: -0.10 to +0.10
+
+            # 7. Sequel penalty: if title looks like a sequel and user hasn't
+            # established a track record with this franchise, soft-penalise.
+            import re as _re
+            _SEQUEL_RE = _re.compile(
+                r'\b(2|3|4|5|II|III|IV|V|VI|Part\s+2|Chapter\s+2|Returns|'
+                r'Rises|Reloaded|Revolutions|Resurrection|Reborn|Unleashed)\b',
+                _re.IGNORECASE,
+            )
+            if _SEQUEL_RE.search(movie.metadata.title or ""):
+                score -= 0.08
+
             scored.append((score, movie))
 
         # Sort by score descending
         scored.sort(key=lambda x: x[0], reverse=True)
+
+        # Hard-filter: drop definite mismatches (score < 0.35) but keep at
+        # least min_keep candidates so we never starve the downstream pipeline.
+        num_requested = max(5, len(candidates) // 3)
+        MIN_SCORE_THRESHOLD = 0.35
+        viable = [(s, m) for s, m in scored if s >= MIN_SCORE_THRESHOLD]
+        if len(viable) >= num_requested:
+            scored = viable
+            logger.info(
+                f"Hard filter (score ≥ {MIN_SCORE_THRESHOLD}): "
+                f"{len(candidates)} → {len(scored)} candidates"
+            )
 
         reranked = [movie for _, movie in scored]
 

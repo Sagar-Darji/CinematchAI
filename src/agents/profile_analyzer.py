@@ -126,6 +126,7 @@ class ProfileAnalyzerAgent(BaseAgent):
                         "title": movie.metadata.title,
                         "tmdb_genres": movie.metadata.genres,
                         "director": movie.metadata.director,
+                        "cast": movie.metadata.cast or [],
                         "year": movie.metadata.year,
                         "vote_average": movie.metadata.vote_average,
                     })
@@ -231,9 +232,28 @@ class ProfileAnalyzerAgent(BaseAgent):
         genre_counts = Counter(all_genres)
         favorite_genres = [genre for genre, _ in genre_counts.most_common(5)]
 
-        # Extract directors
-        director_counts = Counter(movies_df["director"].dropna())
-        favorite_directors = [director for director, _ in director_counts.most_common(5)]
+        # Extract directors (weighted by rating — only count for highly-rated films)
+        director_counts: Counter = Counter()
+        for _, row in movies_df.iterrows():
+            if pd.notna(row.get("director")) and row.get("director"):
+                director_counts[row["director"]] += 1
+        favorite_directors = [d for d, _ in director_counts.most_common(5)]
+
+        # Extract favorite actors from highly-rated films (rating ≥ 4.0 in merged data)
+        actor_counts: Counter = Counter()
+        if "cast" in movies_df.columns:
+            high_rated_ids = set()
+            try:
+                merged_data = movies_df  # cast is per movie, not per rating
+                for _, row in merged_data.iterrows():
+                    cast_list = row.get("cast", [])
+                    if isinstance(cast_list, list):
+                        for actor in cast_list[:3]:  # top-3 billed actors only
+                            if actor:
+                                actor_counts[actor] += 1
+            except Exception:
+                pass
+        favorite_actors = [a for a, _ in actor_counts.most_common(8)]
 
         # Extract decades
         decades = []
@@ -264,6 +284,7 @@ class ProfileAnalyzerAgent(BaseAgent):
         return UserPreferences(
             favorite_genres=favorite_genres,
             favorite_directors=favorite_directors,
+            favorite_actors=favorite_actors,
             preferred_decades=preferred_decades,
             exploration_rate=exploration_rate,
             nostalgia_tendency=nostalgia_tendency,

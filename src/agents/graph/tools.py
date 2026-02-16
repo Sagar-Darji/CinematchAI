@@ -76,7 +76,27 @@ def retrieve_candidates_hybrid(
     merged = _merge_candidates(db_candidates, tmdb_candidates, k)
     logger.info(f"Merged: {len(merged)} unique candidates")
 
-    # 5. Background: index new TMDB movies (fire-and-forget)
+    # 5. Exclude movies the user has already rated — showing them again
+    # makes recommendations feel broken regardless of algorithm quality.
+    user_id = state.get("user_id", "")
+    if user_id and user_profile and not getattr(user_profile, "is_cold_start", True):
+        try:
+            from src.services.user_service import get_user_service
+            _ratings = get_user_service().get_user_ratings(user_id)
+            rated_ids = {str(r["movie_id"]) for r in _ratings}
+            if rated_ids:
+                filtered = [m for m in merged if str(m.metadata.tmdb_id) not in rated_ids]
+                # Only apply filter if we still have enough candidates
+                if len(filtered) >= max(5, k // 3):
+                    logger.info(
+                        f"Already-seen filter: {len(merged) - len(filtered)} removed, "
+                        f"{len(filtered)} remain"
+                    )
+                    merged = filtered
+        except Exception as _e:
+            logger.warning(f"Already-seen exclusion failed (non-critical): {_e}")
+
+    # 6. Background: index new TMDB movies (fire-and-forget)
     if tmdb_candidates:
         _background_index_new_movies(tmdb_candidates)
 
