@@ -177,6 +177,9 @@ class UserService:
         conn.commit()
         conn.close()
 
+        # Invalidate CF matrix cache so the next request uses updated ratings
+        UserService._cf_matrix_cache.clear()
+
         logger.info(f"Added rating: user={user_id}, movie={movie_id}, rating={rating}")
 
     def record_feedback(

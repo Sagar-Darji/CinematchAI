@@ -20,6 +20,10 @@ logger = get_logger(__name__)
 class ProfileAnalyzerAgent(BaseAgent):
     """Agent that analyzes user viewing history and builds psychological profiles."""
 
+    # Cache keyed by (user_id, rating_count) so any new rating busts the entry.
+    # Value: UserProfile object.  No explicit invalidation needed.
+    _profile_cache: Dict[str, Any] = {}  # (user_id, rating_count) -> UserProfile
+
     def __init__(self):
         """Initialize Profile Analyzer agent."""
         super().__init__(
@@ -46,7 +50,7 @@ class ProfileAnalyzerAgent(BaseAgent):
             state["errors"] = state.get("errors", []) + ["No user_id provided"]
             return state
 
-        # Load user data
+        # Load user data (cheap: just DB query for rating count + rows)
         user_data = self._load_user_data(user_id)
 
         if not user_data or user_data["total_ratings"] == 0:
@@ -54,9 +58,26 @@ class ProfileAnalyzerAgent(BaseAgent):
             self.log_processing(f"Cold-start user: {user_id}")
             user_profile = self._create_cold_start_profile(user_id)
         else:
-            # Build full profile
-            self.log_processing(f"Building profile for user {user_id} ({user_data['total_ratings']} ratings)")
+            # Check cache: key = (user_id, rating_count) so any new rating auto-busts
+            cache_key = (user_id, user_data["total_ratings"])
+            cached = ProfileAnalyzerAgent._profile_cache.get(cache_key)
+            if cached is not None:
+                self.log_processing(
+                    f"Profile cache hit for {user_id} ({user_data['total_ratings']} ratings)"
+                )
+                state["user_profile"] = cached
+                state["processing_steps"] = state.get("processing_steps", []) + [
+                    f"Profile Analyzer: Analyzed user {user_id}"
+                ]
+                return state
+
+            # Build full profile (may fetch embeddings, batch TMDB, etc.)
+            self.log_processing(
+                f"Building profile for user {user_id} ({user_data['total_ratings']} ratings)"
+            )
             user_profile = self._build_profile(user_id, user_data)
+            # Store in cache for subsequent requests in the same session
+            ProfileAnalyzerAgent._profile_cache[cache_key] = user_profile
 
         # Update state
         state["user_profile"] = user_profile
