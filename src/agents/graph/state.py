@@ -32,6 +32,9 @@ class RecommendationState(TypedDict, total=False):
     diverse_candidates: List[Movie]
     exploration_items: List[Movie]
 
+    # Critic verdicts (Adversarial Critic output)
+    critic_verdicts: Dict[str, str]  # movie_id -> "pass" | "flagged:reason"
+
     # Explanations (Explanation Agent output)
     explanations: Dict[str, str]  # movie_id -> explanation
 

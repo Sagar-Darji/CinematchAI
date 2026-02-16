@@ -82,6 +82,7 @@ class SupervisorAgent(BaseAgent):
         "context_aware",
         "retrieval",
         "serendipity",
+        "critic",
         "explanation",
         "group_recommendation",
         "end",
@@ -133,6 +134,10 @@ class SupervisorAgent(BaseAgent):
         # Serendipity
         if not state.get("diverse_candidates"):
             return "serendipity"
+
+        # Adversarial Critic (after serendipity, before explanation)
+        if not any("Adversarial Critic" in step for step in processing_steps):
+            return "critic"
 
         # Explanation (final step)
         if not state.get("explanations"):

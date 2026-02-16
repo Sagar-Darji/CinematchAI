@@ -7,6 +7,7 @@ from langgraph.graph import END, StateGraph
 
 from src.agents.context_aware import get_context_aware_agent
 from src.agents.content_intelligence import get_content_intelligence_agent
+from src.agents.critic import get_critic_agent
 from src.agents.explanation import get_explanation_agent
 from src.agents.graph.state import RecommendationState
 from src.agents.graph.tools import retrieve_candidates_hybrid
@@ -26,6 +27,7 @@ _profile_analyzer = None
 _content_intelligence = None
 _context_aware = None
 _serendipity = None
+_critic = None
 _explanation = None
 _group_recommendation = None
 
@@ -33,7 +35,7 @@ _group_recommendation = None
 def get_agents():
     """Get all agent instances (lazy initialization)."""
     global _supervisor, _profile_analyzer, _content_intelligence
-    global _context_aware, _serendipity, _explanation, _group_recommendation
+    global _context_aware, _serendipity, _critic, _explanation, _group_recommendation
 
     if _supervisor is None:
         logger.info("Initializing all agents...")
@@ -42,6 +44,7 @@ def get_agents():
         _content_intelligence = get_content_intelligence_agent()
         _context_aware = get_context_aware_agent()
         _serendipity = get_serendipity_agent()
+        _critic = get_critic_agent()
         _explanation = get_explanation_agent()
         _group_recommendation = get_group_recommendation_agent()
         logger.info("All agents initialized")
@@ -52,6 +55,7 @@ def get_agents():
         "content_intelligence": _content_intelligence,
         "context_aware": _context_aware,
         "serendipity": _serendipity,
+        "critic": _critic,
         "explanation": _explanation,
         "group_recommendation": _group_recommendation,
     }
@@ -153,6 +157,20 @@ def serendipity_node(state: RecommendationState) -> RecommendationState:
     details = {"diverse_count": diverse_count, "exploration_count": exploration_count}
     summary = f"Selected {diverse_count} diverse candidates, {exploration_count} exploration items"
     _add_trace_step(result, "Serendipity", start, summary, details)
+    return result
+
+
+def critic_node(state: RecommendationState) -> RecommendationState:
+    """Adversarial Critic node — validates and stress-tests top candidates."""
+    start = time.time()
+    agents = get_agents()
+    result = agents["critic"].process(state)
+
+    verdicts = result.get("critic_verdicts", {})
+    demoted = sum(1 for v in verdicts.values() if v.startswith("flagged"))
+    details = {"total_checked": len(verdicts), "demoted": demoted}
+    summary = f"Checked {len(verdicts)} candidates, demoted {demoted}"
+    _add_trace_step(result, "Adversarial Critic", start, summary, details)
     return result
 
 
@@ -263,6 +281,7 @@ def build_recommendation_workflow() -> StateGraph:
     workflow.add_node("context_aware", context_aware_node)
     workflow.add_node("retrieval", retrieval_node)
     workflow.add_node("serendipity", serendipity_node)
+    workflow.add_node("critic", critic_node)
     workflow.add_node("explanation", explanation_node)
     workflow.add_node("group_recommendation", group_recommendation_node)
     workflow.add_node("aggregation", aggregation_node)
@@ -280,6 +299,7 @@ def build_recommendation_workflow() -> StateGraph:
             "context_aware": "context_aware",
             "retrieval": "retrieval",
             "serendipity": "serendipity",
+            "critic": "critic",
             "explanation": "explanation",
             "group_recommendation": "group_recommendation",
             "end": "aggregation",
@@ -292,6 +312,7 @@ def build_recommendation_workflow() -> StateGraph:
     workflow.add_edge("context_aware", "supervisor")
     workflow.add_edge("retrieval", "supervisor")
     workflow.add_edge("serendipity", "supervisor")
+    workflow.add_edge("critic", "supervisor")
     workflow.add_edge("explanation", "supervisor")
     workflow.add_edge("group_recommendation", "supervisor")
 
