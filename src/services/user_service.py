@@ -3,7 +3,7 @@
 import json
 import sqlite3
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -178,6 +178,58 @@ class UserService:
         conn.close()
 
         logger.info(f"Added rating: user={user_id}, movie={movie_id}, rating={rating}")
+
+    def record_feedback(
+        self,
+        user_id: str,
+        movie_id: str,
+        action: str,
+    ) -> None:
+        """Record implicit feedback from a recommendation interaction.
+
+        Converts actions into implicit ratings stored in the ratings table.
+        Only stores a rating if the user hasn't explicitly rated this movie
+        already — explicit ratings always win.
+
+        Args:
+            user_id:  User ID.
+            movie_id: TMDB movie ID.
+            action:   One of "clicked", "watched", "dismissed".
+        """
+        IMPLICIT_RATING = {"watched": 4.0, "clicked": 3.5, "dismissed": 1.5}
+        if action not in IMPLICIT_RATING:
+            return
+
+        implicit = IMPLICIT_RATING[action]
+        conn = sqlite3.connect(str(self.db_path))
+        cursor = conn.cursor()
+
+        # Only insert if no explicit rating exists (explicit > implicit)
+        cursor.execute(
+            "SELECT rating FROM ratings WHERE user_id=? AND movie_id=?",
+            (user_id, movie_id),
+        )
+        existing = cursor.fetchone()
+
+        if existing is None:
+            now = datetime.now(timezone.utc).isoformat()
+            cursor.execute(
+                """
+                INSERT INTO ratings (user_id, movie_id, rating, watched, timestamp)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (user_id, movie_id, implicit, action == "watched", now),
+            )
+            conn.commit()
+            logger.info(
+                f"Feedback recorded: user={user_id}, movie={movie_id}, "
+                f"action={action}, implicit_rating={implicit}"
+            )
+        conn.close()
+
+        # Invalidate the CF matrix cache so the next recommendation request
+        # benefits from this new signal immediately.
+        UserService._cf_matrix_cache.clear()
 
     def get_user_ratings(self, user_id: str) -> List[Dict]:
         """

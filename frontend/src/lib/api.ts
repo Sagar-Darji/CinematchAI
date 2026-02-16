@@ -181,3 +181,23 @@ export async function submitFeedback(userId: string, movieId: number, rating: nu
     body: JSON.stringify({ user_id: userId, movie_id: String(movieId), rating }),
   })
 }
+
+/** Record an implicit interaction signal (fire-and-forget). */
+export function recordInteraction(
+  userId: string,
+  movieId: number,
+  action: 'clicked' | 'watched' | 'dismissed',
+): void {
+  if (!userId || !movieId) return
+  const params = new URLSearchParams({
+    user_id: userId,
+    movie_id: String(movieId),
+    action,
+  })
+  // Use sendBeacon for dismissals so it survives tab close; fetch for others.
+  if (action === 'dismissed' && navigator.sendBeacon) {
+    navigator.sendBeacon(`${BASE}/users/interaction?${params}`)
+  } else {
+    fetch(`${BASE}/users/interaction?${params}`, { method: 'POST' }).catch(() => {})
+  }
+}

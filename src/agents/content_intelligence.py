@@ -31,16 +31,26 @@ class ContentIntelligenceAgent(BaseAgent):
             use_fast_model=False,  # Use main model for better analysis
         )
 
-    # Mood-to-tone mapping: which tones fit which moods
+    # Mood-to-tone mapping: which tones fit which moods (16 moods)
     MOOD_TONE_AFFINITY = {
-        "happy": {"light": 1.0, "whimsical": 0.8, "balanced": 0.4, "intense": 0.2, "serious": 0.1, "dark": 0.0},
-        "sad": {"serious": 0.8, "balanced": 0.6, "light": 0.5, "whimsical": 0.4, "dark": 0.3, "intense": 0.2},
-        "stressed": {"light": 0.9, "whimsical": 0.8, "balanced": 0.5, "serious": 0.2, "intense": 0.0, "dark": 0.0},
-        "bored": {"intense": 0.9, "dark": 0.7, "balanced": 0.5, "serious": 0.4, "light": 0.3, "whimsical": 0.3},
-        "thoughtful": {"serious": 0.9, "dark": 0.7, "balanced": 0.6, "intense": 0.4, "light": 0.2, "whimsical": 0.2},
-        "energetic": {"intense": 0.9, "light": 0.6, "balanced": 0.5, "dark": 0.4, "whimsical": 0.3, "serious": 0.2},
-        "nostalgic": {"balanced": 0.8, "light": 0.7, "serious": 0.6, "whimsical": 0.6, "dark": 0.3, "intense": 0.3},
+        # ── Original 8 ───────────────────────────────────────────────────────
+        "happy":       {"light": 1.0, "whimsical": 0.8, "balanced": 0.4, "intense": 0.2, "serious": 0.1, "dark": 0.0},
+        "sad":         {"serious": 0.8, "balanced": 0.6, "light": 0.5, "whimsical": 0.4, "dark": 0.3, "intense": 0.2},
+        "stressed":    {"light": 0.9, "whimsical": 0.8, "balanced": 0.5, "serious": 0.2, "intense": 0.0, "dark": 0.0},
+        "bored":       {"intense": 0.9, "dark": 0.7, "balanced": 0.5, "serious": 0.4, "light": 0.3, "whimsical": 0.3},
+        "thoughtful":  {"serious": 0.9, "dark": 0.7, "balanced": 0.6, "intense": 0.4, "light": 0.2, "whimsical": 0.2},
+        "energetic":   {"intense": 0.9, "light": 0.6, "balanced": 0.5, "dark": 0.4, "whimsical": 0.3, "serious": 0.2},
+        "nostalgic":   {"balanced": 0.8, "light": 0.7, "serious": 0.6, "whimsical": 0.6, "dark": 0.3, "intense": 0.3},
         "adventurous": {"intense": 0.8, "balanced": 0.7, "dark": 0.6, "whimsical": 0.5, "light": 0.4, "serious": 0.3},
+        # ── New 8 ────────────────────────────────────────────────────────────
+        "romantic":    {"light": 0.9, "balanced": 0.6, "whimsical": 0.4, "serious": 0.5, "dark": 0.1, "intense": 0.1},
+        "anxious":     {"light": 0.8, "whimsical": 0.7, "balanced": 0.4, "serious": 0.2, "intense": 0.0, "dark": 0.0},
+        "excited":     {"intense": 0.9, "light": 0.7, "balanced": 0.5, "whimsical": 0.4, "dark": 0.3, "serious": 0.2},
+        "lonely":      {"serious": 0.7, "light": 0.6, "balanced": 0.6, "dark": 0.4, "whimsical": 0.3, "intense": 0.2},
+        "inspired":    {"serious": 0.9, "intense": 0.6, "balanced": 0.5, "dark": 0.3, "light": 0.2, "whimsical": 0.2},
+        "curious":     {"serious": 0.8, "dark": 0.5, "balanced": 0.6, "intense": 0.4, "light": 0.3, "whimsical": 0.3},
+        "relaxed":     {"light": 0.8, "balanced": 0.7, "whimsical": 0.6, "serious": 0.3, "dark": 0.1, "intense": 0.0},
+        "melancholic": {"dark": 0.6, "serious": 0.8, "balanced": 0.5, "light": 0.3, "intense": 0.3, "whimsical": 0.1},
     }
 
     # Genres that are NOT family-friendly

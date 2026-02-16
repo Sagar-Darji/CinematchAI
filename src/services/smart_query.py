@@ -32,14 +32,24 @@ TMDB_GENRE_IDS = {
 GENRE_ID_TO_NAME = {v: k for k, v in TMDB_GENRE_IDS.items()}
 
 MOOD_GENRE_MAP = {
-    "happy": [35, 10751, 16],       # Comedy, Family, Animation
-    "sad": [18, 10749],              # Drama, Romance
-    "stressed": [35, 16, 10402],     # Comedy, Animation, Music
-    "bored": [28, 878, 53],          # Action, Sci-Fi, Thriller
-    "thoughtful": [18, 9648, 36],    # Drama, Mystery, History
-    "energetic": [28, 12, 878],      # Action, Adventure, Sci-Fi
-    "nostalgic": [18, 10749, 35],    # Drama, Romance, Comedy
-    "adventurous": [12, 14, 878],    # Adventure, Fantasy, Sci-Fi
+    # ── Original 8 ───────────────────────────────────────────────────────────
+    "happy":       [35, 10751, 16],      # Comedy, Family, Animation
+    "sad":         [18, 10749],          # Drama, Romance
+    "stressed":    [35, 16, 10402],      # Comedy, Animation, Music
+    "bored":       [28, 878, 53],        # Action, Sci-Fi, Thriller
+    "thoughtful":  [18, 9648, 36],       # Drama, Mystery, History
+    "energetic":   [28, 12, 878],        # Action, Adventure, Sci-Fi
+    "nostalgic":   [18, 10749, 35],      # Drama, Romance, Comedy
+    "adventurous": [12, 14, 878],        # Adventure, Fantasy, Sci-Fi
+    # ── New 8 ────────────────────────────────────────────────────────────────
+    "romantic":    [10749, 18, 35],      # Romance, Drama, Comedy
+    "anxious":     [35, 16, 10751],      # Comedy, Animation, Family (escapism)
+    "excited":     [28, 12, 878],        # Action, Adventure, Sci-Fi
+    "lonely":      [18, 10749, 35],      # Drama, Romance, Comedy
+    "inspired":    [36, 99, 10402],      # History, Documentary, Music
+    "curious":     [9648, 99, 878],      # Mystery, Documentary, Sci-Fi
+    "relaxed":     [10402, 16, 35],      # Music, Animation, Comedy
+    "melancholic": [18, 10749, 9648],    # Drama, Romance, Mystery
 }
 
 ALL_GENRE_IDS = list(TMDB_GENRE_IDS.values())

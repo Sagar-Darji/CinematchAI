@@ -130,6 +130,32 @@ async def submit_feedback(request: FeedbackRequest):
         )
 
 
+@router.post(
+    "/interaction",
+    status_code=status.HTTP_204_NO_CONTENT,
+    responses={400: {"model": ErrorResponse}},
+)
+async def record_interaction(
+    user_id: str,
+    movie_id: str,
+    action: str,
+):
+    """Record an implicit interaction signal (clicked / watched / dismissed).
+
+    Stores a low-weight implicit rating if the user hasn't explicitly rated
+    the movie, feeding the collaborative filtering and profile signals.
+    """
+    if action not in ("clicked", "watched", "dismissed"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="action must be one of: clicked, watched, dismissed",
+        )
+    try:
+        get_user_service().record_feedback(user_id=user_id, movie_id=movie_id, action=action)
+    except Exception as e:
+        logger.warning(f"Interaction record failed (non-critical): {e}")
+
+
 @router.get(
     "/onboarding-movies",
     status_code=status.HTTP_200_OK,

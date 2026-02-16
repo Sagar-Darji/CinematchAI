@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { Star, Calendar, Clock, PlayCircle, X, ThumbsUp, ThumbsDown } from 'lucide-react'
 import type { Movie, Recommendation } from '@/lib/api'
 import { tmdbPoster, scoreColor, formatRuntime, cn } from '@/lib/utils'
-import { submitFeedback } from '@/lib/api'
+import { submitFeedback, recordInteraction } from '@/lib/api'
 import { useUserStore } from '@/store/useUserStore'
 
 interface MovieCardProps {
@@ -44,6 +44,8 @@ function MovieModal({ rec, onClose }: ModalProps) {
     if (!userId || !tmdbId) return
     setRated(v)
     await submitFeedback(userId, tmdbId, v === 'up' ? 5.0 : 1.0)
+    // Also record as dismissal signal for the feedback loop
+    recordInteraction(userId, tmdbId, v === 'up' ? 'watched' : 'dismissed')
   }
 
   return (
@@ -160,7 +162,10 @@ function MovieModal({ rec, onClose }: ModalProps) {
           {/* Watch Now */}
           {tmdbId && (
             <div>
-              <button onClick={() => setShowPlayer((v) => !v)}
+              <button onClick={() => {
+                setShowPlayer((v) => !v)
+                if (!showPlayer) recordInteraction(userId, tmdbId, 'clicked')
+              }}
                 className="flex items-center gap-2 text-sm font-bold"
                 style={{ color: 'var(--accent-gold)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>
                 <PlayCircle size={16} /> {showPlayer ? 'Hide Player' : 'Watch Now'}
