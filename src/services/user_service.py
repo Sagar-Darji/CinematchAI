@@ -2,9 +2,10 @@
 
 import json
 import sqlite3
+import time
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -319,6 +320,112 @@ class UserService:
         count = cursor.fetchone()[0]
         conn.close()
         return count
+
+    # ── Collaborative Filtering ───────────────────────────────────────────────
+
+    # In-memory cache for the full ratings matrix (avoid repeated DB scans).
+    _cf_matrix_cache: Dict = {}
+    _CF_CACHE_TTL = 1800  # 30 minutes
+
+    def get_all_ratings_matrix(self) -> Dict[str, Dict[str, float]]:
+        """Return {user_id: {movie_id: rating}} for all users.
+
+        Cached in memory for 30 minutes to avoid per-request DB scans.
+        """
+        now = time.time()
+        cache = UserService._cf_matrix_cache
+        if cache and (now - cache.get("loaded_at", 0)) < self._CF_CACHE_TTL:
+            return cache["matrix"]
+
+        conn = sqlite3.connect(str(self.db_path))
+        cursor = conn.cursor()
+        cursor.execute("SELECT user_id, movie_id, rating FROM ratings")
+        rows = cursor.fetchall()
+        conn.close()
+
+        matrix: Dict[str, Dict[str, float]] = {}
+        for uid, mid, rating in rows:
+            matrix.setdefault(uid, {})[str(mid)] = float(rating)
+
+        UserService._cf_matrix_cache = {"matrix": matrix, "loaded_at": now}
+        logger.info(f"CF matrix loaded: {len(matrix)} users, {len(rows)} ratings")
+        return matrix
+
+    def get_cf_candidates(
+        self,
+        user_id: str,
+        k: int = 15,
+        min_neighbors: int = 2,
+    ) -> List[Tuple[str, float]]:
+        """Return top-k (movie_id, cf_score) pairs via user-based CF.
+
+        Algorithm:
+        1. Load the full ratings matrix (cached).
+        2. Compute cosine similarity between the target user and every other user.
+        3. Gather movies rated highly (≥ 4.0) by the top-20 neighbors that the
+           target user has NOT yet rated.
+        4. Aggregate by weighted rating; return top-k.
+        """
+        matrix = self.get_all_ratings_matrix()
+        if user_id not in matrix or len(matrix) < 3:
+            return []
+
+        user_ratings = matrix[user_id]
+        rated_ids = set(user_ratings.keys())
+
+        # Build cosine similarity against all other users
+        user_vec = np.array(list(user_ratings.values()), dtype=float)
+        user_movies = list(user_ratings.keys())
+
+        neighbors: List[Tuple[str, float]] = []
+        for other_id, other_ratings in matrix.items():
+            if other_id == user_id:
+                continue
+            # Find movies rated by BOTH users
+            common = set(user_movies) & set(other_ratings.keys())
+            if len(common) < 2:
+                continue
+            u = np.array([user_ratings[m] for m in common])
+            v = np.array([other_ratings[m] for m in common])
+            norm = np.linalg.norm(u) * np.linalg.norm(v)
+            if norm < 1e-9:
+                continue
+            sim = float(np.dot(u, v) / norm)
+            if sim > 0.1:
+                neighbors.append((other_id, sim))
+
+        if not neighbors:
+            return []
+
+        neighbors.sort(key=lambda x: x[1], reverse=True)
+        top_neighbors = neighbors[:20]
+
+        # Aggregate scores: weighted sum of neighbor ratings for unseen movies
+        movie_scores: Dict[str, float] = {}
+        movie_weights: Dict[str, float] = {}
+        movie_neighbor_count: Dict[str, int] = {}
+
+        for neighbor_id, sim in top_neighbors:
+            for mid, rating in matrix[neighbor_id].items():
+                if mid in rated_ids or rating < 4.0:
+                    continue
+                movie_scores[mid] = movie_scores.get(mid, 0.0) + sim * rating
+                movie_weights[mid] = movie_weights.get(mid, 0.0) + abs(sim)
+                movie_neighbor_count[mid] = movie_neighbor_count.get(mid, 0) + 1
+
+        results: List[Tuple[str, float]] = []
+        for mid, score in movie_scores.items():
+            w = movie_weights[mid]
+            if w > 0 and movie_neighbor_count[mid] >= min_neighbors:
+                normalized = score / w  # weighted average rating (0–5 scale)
+                results.append((mid, min(normalized / 5.0, 1.0)))  # normalise to 0–1
+
+        results.sort(key=lambda x: x[1], reverse=True)
+        logger.info(
+            f"CF for {user_id}: {len(top_neighbors)} neighbors, "
+            f"{len(results)} candidate movies"
+        )
+        return results[:k]
 
 
 # Singleton instance

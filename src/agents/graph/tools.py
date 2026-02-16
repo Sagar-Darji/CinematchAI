@@ -72,8 +72,30 @@ def retrieve_candidates_hybrid(
         )
         logger.info(f"Smart TMDB: {len(tmdb_candidates)} candidates")
 
+    # 3b. Collaborative filtering candidates (25% of k, non-cold-start only)
+    cf_candidates: List[Tuple[float, Movie]] = []
+    cf_user_id = state.get("user_id", "")
+    if cf_user_id and has_embedding and getattr(user_profile, "total_ratings", 0) >= 10:
+        try:
+            from src.services.user_service import get_user_service
+            from src.services.movie_service import get_movie_service as _get_movie_svc
+            cf_k = max(int(k * 0.25), 5)
+            cf_pairs = get_user_service().get_cf_candidates(cf_user_id, k=cf_k)
+            if cf_pairs:
+                _movie_svc = _get_movie_svc()
+                for mid_str, cf_score in cf_pairs:
+                    try:
+                        movie = _movie_svc.get_movie_by_id(tmdb_id=int(mid_str))
+                        if movie:
+                            cf_candidates.append((cf_score, movie))
+                    except Exception:
+                        continue
+                logger.info(f"CF: {len(cf_candidates)} collaborative candidates")
+        except Exception as _cf_e:
+            logger.warning(f"CF retrieval failed (non-critical): {_cf_e}")
+
     # 4. Merge & deduplicate
-    merged = _merge_candidates(db_candidates, tmdb_candidates, k)
+    merged = _merge_candidates(db_candidates, tmdb_candidates, k, cf_candidates or None)
     logger.info(f"Merged: {len(merged)} unique candidates")
 
     # 5. Exclude movies the user has already rated — showing them again
@@ -401,22 +423,29 @@ def _merge_candidates(
     db_results: List[Tuple[float, Movie]],
     tmdb_results: List[Tuple[float, Movie]],
     k: int,
+    cf_results: Optional[List[Tuple[float, Movie]]] = None,
 ) -> List[Movie]:
-    """Merge two scored lists, deduplicate by tmdb_id, sort by globally-normalised score.
+    """Merge scored lists from all sources, deduplicate by tmdb_id, globally normalise.
 
-    Scores are normalised across BOTH sources together so a mediocre TMDB result
-    cannot rank above a good vector-DB result just because it happens to be the
-    best within the TMDB bucket.
+    CF candidates get a 0.85x weight multiplier so they participate in the same
+    normalisation but at a slightly lower priority than direct content signals.
+    Scores are normalised across ALL sources together so a mediocre TMDB result
+    cannot rank above a good vector-DB result just because it is the best within
+    its own bucket.
     """
     seen: set = set()
     raw: List[Tuple[float, Movie]] = []
 
-    for source_results in [db_results, tmdb_results]:
+    for source_results, weight in [
+        (db_results, 1.0),
+        (tmdb_results, 1.0),
+        (cf_results, 0.85),
+    ]:
         for score, movie in (source_results or []):
             tmdb_id = movie.metadata.tmdb_id
             if tmdb_id and tmdb_id not in seen:
                 seen.add(tmdb_id)
-                raw.append((score, movie))
+                raw.append((score * weight, movie))
 
     if not raw:
         return []
