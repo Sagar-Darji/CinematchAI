@@ -88,6 +88,13 @@ class ContentIntelligenceAgent(BaseAgent):
             candidate_movies, content_features, user_profile, context_factors, context
         )
 
+        # LLM reranking: single Groq call to reorder the top-20 candidates.
+        # Only runs for non-cold-start users with a Groq API key configured.
+        if self._should_llm_rerank(user_profile):
+            scored_movies = self._llm_rerank_top20(
+                scored_movies, user_profile, context_factors
+            )
+
         original_count = len(candidate_movies)
         state["candidate_movies"] = scored_movies
         state["processing_steps"] = state.get("processing_steps", []) + [
@@ -96,6 +103,87 @@ class ContentIntelligenceAgent(BaseAgent):
         ]
 
         return state
+
+    def _should_llm_rerank(self, user_profile) -> bool:
+        """Return True when a Groq-powered reranking pass is worthwhile."""
+        try:
+            settings = get_settings()
+            return (
+                bool(settings.groq_api_key)
+                and user_profile is not None
+                and not getattr(user_profile, "is_cold_start", True)
+                and getattr(user_profile, "total_ratings", 0) >= 5
+            )
+        except Exception:
+            return False
+
+    def _llm_rerank_top20(self, candidates: List, user_profile, context_factors: Dict) -> List:
+        """Rerank the top-20 candidates with a single batched Groq prompt.
+
+        Sends one call with all 20 movies; the LLM returns a score 0-10 per
+        movie.  Reranked list replaces the top-20; the rest are appended as-is.
+        Falls back silently to the original order on any error.
+        """
+        import re as _re
+
+        if not candidates or len(candidates) < 5:
+            return candidates
+
+        top = candidates[:20]
+        rest = candidates[20:]
+
+        # Compact profile summary
+        prefs = getattr(user_profile, "preferences", None)
+        fav_genres = ", ".join((prefs.favorite_genres or [])[:4]) if prefs else ""
+        fav_dirs = ", ".join((prefs.favorite_directors or [])[:2]) if prefs else ""
+        fav_langs = ", ".join((prefs.preferred_languages or [])[:2]) if prefs else ""
+        mood = context_factors.get("mood", "")
+        companion = context_factors.get("companion", "alone")
+
+        lines = []
+        for i, m in enumerate(top):
+            md = m.metadata
+            genres_str = ", ".join((md.genres or [])[:3])
+            lines.append(
+                f"{i}: \"{md.title}\" ({md.year or '?'}) "
+                f"[{genres_str}] dir:{md.director or '?'} "
+                f"lang:{md.original_language or '?'} "
+                f"rating:{md.vote_average or '?'}/10"
+            )
+
+        prompt = (
+            f"Rate each movie 0-10 for fit with this user.\n\n"
+            f"User: loves [{fav_genres}], directors [{fav_dirs}], "
+            f"preferred languages [{fav_langs}].\n"
+            f"Context: mood={mood or 'none'}, watching with={companion}.\n\n"
+            f"Movies:\n" + "\n".join(lines) +
+            "\n\nReply ONLY with lines like \"0:8.5\" (index:score). No text."
+        )
+
+        try:
+            response = self.generate_response(
+                prompt=prompt,
+                system_prompt="Score movies for recommendation fit. Output INDEX:SCORE pairs only.",
+                max_tokens=150,
+            )
+            scores: Dict[int, float] = {}
+            for line in response.strip().splitlines():
+                m = _re.match(r"(\d+)\s*[:=]\s*(\d+\.?\d*)", line.strip())
+                if m:
+                    idx, val = int(m.group(1)), float(m.group(2))
+                    if 0 <= idx < len(top):
+                        scores[idx] = val / 10.0
+
+            # Only reorder if LLM provided scores for ≥ half the candidates
+            if len(scores) >= len(top) // 2:
+                reordered = sorted(range(len(top)), key=lambda i: scores.get(i, 0.5), reverse=True)
+                logger.info(f"LLM reranking: scored {len(scores)}/{len(top)} candidates")
+                return [top[i] for i in reordered] + rest
+
+        except Exception as e:
+            logger.warning(f"LLM reranking failed (using heuristic order): {e}")
+
+        return candidates
 
     def _analyze_movie_content(self, movie) -> Dict[str, Any]:
         """
