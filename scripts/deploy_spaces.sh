@@ -77,7 +77,16 @@ echo "✅ Deploy commit: $COMMIT_MSG"
 # ── 7. Push to HuggingFace Spaces ────────────────────────────────────────────
 echo ""
 echo "🚀 Pushing to HuggingFace Spaces..."
-git push spaces spaces-deploy:main --force
+
+# Auth: uses HF_TOKEN env var or git credential helper.
+# Set your token once with:  export HF_TOKEN=hf_xxxxx
+# Or run:                    huggingface-cli login
+if [ -n "${HF_TOKEN:-}" ]; then
+  SPACES_URL="https://sagardarji:${HF_TOKEN}@huggingface.co/spaces/sagardarji/cinematch-ai"
+  git push "$SPACES_URL" spaces-deploy:main --force
+else
+  git push spaces spaces-deploy:main --force
+fi
 echo "✅ Pushed to spaces/main"
 
 # ── 8. Return to original branch ─────────────────────────────────────────────
