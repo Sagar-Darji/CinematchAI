@@ -3,9 +3,7 @@ title: CineMatch AI
 emoji: 🎬
 colorFrom: purple
 colorTo: blue
-sdk: streamlit
-sdk_version: 1.41.1
-app_file: app_hf.py
+sdk: docker
 pinned: false
 license: mit
 ---

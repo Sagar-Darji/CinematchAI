@@ -8,9 +8,9 @@ networks:
     driver: bridge
 
 # ── Named volumes ──────────────────────────────────────────────────────────────
+# vectordb and sqlite use bind mounts (./data/) so the local 9600-movie
+# ChromaDB and SQLite databases are used directly without copying.
 volumes:
-  vectordb_data:
-  sqlite_data:
   cache_data:
   prometheus_data:
   grafana_data:
@@ -33,8 +33,8 @@ services:
       DATABASE_URL: sqlite:////app/data/cinematch.db
       CACHE_DIR: /app/cache
     volumes:
-      - vectordb_data:/app/data/vectordb
-      - sqlite_data:/app/data
+      - ./data/vectordb:/app/data/vectordb
+      - ./data:/app/data
       - cache_data:/app/cache
     ports:
       - "8000:8000"
@@ -42,23 +42,19 @@ services:
       - app
       - monitoring
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health/"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
     # Loki Docker driver pushes logs directly to Loki over HTTP.
-    # Works on macOS + Linux without filesystem access to /var/lib/docker/containers.
-    # Run `make plugin` once to install the driver before `make up`.
+    # Run `docker plugin install grafana/loki-docker-driver:latest --alias loki --grant-all-permissions`
+    # once to enable Loki driver, then switch back to driver: loki.
     logging:
-      driver: loki
+      driver: json-file
       options:
-        loki-url: "http://localhost:3100/loki/api/v1/push"
-        loki-batch-size: "400"
-        loki-retries: "3"
-        loki-timeout: "2s"
-        labels: "app=cinematch-api,env=local"
-        keep-file: "true"           # also keep local json-file copy as fallback
+        max-size: "10m"
+        max-file: "3"
 
   # ── React frontend (nginx) ────────────────────────────────────────────────────
   frontend:
@@ -77,14 +73,10 @@ services:
       api:
         condition: service_healthy
     logging:
-      driver: loki
+      driver: json-file
       options:
-        loki-url: "http://localhost:3100/loki/api/v1/push"
-        loki-batch-size: "400"
-        loki-retries: "3"
-        loki-timeout: "2s"
-        labels: "app=cinematch-frontend,env=local"
-        keep-file: "true"
+        max-size: "10m"
+        max-file: "3"
 
   # ── Prometheus ─────────────────────────────────────────────────────────────
   prometheus:

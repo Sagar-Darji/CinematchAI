@@ -1,0 +1,79 @@
+# ── HuggingFace Spaces Dockerfile ────────────────────────────────────────────
+# Builds React frontend + FastAPI backend in a single container on port 7860.
+# Used by deploy_spaces.sh — NOT used for local docker-compose (which uses
+# the root Dockerfile for the API and frontend/Dockerfile for nginx).
+
+# ── Stage 1: Build React frontend ────────────────────────────────────────────
+FROM node:20-alpine AS frontend-builder
+
+WORKDIR /app/frontend
+
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci --legacy-peer-deps
+
+COPY frontend/ .
+
+# Empty VITE_API_URL = relative paths, so /api/... hits the same origin
+ARG VITE_API_URL=""
+ENV VITE_API_URL=$VITE_API_URL
+
+RUN npm run build
+
+# ── Stage 2: Build Python dependencies ───────────────────────────────────────
+FROM python:3.11-slim AS backend-builder
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+RUN pip install --upgrade pip && \
+    pip install --no-cache-dir --prefix=/install -r requirements.txt
+
+# ── Stage 3: Runtime ─────────────────────────────────────────────────────────
+FROM python:3.11-slim
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgomp1 \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Python packages
+COPY --from=backend-builder /install /usr/local
+
+# React build output → /app/static (served by FastAPI)
+COPY --from=frontend-builder /app/frontend/dist /app/static
+
+# Application source
+COPY config/ ./config/
+COPY src/    ./src/
+COPY setup.py pyproject.toml ./
+
+# Non-root user (HF Spaces requires uid 1000)
+RUN useradd -m -u 1000 cinematch
+RUN mkdir -p /app/data /app/cache /app/logs && \
+    chown -R cinematch:cinematch /app
+
+USER cinematch
+
+ENV PYTHONPATH=/app \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    HF_SPACES=1 \
+    LOG_FORMAT=json \
+    API_HOST=0.0.0.0 \
+    API_PORT=7860
+
+EXPOSE 7860
+
+HEALTHCHECK --interval=30s --timeout=15s --start-period=90s --retries=5 \
+  CMD curl -f http://localhost:7860/api/v1/health/ || exit 1
+
+CMD ["python", "-m", "uvicorn", "src.api.main:app", \
+     "--host", "0.0.0.0", "--port", "7860", \
+     "--workers", "1", "--log-level", "info"]

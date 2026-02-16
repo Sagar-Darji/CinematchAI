@@ -4,8 +4,10 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from prometheus_fastapi_instrumentator import Instrumentator
+from pathlib import Path
 import time
 import uuid
 
@@ -173,29 +175,54 @@ Instrumentator(
 ).instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
 
 
-# Root endpoint
-@app.get("/", tags=["root"])
-async def root():
-    """Root endpoint with API information."""
-    return {
-        "name": "CineMatch AI",
-        "version": "1.0.0",
-        "description": "Multi-Agent Movie Recommendation System",
-        "docs": "/docs",
-        "health": "/api/v1/health",
-        "endpoints": {
-            "recommendations": "/api/v1/recommendations",
-            "group_recommendations": "/api/v1/groups/recommendations",
-            "onboarding": "/api/v1/users/onboard",
-            "letterboxd_import": "/api/v1/users/import/letterboxd",
-            "feedback": "/api/v1/users/feedback",
-            "trending_movies": "/api/v1/movies/trending",
-            "popular_by_language": "/api/v1/movies/popular/{language}",
-            "recent_releases": "/api/v1/movies/recent",
-            "search_movies": "/api/v1/movies/search",
-            "movie_details": "/api/v1/movies/{tmdb_id}",
-        },
-    }
+# ── Static file serving (HuggingFace Spaces / self-hosted with bundled UI) ────
+# When /app/static/index.html exists (i.e. the React build was copied in by
+# Dockerfile.spaces), serve the SPA at "/" and let React Router handle routing.
+# All /api/* paths are already registered above and take priority.
+_static_dir = Path(__file__).parent.parent.parent / "static"
+_serve_spa = (_static_dir / "index.html").exists()
+
+if _serve_spa:
+    # Serve React app assets (JS/CSS chunks)
+    app.mount("/assets", StaticFiles(directory=_static_dir / "assets"), name="assets")
+
+    @app.get("/", include_in_schema=False)
+    async def spa_root():
+        return FileResponse(_static_dir / "index.html")
+
+    # SPA catch-all: any path that isn't an API route returns index.html so
+    # React Router can handle client-side navigation.
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def spa_catchall(full_path: str):
+        candidate = _static_dir / full_path
+        if candidate.is_file():
+            return FileResponse(candidate)
+        return FileResponse(_static_dir / "index.html")
+
+else:
+    # No bundled UI — serve API discovery JSON at root (local dev)
+    @app.get("/", tags=["root"])
+    async def root():
+        """Root endpoint with API information."""
+        return {
+            "name": "CineMatch AI",
+            "version": "1.0.0",
+            "description": "Multi-Agent Movie Recommendation System",
+            "docs": "/docs",
+            "health": "/api/v1/health",
+            "endpoints": {
+                "recommendations": "/api/v1/recommendations",
+                "group_recommendations": "/api/v1/groups/recommendations",
+                "onboarding": "/api/v1/users/onboard",
+                "letterboxd_import": "/api/v1/users/import/letterboxd",
+                "feedback": "/api/v1/users/feedback",
+                "trending_movies": "/api/v1/movies/trending",
+                "popular_by_language": "/api/v1/movies/popular/{language}",
+                "recent_releases": "/api/v1/movies/recent",
+                "search_movies": "/api/v1/movies/search",
+                "movie_details": "/api/v1/movies/{tmdb_id}",
+            },
+        }
 
 
 # Run with: uvicorn src.api.main:app --reload --host 0.0.0.0 --port 8000
