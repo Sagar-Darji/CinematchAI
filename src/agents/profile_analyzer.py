@@ -127,6 +127,7 @@ class ProfileAnalyzerAgent(BaseAgent):
                         "tmdb_genres": movie.metadata.genres,
                         "director": movie.metadata.director,
                         "cast": movie.metadata.cast or [],
+                        "original_language": movie.metadata.original_language,
                         "year": movie.metadata.year,
                         "vote_average": movie.metadata.vote_average,
                     })
@@ -232,6 +233,21 @@ class ProfileAnalyzerAgent(BaseAgent):
         genre_counts = Counter(all_genres)
         favorite_genres = [genre for genre, _ in genre_counts.most_common(5)]
 
+        # Extract preferred languages from rated films
+        lang_counts: Counter = Counter()
+        if "original_language" in movies_df.columns:
+            for lang in movies_df["original_language"].dropna():
+                if lang and isinstance(lang, str):
+                    lang_counts[lang] += 1
+        # Keep languages that appear in ≥5% of rated films (or top-3 if sparse)
+        total_movies = max(len(movies_df), 1)
+        preferred_languages = [
+            lang for lang, cnt in lang_counts.most_common(3)
+            if cnt / total_movies >= 0.05
+        ]
+        if not preferred_languages and lang_counts:
+            preferred_languages = [lang for lang, _ in lang_counts.most_common(2)]
+
         # Extract directors (weighted by rating — only count for highly-rated films)
         director_counts: Counter = Counter()
         for _, row in movies_df.iterrows():
@@ -285,6 +301,7 @@ class ProfileAnalyzerAgent(BaseAgent):
             favorite_genres=favorite_genres,
             favorite_directors=favorite_directors,
             favorite_actors=favorite_actors,
+            preferred_languages=preferred_languages,
             preferred_decades=preferred_decades,
             exploration_rate=exploration_rate,
             nostalgia_tendency=nostalgia_tendency,

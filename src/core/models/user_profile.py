@@ -31,6 +31,11 @@ class UserPreferences(BaseModel):
     favorite_directors: List[str] = Field(default_factory=list, description="Favorite directors")
     favorite_actors: List[str] = Field(default_factory=list, description="Favorite actors")
 
+    # Language preferences inferred from rating history (ISO 639-1 codes, e.g. "hi", "en")
+    preferred_languages: List[str] = Field(
+        default_factory=list, description="Languages of frequently-watched films"
+    )
+
     preferred_decades: List[int] = Field(default_factory=list, description="Preferred decades")
     preferred_runtime_range: Optional[tuple[int, int]] = Field(
         None, description="Preferred runtime range (min, max)"

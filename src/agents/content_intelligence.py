@@ -183,11 +183,13 @@ class ContentIntelligenceAgent(BaseAgent):
         disliked_genres = set()
         fav_directors = set()
         fav_actors = set()
+        preferred_languages: list = []
         if user_profile and hasattr(user_profile, "preferences"):
             fav_genres = {g.lower() for g in (user_profile.preferences.favorite_genres or [])}
             disliked_genres = {g.lower() for g in (user_profile.preferences.disliked_genres or [])}
             fav_directors = {d.lower() for d in (user_profile.preferences.favorite_directors or [])}
             fav_actors = {a.lower() for a in (user_profile.preferences.favorite_actors or [])}
+            preferred_languages = list(user_profile.preferences.preferred_languages or [])
 
         # NL context keywords for matching against themes/micro-genres
         nl_keywords = [w for w in nl_context.split() if len(w) > 2] if nl_context else []
@@ -247,7 +249,19 @@ class ContentIntelligenceAgent(BaseAgent):
                 actor_hits = len(movie_cast & fav_actors)
                 score += min(actor_hits * 0.07, 0.14)
 
-            # 5. Natural language context keyword matching (±0.15)
+            # 5. Language preference (±0.12)
+            # Only applies when no explicit language filter was set in context.
+            # Boost movies in languages the user watches frequently; penalise
+            # movies in languages they have never rated.
+            if preferred_languages and not language:
+                movie_lang = movie.metadata.original_language or ""
+                if movie_lang and movie_lang in preferred_languages:
+                    rank = preferred_languages.index(movie_lang)
+                    score += max(0.12 - rank * 0.04, 0.04)  # 1st lang +0.12, 2nd +0.08, 3rd +0.04
+                elif movie_lang and movie_lang not in preferred_languages:
+                    score -= 0.06  # Soft penalty for completely foreign-to-user languages
+
+            # 7. Natural language context keyword matching (±0.15)
             if nl_keywords:
                 themes = [t.lower() for t in (features.get("themes") or [])]
                 micro_genres = [mg.lower() for mg in (features.get("micro_genres") or [])]
@@ -257,7 +271,7 @@ class ContentIntelligenceAgent(BaseAgent):
                 keyword_hits = sum(1 for kw in nl_keywords if kw in searchable)
                 score += min(keyword_hits * 0.05, 0.15)
 
-            # 6. Recency / nostalgia alignment (±0.10)
+            # 8. Recency / nostalgia alignment (±0.10)
             # Uses nostalgia_tendency from profile: 0=prefers new films, 1=prefers classics
             if user_profile and hasattr(user_profile, "preferences"):
                 nostalgia = getattr(user_profile.preferences, "nostalgia_tendency", 0.5)
@@ -266,7 +280,7 @@ class ContentIntelligenceAgent(BaseAgent):
                 alignment = 1.0 - abs(nostalgia - movie_age)
                 score += (alignment - 0.5) * 0.20  # Range: -0.10 to +0.10
 
-            # 7. Sequel penalty: if title looks like a sequel and user hasn't
+            # 9. Sequel penalty: if title looks like a sequel and user hasn't
             # established a track record with this franchise, soft-penalise.
             import re as _re
             _SEQUEL_RE = _re.compile(
