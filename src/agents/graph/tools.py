@@ -286,8 +286,17 @@ def _smart_tmdb_search(
             scored = _embed_and_score_tmdb_candidates(all_movies, profile_embedding)
             result = scored[:k]
         else:
-            # No embedding — return in order with decreasing pseudo-scores
-            result = [(1.0 - i * 0.01, m) for i, m in enumerate(all_movies[:k])]
+            # No user embedding — rank by quality signal (vote_average × log popularity)
+            # rather than arbitrary API order.
+            import math as _math
+            def _quality_score(m) -> float:
+                va = float(m.metadata.vote_average or 5.0)
+                vc = float(getattr(m.metadata, "vote_count", None) or 100)
+                pop = float(getattr(m.metadata, "popularity", None) or 10.0)
+                return (va / 10.0) * 0.6 + min(_math.log1p(pop) / 10.0, 1.0) * 0.4
+
+            all_movies.sort(key=_quality_score, reverse=True)
+            result = [(_quality_score(m), m) for m in all_movies[:k]]
 
         # Track usage in background
         _background_track_usage(result)
@@ -373,29 +382,34 @@ def _merge_candidates(
     tmdb_results: List[Tuple[float, Movie]],
     k: int,
 ) -> List[Movie]:
-    """Merge two scored lists, deduplicate by tmdb_id, interleave by normalized score."""
+    """Merge two scored lists, deduplicate by tmdb_id, sort by globally-normalised score.
+
+    Scores are normalised across BOTH sources together so a mediocre TMDB result
+    cannot rank above a good vector-DB result just because it happens to be the
+    best within the TMDB bucket.
+    """
     seen: set = set()
-    all_scored: List[Tuple[float, Movie]] = []
+    raw: List[Tuple[float, Movie]] = []
 
-    # Normalize scores to 0-1 range within each source
     for source_results in [db_results, tmdb_results]:
-        if not source_results:
-            continue
-        scores = [s for s, _ in source_results]
-        max_s = max(scores) if scores else 1.0
-        min_s = min(scores) if scores else 0.0
-        rng = max_s - min_s if (max_s - min_s) > 0 else 1.0
-
-        for score, movie in source_results:
+        for score, movie in (source_results or []):
             tmdb_id = movie.metadata.tmdb_id
             if tmdb_id and tmdb_id not in seen:
                 seen.add(tmdb_id)
-                normalized = (score - min_s) / rng
-                all_scored.append((normalized, movie))
+                raw.append((score, movie))
 
-    # Sort by normalized score descending
-    all_scored.sort(key=lambda x: x[0], reverse=True)
-    return [movie for _, movie in all_scored[:k]]
+    if not raw:
+        return []
+
+    # Global min-max normalisation
+    all_scores = [s for s, _ in raw]
+    max_s = max(all_scores)
+    min_s = min(all_scores)
+    rng = max_s - min_s if (max_s - min_s) > 1e-6 else 1.0
+
+    normalised = [((s - min_s) / rng, m) for s, m in raw]
+    normalised.sort(key=lambda x: x[0], reverse=True)
+    return [movie for _, movie in normalised[:k]]
 
 
 # ---------------------------------------------------------------------------
@@ -613,19 +627,29 @@ def _build_chroma_filter(
     context_factors: Dict[str, Any],
     context: Dict[str, Any] = None,
 ) -> Optional[Dict[str, Any]]:
-    """Build Chroma filter from context factors and user context."""
+    """Build Chroma filter from context factors and user context.
+
+    Always applies a minimum quality gate (vote_average ≥ 5.5 with ≥ 20 votes)
+    unless the user explicitly opts in to low-rated content via risk_tolerance.
+    """
     conditions = []
 
     if context:
         language = context.get("language")
         if language:
-            conditions.append({"original_language": language})
+            conditions.append({"original_language": {"$eq": language}})
         year_min = context.get("year_min")
         year_max = context.get("year_max")
         if year_min:
             conditions.append({"year": {"$gte": int(year_min)}})
         if year_max:
             conditions.append({"year": {"$lte": int(year_max)}})
+
+    # Quality gate: skip obscure Z-grade content unless user has high risk_tolerance
+    risk_tolerance = (context_factors or {}).get("risk_tolerance", 0.3)
+    if risk_tolerance < 0.7:
+        conditions.append({"vote_average": {"$gte": 5.5}})
+        conditions.append({"vote_count": {"$gte": 20}})
 
     if len(conditions) == 1:
         return conditions[0]

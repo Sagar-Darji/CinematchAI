@@ -103,34 +103,32 @@ class ProfileAnalyzerAgent(BaseAgent):
 
             logger.info(f"Found {len(ratings)} ratings for user {user_id} in database")
 
+            # Batch fetch all movies in parallel (instead of 1-by-1)
+            movie_ids = [int(r["movie_id"]) for r in ratings]
+            movies_batch = movie_service.get_movies_batch(movie_ids, max_workers=8)
+            movie_lookup = {mid: movie for mid, movie in zip(movie_ids, movies_batch) if movie}
+
             # Convert to DataFrame for processing
             ratings_data = []
             movies_data = []
 
             for rating in ratings:
-                movie_id = rating["movie_id"]
-
-                # Get movie details from TMDB (on-demand)
-                try:
-                    movie = movie_service.get_movie_by_id(tmdb_id=int(movie_id))
-                    if movie:
-                        ratings_data.append({
-                            "movieId": int(movie_id),
-                            "rating": rating["rating"],
-                            "timestamp": pd.to_datetime(rating["timestamp"]),
-                        })
-
-                        movies_data.append({
-                            "movieId": int(movie_id),
-                            "title": movie.metadata.title,
-                            "tmdb_genres": movie.metadata.genres,
-                            "director": movie.metadata.director,
-                            "year": movie.metadata.year,
-                            "vote_average": movie.metadata.vote_average,
-                        })
-                except Exception as e:
-                    logger.warning(f"Failed to load movie {movie_id}: {e}")
-                    continue
+                movie_id = int(rating["movie_id"])
+                movie = movie_lookup.get(movie_id)
+                if movie:
+                    ratings_data.append({
+                        "movieId": movie_id,
+                        "rating": rating["rating"],
+                        "timestamp": pd.to_datetime(rating["timestamp"]),
+                    })
+                    movies_data.append({
+                        "movieId": movie_id,
+                        "title": movie.metadata.title,
+                        "tmdb_genres": movie.metadata.genres,
+                        "director": movie.metadata.director,
+                        "year": movie.metadata.year,
+                        "vote_average": movie.metadata.vote_average,
+                    })
 
             if not ratings_data:
                 logger.warning(f"No valid movies found for user {user_id}")
@@ -245,9 +243,10 @@ class ProfileAnalyzerAgent(BaseAgent):
         decade_counts = Counter(decades)
         preferred_decades = [decade for decade, _ in decade_counts.most_common(3)]
 
-        # Calculate exploration rate (variance in genres/years)
-        # Cap at 0.35 — never explore more than 35% of recommendations regardless of genre breadth
-        exploration_rate = min(len(genre_counts) / 20.0, 0.35)
+        # Calculate exploration rate based on genre diversity.
+        # Scale: 1 genre → 0.05, 10 genres → 0.25, 20+ genres → 0.50 (max).
+        # Cap at 0.50 so even very diverse users still get ≥50% relevant recs.
+        exploration_rate = min(len(genre_counts) / 20.0, 0.50)
 
         # Calculate nostalgia tendency (preference for older movies)
         current_year = datetime.now().year
@@ -430,8 +429,14 @@ class ProfileAnalyzerAgent(BaseAgent):
                 if movie.metadata.genres:
                     text += f" Genres: {', '.join(movie.metadata.genres)}"
 
-                # Temporal decay: weight = (rating/5) × exp(-0.01 × days_ago)
-                rating_weight = rating["rating"] / 5.0
+                # Temporal decay: half-life ≈ 350 days — old favourites still matter.
+                # Negative signal: ratings ≤ 2.5 get a small negative weight so the
+                # profile embedding is pushed *away* from disliked content.
+                raw_rating = rating["rating"]
+                if raw_rating <= 2.5:
+                    rating_weight = -0.3 * (1.0 - raw_rating / 5.0)
+                else:
+                    rating_weight = raw_rating / 5.0
                 ts = rating.get("timestamp")
                 days_ago = 0
                 if ts is not None:
@@ -442,7 +447,7 @@ class ProfileAnalyzerAgent(BaseAgent):
                         )
                     except Exception:
                         days_ago = 0
-                weights.append(rating_weight * math.exp(-0.01 * days_ago))
+                weights.append(rating_weight * math.exp(-0.002 * days_ago))
                 texts.append(text)
                 # Store poster URL for multimodal (TMDB CDN)
                 poster_path = movie.metadata.poster_path or ""
