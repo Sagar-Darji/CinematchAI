@@ -2,13 +2,15 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # deploy_spaces.sh — Deploy CinematchAI to HuggingFace Spaces
 #
+# Deploys the CURRENT working tree (including uncommitted changes) so you
+# don't need to commit to main before deploying.
+#
 # What it does:
 #   1. Builds the React frontend (dist/)
-#   2. Creates a temporary `spaces-deploy` branch from main
-#   3. On that branch: uses Dockerfile.spaces as Dockerfile and force-tracks
-#      the pre-built React dist as /static (normally git-ignored)
+#   2. Creates a temporary orphan `spaces-deploy` branch with ALL current files
+#   3. Adds Dockerfile.spaces as Dockerfile and pre-built React dist as /static
 #   4. Force-pushes spaces-deploy → spaces/main
-#   5. Switches back to main — nothing on main changes
+#   5. Switches back to original branch — nothing on main changes
 #
 # Usage:
 #   bash scripts/deploy_spaces.sh
@@ -33,6 +35,8 @@ if [ ! -f "Dockerfile.spaces" ]; then
   exit 1
 fi
 
+CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+
 # ── 1. Build React frontend ───────────────────────────────────────────────────
 echo ""
 echo "📦 Building React frontend..."
@@ -42,45 +46,71 @@ VITE_API_URL="" npm run build
 cd "$REPO_ROOT"
 echo "✅ React build complete ($(du -sh frontend/dist | cut -f1) output)"
 
-# ── 2. Stash any local changes on main ───────────────────────────────────────
+# ── 2. Create deploy snapshot ─────────────────────────────────────────────────
+# Use a temp directory to avoid touching the working tree
+echo ""
+echo "📸 Creating deploy snapshot from current working tree..."
+
+DEPLOY_DIR=$(mktemp -d)
+trap 'rm -rf "$DEPLOY_DIR"' EXIT
+
+# Copy all source files (respecting .gitignore via git ls-files + untracked)
+# First: all tracked files (including modified/uncommitted)
+git ls-files -z | xargs -0 -I{} sh -c 'mkdir -p "$1/$(dirname "$2")" && cp "$2" "$1/$2"' _ "$DEPLOY_DIR" {}
+
+# Also copy untracked source files that matter
+for dir in src config frontend/src frontend/public; do
+  if [ -d "$dir" ]; then
+    rsync -a --exclude='node_modules' --exclude='.git' "$dir/" "$DEPLOY_DIR/$dir/"
+  fi
+done
+
+# Copy key config files
+for f in setup.py pyproject.toml requirements.txt Dockerfile.spaces; do
+  [ -f "$f" ] && cp "$f" "$DEPLOY_DIR/$f"
+done
+
+# Add pre-built React files
+mkdir -p "$DEPLOY_DIR/static"
+cp -r frontend/dist/. "$DEPLOY_DIR/static/"
+
+# Use Dockerfile.spaces as the Dockerfile
+cp "$DEPLOY_DIR/Dockerfile.spaces" "$DEPLOY_DIR/Dockerfile" 2>/dev/null || true
+
+echo "✅ Snapshot ready ($(du -sh "$DEPLOY_DIR" | cut -f1))"
+
+# ── 3. Build deploy commit ─────────────────────────────────────────────────────
+echo ""
+echo "🌿 Creating spaces-deploy branch..."
+
+# Save current state
 STASHED=0
 if ! git diff --quiet || ! git diff --cached --quiet; then
-  echo ""
-  echo "📋 Stashing local changes..."
   git stash push -m "deploy_spaces: auto-stash"
   STASHED=1
 fi
 
-CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+# Create orphan branch (clean history — no bloat on HF)
+git checkout --orphan spaces-deploy 2>/dev/null || git checkout -B spaces-deploy
 
-# ── 3. Create spaces-deploy branch ───────────────────────────────────────────
-echo ""
-echo "🌿 Creating spaces-deploy branch from main..."
-git checkout -B spaces-deploy main
+# Remove everything from index
+git rm -rf --cached . > /dev/null 2>&1 || true
+git clean -fd > /dev/null 2>&1 || true
 
-# ── 4. Add pre-built React files ─────────────────────────────────────────────
-echo "📁 Adding built React files to static/..."
-rm -rf static
-mkdir -p static
-cp -r frontend/dist/. static/
-git add -f static/   # -f to override .gitignore
+# Copy deploy snapshot into working tree
+rsync -a "$DEPLOY_DIR/" .
 
-# ── 5. Replace Dockerfile with spaces version ─────────────────────────────────
-cp Dockerfile.spaces Dockerfile
-git add Dockerfile
+# Stage everything
+git add -A
 
-# ── 6. Commit ─────────────────────────────────────────────────────────────────
 COMMIT_MSG="deploy: CinematchAI React+FastAPI — $(date '+%Y-%m-%d %H:%M')"
-git commit -m "$COMMIT_MSG"
+git commit -m "$COMMIT_MSG" --allow-empty
 echo "✅ Deploy commit: $COMMIT_MSG"
 
-# ── 7. Push to HuggingFace Spaces ────────────────────────────────────────────
+# ── 4. Push to HuggingFace Spaces ────────────────────────────────────────────
 echo ""
 echo "🚀 Pushing to HuggingFace Spaces..."
 
-# Auth: uses HF_TOKEN env var or git credential helper.
-# Set your token once with:  export HF_TOKEN=hf_xxxxx
-# Or run:                    huggingface-cli login
 if [ -n "${HF_TOKEN:-}" ]; then
   SPACES_URL="https://sagardarji:${HF_TOKEN}@huggingface.co/spaces/sagardarji/cinematch-ai"
   git push "$SPACES_URL" spaces-deploy:main --force
@@ -89,7 +119,7 @@ else
 fi
 echo "✅ Pushed to spaces/main"
 
-# ── 8. Return to original branch ─────────────────────────────────────────────
+# ── 5. Return to original branch ─────────────────────────────────────────────
 git checkout "$CURRENT_BRANCH"
 if [ "$STASHED" -eq 1 ]; then
   git stash pop

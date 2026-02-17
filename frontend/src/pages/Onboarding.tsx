@@ -148,6 +148,18 @@ export default function Onboarding() {
             >
               Continue <ArrowRight size={18} />
             </button>
+            
+            {/* Login link */}
+            <p className="text-center text-sm mt-2" style={{ color: 'var(--text-muted)' }}>
+              Already have an account?{' '}
+              <a 
+                href="/login" 
+                className="font-medium hover:underline"
+                style={{ color: 'var(--accent-gold)' }}
+              >
+                Sign in
+              </a>
+            </p>
           </div>
         )}
 
@@ -244,7 +256,18 @@ export default function Onboarding() {
                         {STARS.map((s) => (
                           <button
                             key={s}
-                            onClick={() => setRatings((r) => ({ ...r, [id]: s }))}
+                            onClick={() => {
+                              // Toggle: if clicking the same star, deselect (set to undefined)
+                              setRatings((r) => {
+                                const newRatings = { ...r }
+                                if (newRatings[id] === s) {
+                                  delete newRatings[id]
+                                } else {
+                                  newRatings[id] = s
+                                }
+                                return newRatings
+                              })
+                            }}
                             className="transition-transform hover:scale-125"
                             style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px' }}
                           >

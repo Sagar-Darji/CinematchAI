@@ -26,9 +26,11 @@ export function Sidebar() {
   }, [])
 
   const handleLogout = () => {
-    resetRecs()
-    logout()
-    navigate('/onboarding')
+    if (confirm('Are you sure you want to log out?')) {
+      resetRecs()
+      logout()
+      navigate('/login')
+    }
   }
 
   const countLabel = movieCount
@@ -91,7 +93,7 @@ export function Sidebar() {
             className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium hover:text-white transition-colors"
             style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', textAlign: 'left' }}>
             <LogOut size={16} />
-            <span className="hidden md:block">Switch user</span>
+            <span className="hidden md:block">Log Out</span>
           </button>
         )}
         <div className="px-3 text-xs hidden md:block" style={{ color: 'var(--text-muted)' }}>

@@ -31,7 +31,7 @@ export default function Recommendations() {
     setContextFactors,
   } = useRecommendationStore()
 
-  const [mood, setMood] = useState('')
+  const [mood, setMood] = useState<string[]>([])
   const [companion, setCompanion] = useState('')
   const [language, setLanguage] = useState('')
   const [naturalCtx, setNaturalCtx] = useState('')
@@ -46,9 +46,11 @@ export default function Recommendations() {
 
   const buildContext = () => {
     const ctx: Record<string, unknown> = {}
-    if (mood) ctx.mood = mood
+    if (mood.length > 0) ctx.mood = mood.join(', ')
     if (companion) ctx.companion = companion
-    if (language) ctx.language = LANGUAGE_MAP[language] ?? language.toLowerCase()
+    if (language) {
+      ctx.language = LANGUAGE_MAP[language] ?? language.toLowerCase()
+    }
     if (naturalCtx) ctx.natural_language_context = naturalCtx
     if (yearMin) ctx.year_min = parseInt(yearMin)
     if (yearMax) ctx.year_max = parseInt(yearMax)
@@ -106,7 +108,7 @@ export default function Recommendations() {
     ? Math.max(5, Math.round((steps.length / 7) * 85))
     : 0
 
-  const activeFilters = [mood, companion, language, naturalCtx, yearMin, yearMax].filter(Boolean).length
+  const activeFilters = [...mood, language, companion, naturalCtx, yearMin, yearMax].filter(Boolean).length
 
   return (
     <div className="flex min-h-screen relative" style={{ background: 'var(--bg-primary)' }}>
@@ -192,10 +194,32 @@ export default function Recommendations() {
 
           {!isRunning && recommendations.length === 0 && jobStatus !== 'failed' && (
             <div className="flex flex-col items-center justify-center py-32 text-center">
-              <div className="text-6xl mb-5">🎬</div>
-              <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
-                {userId ? 'Starting the AI recommendation engine…' : 'Sign in on the Home page first.'}
+              <div className="text-6xl mb-5">{jobStatus === 'complete' ? '😕' : '🎬'}</div>
+              <p className="text-lg font-bold text-white mb-1">
+                {!userId
+                  ? 'Not signed in'
+                  : jobStatus === 'complete'
+                  ? 'No recommendations yet'
+                  : 'Starting the AI recommendation engine…'}
               </p>
+              <p className="text-sm max-w-sm mx-auto" style={{ color: 'var(--text-muted)' }}>
+                {!userId
+                  ? 'Sign in on the Home page first.'
+                  : jobStatus === 'complete'
+                  ? 'You may need more ratings. Browse some films and rate them, then come back.'
+                  : 'Hang tight — this takes a few seconds.'}
+              </p>
+              {jobStatus === 'complete' && userId && (
+                <div className="flex items-center gap-3 mt-5">
+                  <button
+                    onClick={startJob}
+                    className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-bold"
+                    style={{ background: 'var(--accent-gold)', color: '#0a0a0f', border: 'none', cursor: 'pointer' }}
+                  >
+                    <RefreshCw size={13} /> Try Again
+                  </button>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -209,7 +233,7 @@ export default function Recommendations() {
             <h2 className="font-black text-xs uppercase tracking-widest" style={{ color: 'var(--accent-gold)' }}>Customize</h2>
             {activeFilters > 0 && (
               <button
-                onClick={() => { setMood(''); setCompanion(''); setLanguage(''); setNaturalCtx(''); setYearMin(''); setYearMax('') }}
+                onClick={() => { setMood([]); setCompanion(''); setLanguage(''); setNaturalCtx(''); setYearMin(''); setYearMax('') }}
                 className="text-[10px] font-semibold"
                 style={{ color: 'var(--text-muted)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>
                 Clear all
@@ -219,12 +243,23 @@ export default function Recommendations() {
 
           {/* Mood */}
           <div className="space-y-1.5">
-            <label className="block text-xs font-medium" style={{ color: 'var(--text-muted)' }}>Mood</label>
+            <label className="block text-xs font-medium" style={{ color: 'var(--text-muted)' }}>
+              Mood {mood.length > 0 && <span style={{ color: 'var(--accent-gold)' }}>({mood.length})</span>}
+            </label>
             <div className="flex flex-wrap gap-1.5">
               {MOODS.map((m) => (
-                <button key={m} onClick={() => setMood(mood === m ? '' : m)}
+                <button 
+                  key={m} 
+                  onClick={() => setMood(prev => 
+                    prev.includes(m) ? prev.filter(x => x !== m) : [...prev, m]
+                  )}
                   className="px-2.5 py-1 rounded-full text-[11px] font-semibold capitalize"
-                  style={{ background: mood === m ? 'var(--accent-gold)' : 'var(--bg-overlay)', color: mood === m ? '#0a0a0f' : 'var(--text-muted)', border: '1px solid var(--border)', cursor: 'pointer' }}>
+                  style={{ 
+                    background: mood.includes(m) ? 'var(--accent-gold)' : 'var(--bg-overlay)', 
+                    color: mood.includes(m) ? '#0a0a0f' : 'var(--text-muted)', 
+                    border: '1px solid var(--border)', 
+                    cursor: 'pointer' 
+                  }}>
                   {m}
                 </button>
               ))}
@@ -248,11 +283,21 @@ export default function Recommendations() {
           {/* Language */}
           <div className="space-y-1.5">
             <label className="block text-xs font-medium" style={{ color: 'var(--text-muted)' }}>Language</label>
-            <select value={language} onChange={(e) => setLanguage(e.target.value)}
-              className="w-full px-3 py-2 rounded-lg text-xs outline-none"
-              style={{ background: 'var(--bg-overlay)', border: '1px solid var(--border)', color: language ? 'var(--text-primary)' : 'var(--text-muted)' }}>
-              <option value="">Any language</option>
-              {Object.keys(LANGUAGE_MAP).map((l) => <option key={l} value={l}>{l}</option>)}
+            <select
+              value={language}
+              onChange={(e) => setLanguage(e.target.value)}
+              className="w-full rounded-lg px-3 py-2 text-xs font-semibold outline-none"
+              style={{
+                background: 'var(--bg-overlay)',
+                color: language ? 'var(--accent-gold)' : 'var(--text-muted)',
+                border: `1px solid ${language ? 'var(--accent-gold)' : 'var(--border)'}`,
+                cursor: 'pointer',
+              }}
+            >
+              <option value="">All Languages</option>
+              {Object.keys(LANGUAGE_MAP).map((l) => (
+                <option key={l} value={l}>{l}</option>
+              ))}
             </select>
           </div>
 

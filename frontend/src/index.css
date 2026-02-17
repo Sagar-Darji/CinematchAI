@@ -153,6 +153,27 @@ html, body, #root {
 }
 .animate-film-info { animation: filmInfoIn 0.45s cubic-bezier(0.4,0,0.2,1) both; }
 
+/* ── Title cascade reveal ─────────────────────────────────────────────────── */
+@keyframes titleCascade {
+  0%   { opacity: 0; transform: translateY(24px) rotateX(40deg); filter: blur(6px); }
+  60%  { opacity: 1; filter: blur(0); }
+  100% { opacity: 1; transform: translateY(0) rotateX(0deg); filter: blur(0); }
+}
+.animate-title-word {
+  display: inline-block;
+  opacity: 0;
+  animation: titleCascade 0.55s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* ── Pipeline trace line ──────────────────────────────────────────────────── */
+@keyframes traceLine {
+  from { width: 0; opacity: 0; }
+  to   { width: 100%; opacity: 1; }
+}
+.animate-trace-line {
+  animation: traceLine 0.6s cubic-bezier(0.4, 0, 0.2, 1) both;
+}
+
 /* ── TraceDisplay step reveal ─────────────────────────────────────────────── */
 @keyframes stepReveal {
   from { opacity: 0; transform: translateX(-12px); }

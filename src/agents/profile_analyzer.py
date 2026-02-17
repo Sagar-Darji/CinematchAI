@@ -140,7 +140,7 @@ class ProfileAnalyzerAgent(BaseAgent):
                     ratings_data.append({
                         "movieId": movie_id,
                         "rating": rating["rating"],
-                        "timestamp": pd.to_datetime(rating["timestamp"]),
+                        "timestamp": rating.get("timestamp"),
                     })
                     movies_data.append({
                         "movieId": movie_id,
@@ -158,6 +158,12 @@ class ProfileAnalyzerAgent(BaseAgent):
                 return None
 
             ratings_df = pd.DataFrame(ratings_data)
+            # Ensure timestamp is proper datetime (handles Unix epoch ints, strings, etc.)
+            ratings_df["timestamp"] = pd.to_datetime(ratings_df["timestamp"], errors="coerce")
+            # If all NaT, try interpreting as Unix seconds
+            if ratings_df["timestamp"].isna().all():
+                raw_ts = [r.get("timestamp") for r in ratings_data]
+                ratings_df["timestamp"] = pd.to_datetime(pd.to_numeric(pd.Series(raw_ts), errors="coerce"), unit="s", errors="coerce")
             movies_df = pd.DataFrame(movies_data)
 
             # Merge ratings with movies
@@ -225,8 +231,8 @@ class ProfileAnalyzerAgent(BaseAgent):
             total_ratings=user_data["total_ratings"],
             avg_rating_given=user_data["avg_rating"],
             rating_variance=user_data["rating_variance"],
-            recent_movie_ids=[str(mid) for mid in ratings_df.nlargest(10, "timestamp")["movieId"].tolist()],
-            recent_ratings=ratings_df.nlargest(10, "timestamp")["rating"].tolist(),
+            recent_movie_ids=[str(mid) for mid in (ratings_df.nlargest(10, "timestamp")["movieId"].tolist() if pd.api.types.is_datetime64_any_dtype(ratings_df["timestamp"]) else ratings_df["movieId"].tail(10).tolist())],
+            recent_ratings=(ratings_df.nlargest(10, "timestamp")["rating"].tolist() if pd.api.types.is_datetime64_any_dtype(ratings_df["timestamp"]) else ratings_df["rating"].tail(10).tolist()),
             is_cold_start=False,
             last_updated=datetime.now(),
         )
@@ -344,6 +350,11 @@ class ProfileAnalyzerAgent(BaseAgent):
         """
         # Add day of week and hour
         ratings_df = ratings_df.copy()
+        if not pd.api.types.is_datetime64_any_dtype(ratings_df["timestamp"]):
+            return TemporalPattern()
+        ratings_df = ratings_df.dropna(subset=["timestamp"])
+        if ratings_df.empty:
+            return TemporalPattern()
         ratings_df["day_of_week"] = ratings_df["timestamp"].dt.day_name()
         ratings_df["hour"] = ratings_df["timestamp"].dt.hour
 

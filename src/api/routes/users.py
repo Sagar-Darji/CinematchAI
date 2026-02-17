@@ -191,6 +191,22 @@ async def get_onboarding_movies(k: int = 20):
 
 
 @router.get(
+    "/{user_id}/exists",
+    status_code=status.HTTP_200_OK,
+)
+async def check_user_exists(user_id: str):
+    """Check if user exists and has ratings."""
+    user_service = get_user_service()
+    ratings = user_service.get_user_ratings(user_id)
+    
+    return {
+        "exists": len(ratings) > 0,
+        "user_id": user_id,
+        "total_ratings": len(ratings),
+    }
+
+
+@router.get(
     "/{user_id}",
     status_code=status.HTTP_200_OK,
 )

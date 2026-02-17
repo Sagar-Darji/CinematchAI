@@ -45,13 +45,22 @@ export default function Home() {
             </Link>
           </div>
         ) : (
-          <Link
-            to="/onboarding"
-            className="flex items-center gap-2 px-8 py-4 rounded-xl font-bold text-base hover:opacity-90 transition-opacity"
-            style={{ background: 'var(--accent-gold)', color: '#0a0a0f' }}
-          >
-            <UserPlus size={18} /> Get Started
-          </Link>
+          <div className="flex flex-col sm:flex-row justify-center gap-3">
+            <Link
+              to="/login"
+              className="flex items-center justify-center gap-2 px-8 py-4 rounded-xl font-bold text-base hover:opacity-90 transition-opacity"
+              style={{ background: 'var(--accent-gold)', color: '#0a0a0f' }}
+            >
+              <UserPlus size={18} /> Sign In
+            </Link>
+            <Link
+              to="/onboarding"
+              className="flex items-center justify-center gap-2 px-8 py-4 rounded-xl font-bold text-base hover:opacity-90 transition-opacity border"
+              style={{ background: 'transparent', borderColor: 'var(--border)', color: 'var(--text-primary)' }}
+            >
+              Create Account
+            </Link>
+          </div>
         )}
       </section>
 

@@ -5,6 +5,7 @@ import type { Recommendation } from '@/lib/api'
 import { tmdbPoster, scoreColor, cn } from '@/lib/utils'
 import { submitFeedback } from '@/lib/api'
 import { useUserStore } from '@/store/useUserStore'
+import { FullScreenPlayer } from '@/components/ui/MovieCard'
 
 interface FilmStackProps {
   recs: Recommendation[]
@@ -118,8 +119,19 @@ function FilmInfo({
   const [showPlayer, setShowPlayer] = useState(false)
   const tmdbId = movie.tmdb_id || movie.id
 
+  const titleWords = movie.title.split(' ')
+
   return (
     <div className="animate-film-info text-center max-w-lg mx-auto px-4 mt-8">
+      {/* Pipeline trace line */}
+      <div className="flex items-center justify-center gap-2 mb-4">
+        <div className="h-px flex-1 max-w-[80px] animate-trace-line" style={{ background: 'linear-gradient(to right, transparent, var(--accent-gold))', animationDelay: '0.1s' }} />
+        <span className="text-[9px] font-bold uppercase tracking-[0.25em] animate-fade-in" style={{ color: 'var(--accent-gold)', animationDelay: '0.3s' }}>
+          #{rec.rank} Pick
+        </span>
+        <div className="h-px flex-1 max-w-[80px] animate-trace-line" style={{ background: 'linear-gradient(to left, transparent, var(--accent-gold))', animationDelay: '0.1s' }} />
+      </div>
+
       {/* Genre / discovery pill */}
       <div className="flex items-center justify-center gap-2 mb-3">
         {is_exploration && (
@@ -131,13 +143,17 @@ function FilmInfo({
         ))}
       </div>
 
-      {/* Title */}
-      <h2 className="text-2xl md:text-3xl font-black text-white leading-tight mb-1.5 tracking-tight">
-        {movie.title}
+      {/* Title — cascade word reveal */}
+      <h2 className="text-2xl md:text-3xl font-black text-white leading-tight mb-1.5 tracking-tight" style={{ perspective: '600px' }}>
+        {titleWords.map((word, i) => (
+          <span key={i} className="animate-title-word" style={{ animationDelay: `${0.15 + i * 0.08}s` }}>
+            {word}{i < titleWords.length - 1 ? '\u00A0' : ''}
+          </span>
+        ))}
       </h2>
 
       {/* Meta row */}
-      <div className="flex items-center justify-center gap-3 text-xs mb-3" style={{ color: 'var(--text-muted)' }}>
+      <div className="flex items-center justify-center gap-3 text-xs mb-3 animate-fade-in" style={{ color: 'var(--text-muted)', animationDelay: '0.4s' }}>
         {movie.year && (
           <span className="flex items-center gap-1"><Calendar size={11} />{movie.year}</span>
         )}
@@ -152,7 +168,7 @@ function FilmInfo({
 
       {/* Explanation */}
       {explanation && (
-        <p className="text-sm mb-5 leading-relaxed mx-auto max-w-sm" style={{ color: 'var(--text-muted)' }}>
+        <p className="text-sm mb-5 leading-relaxed mx-auto max-w-sm animate-fade-in" style={{ color: 'var(--text-muted)', animationDelay: '0.5s' }}>
           {explanation}
         </p>
       )}
@@ -161,11 +177,11 @@ function FilmInfo({
       <div className="flex items-center justify-center gap-3 flex-wrap">
         {tmdbId && (
           <button
-            onClick={() => setShowPlayer((v) => !v)}
+            onClick={() => setShowPlayer(true)}
             className="flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-bold transition-all hover:scale-105"
             style={{ background: 'var(--accent-gold)', color: '#0a0a0f', border: 'none', cursor: 'pointer' }}
           >
-            <PlayCircle size={14} /> {showPlayer ? 'Hide' : 'Watch Now'}
+            <PlayCircle size={14} /> Watch Now
           </button>
         )}
         <button
@@ -192,24 +208,9 @@ function FilmInfo({
         </button>
       </div>
 
-      {/* VidSrc player */}
+      {/* Full-screen player overlay */}
       {showPlayer && tmdbId && (
-        <div className="mt-5 rounded-2xl overflow-hidden animate-fade-in">
-          <p className="text-xs mb-2 text-left" style={{ color: 'var(--text-muted)' }}>
-            Via VidSrc · availability varies
-          </p>
-          <iframe
-            src={`https://vidsrc.to/embed/movie/${tmdbId}`}
-            width="100%" height="340"
-            frameBorder="0"
-            referrerPolicy="no-referrer"
-            sandbox="allow-scripts allow-same-origin allow-forms"
-            allow="autoplay; fullscreen"
-            loading="lazy"
-            style={{ borderRadius: '12px' }}
-            title={`Watch ${movie.title}`}
-          />
-        </div>
+        <FullScreenPlayer tmdbId={tmdbId} title={movie.title} onClose={() => setShowPlayer(false)} />
       )}
     </div>
   )

@@ -147,6 +147,12 @@ export async function getOnboardingMovies(k = 20): Promise<OnboardingMovie[]> {
   return data.movies ?? []
 }
 
+export async function checkUserExists(userId: string): Promise<{ exists: boolean; total_ratings: number }> {
+  const res = await fetch(`${BASE}/users/${encodeURIComponent(userId)}/exists`)
+  if (!res.ok) return { exists: false, total_ratings: 0 }
+  return res.json()
+}
+
 export async function onboardUser(
   userId: string,
   ratings: Record<string, number>,

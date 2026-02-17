@@ -1,9 +1,99 @@
 import { useState, useEffect, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import { Star, Calendar, Clock, PlayCircle, X, ThumbsUp, ThumbsDown } from 'lucide-react'
 import type { Movie, Recommendation } from '@/lib/api'
 import { tmdbPoster, scoreColor, formatRuntime, cn } from '@/lib/utils'
 import { submitFeedback, recordInteraction } from '@/lib/api'
 import { useUserStore } from '@/store/useUserStore'
+
+// ── Full-screen video player overlay ─────────────────────────────────────────
+
+export function FullScreenPlayer({ tmdbId, title, onClose }: { tmdbId: number | string; title: string; onClose: () => void }) {
+  const [mode, setMode] = useState<'movie' | 'tv'>('movie')
+  const [adShield, setAdShield] = useState(true)
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    document.addEventListener('keydown', handler)
+    document.body.style.overflow = 'hidden'
+    // Block popups opened by the iframe
+    const origOpen = window.open
+    window.open = () => null
+    return () => {
+      document.removeEventListener('keydown', handler)
+      document.body.style.overflow = ''
+      window.open = origOpen
+    }
+  }, [onClose])
+
+  const src = `https://vidsrc.to/embed/${mode}/${tmdbId}`
+
+  return createPortal(
+    <div
+      style={{
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        width: '100vw',
+        height: '100vh',
+        zIndex: 99999,
+        background: '#000',
+      }}
+    >
+      {/* Top bar: mode toggle + close */}
+      <div className="absolute top-0 inset-x-0 z-10 flex items-center justify-between px-4 py-3"
+        style={{ background: 'linear-gradient(to bottom, rgba(0,0,0,0.8), transparent)' }}>
+        <div className="flex items-center gap-1 rounded-full p-0.5" style={{ background: 'rgba(255,255,255,0.1)' }}>
+          {(['movie', 'tv'] as const).map((m) => (
+            <button key={m} onClick={() => setMode(m)}
+              className="px-3.5 py-1.5 rounded-full text-xs font-bold capitalize"
+              style={{
+                background: mode === m ? 'var(--accent-gold)' : 'transparent',
+                color: mode === m ? '#0a0a0f' : 'rgba(255,255,255,0.6)',
+                border: 'none', cursor: 'pointer',
+              }}>
+              {m === 'tv' ? 'TV Show' : 'Movie'}
+            </button>
+          ))}
+        </div>
+        <span className="text-white text-sm font-semibold truncate mx-4 flex-1 text-center opacity-70">{title}</span>
+        <button
+          onClick={onClose}
+          className="w-9 h-9 flex items-center justify-center rounded-full flex-shrink-0"
+          style={{ background: 'rgba(255,255,255,0.15)', color: 'white', border: 'none', cursor: 'pointer' }}
+        >
+          <X size={18} />
+        </button>
+      </div>
+
+      {/* Ad shield: absorbs the first click (VidSrc ad redirect) then disappears */}
+      {adShield && (
+        <div
+          onClick={() => setAdShield(false)}
+          style={{
+            position: 'absolute',
+            inset: 0,
+            zIndex: 5,
+            cursor: 'pointer',
+            background: 'transparent',
+          }}
+        />
+      )}
+
+      <iframe
+        key={mode}
+        src={src}
+        style={{ width: '100%', height: '100%', border: 'none', display: 'block' }}
+        referrerPolicy="no-referrer"
+        allow="autoplay; fullscreen; encrypted-media"
+        allowFullScreen
+        loading="lazy"
+        title={`Watch ${title}`}
+      />
+    </div>,
+    document.body
+  )
+}
 
 interface MovieCardProps {
   rec: Recommendation
@@ -48,15 +138,19 @@ function MovieModal({ rec, onClose }: ModalProps) {
     recordInteraction(userId, tmdbId, v === 'up' ? 'watched' : 'dismissed')
   }
 
-  return (
+  const modalContent = (
     <div
       ref={overlayRef}
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
-      style={{ background: 'rgba(0,0,0,0.82)', backdropFilter: 'blur(12px)' }}
+      className="fixed inset-0 z-[9999] flex items-center justify-center p-4"
+      style={{ 
+        background: 'rgba(0,0,0,0.85)', 
+        backdropFilter: 'blur(16px)',
+        WebkitBackdropFilter: 'blur(16px)'
+      }}
       onClick={(e) => { if (e.target === overlayRef.current) onClose() }}
     >
       <div
-        className="relative w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-2xl animate-fade-in"
+        className="relative w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-2xl animate-fade-in shadow-2xl"
         style={{ background: 'var(--bg-card)', border: '1px solid var(--border-hover)' }}
       >
         {/* Close */}
@@ -161,34 +255,25 @@ function MovieModal({ rec, onClose }: ModalProps) {
 
           {/* Watch Now */}
           {tmdbId && (
-            <div>
-              <button onClick={() => {
-                setShowPlayer((v) => !v)
-                if (!showPlayer) recordInteraction(userId, tmdbId, 'clicked')
-              }}
-                className="flex items-center gap-2 text-sm font-bold"
-                style={{ color: 'var(--accent-gold)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>
-                <PlayCircle size={16} /> {showPlayer ? 'Hide Player' : 'Watch Now'}
-              </button>
-              {showPlayer && (
-                <div className="mt-3 rounded-xl overflow-hidden animate-fade-in">
-                  <p className="text-xs mb-2" style={{ color: 'var(--text-muted)' }}>
-                    Via VidSrc · Ad redirects blocked · Availability varies
-                  </p>
-                  <iframe src={`https://vidsrc.to/embed/movie/${tmdbId}`}
-                    width="100%" height="360" frameBorder="0"
-                    referrerPolicy="no-referrer"
-                    sandbox="allow-scripts allow-same-origin allow-forms"
-                    allow="autoplay; fullscreen" loading="lazy"
-                    style={{ borderRadius: '10px' }} title={`Watch ${movie.title}`} />
-                </div>
-              )}
-            </div>
+            <button onClick={() => {
+              setShowPlayer(true)
+              recordInteraction(userId, tmdbId, 'clicked')
+            }}
+              className="flex items-center gap-2 text-sm font-bold"
+              style={{ color: 'var(--accent-gold)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>
+              <PlayCircle size={16} /> Watch Now
+            </button>
+          )}
+          {showPlayer && tmdbId && (
+            <FullScreenPlayer tmdbId={tmdbId} title={movie.title} onClose={() => setShowPlayer(false)} />
           )}
         </div>
       </div>
     </div>
   )
+
+  // Render modal in a portal at document.body level
+  return createPortal(modalContent, document.body)
 }
 
 // ── Compact row (Recommendations list) ───────────────────────────────────────
@@ -200,10 +285,15 @@ export function MovieCard({ rec, rank, compact = true }: MovieCardProps) {
   const pct = Math.round(score * 100)
   const barColor = scoreColor(score)
 
+  const handleClick = () => {
+    console.log('MovieCard clicked, opening modal for:', movie.title)
+    setOpen(true)
+  }
+
   return (
     <>
       <button
-        onClick={() => setOpen(true)}
+        onClick={handleClick}
         className={cn(
           'w-full text-left transition-all animate-fade-in',
           compact

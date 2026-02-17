@@ -139,17 +139,22 @@ export default function Browse() {
                 </button>
               )}
             </div>
-            <div className="flex gap-1.5 overflow-x-auto pb-0.5" style={{ scrollbarWidth: 'none' }}>
+            <select
+              value={activeLang}
+              onChange={(e) => toggleLang(e.target.value)}
+              className="rounded-lg px-3 py-1.5 text-[12px] font-semibold outline-none"
+              style={{
+                background: 'var(--bg-overlay)',
+                color: activeLang ? 'var(--accent-gold)' : 'var(--text-muted)',
+                border: `1px solid ${activeLang ? 'var(--accent-gold)' : 'var(--border)'}`,
+                cursor: 'pointer',
+                maxWidth: '180px',
+              }}
+            >
               {LANGUAGES.map(({ label, code }) => (
-                <button key={code} onClick={() => toggleLang(code)}
-                  className="px-2.5 py-1 rounded-full text-[11px] font-semibold whitespace-nowrap flex-shrink-0"
-                  style={{
-                    background: activeLang === code ? 'var(--accent-gold)' : 'var(--bg-overlay)',
-                    color: activeLang === code ? '#0a0a0f' : 'var(--text-muted)',
-                    border: '1px solid var(--border)', cursor: 'pointer',
-                  }}>{label}</button>
+                <option key={code} value={code}>{label}</option>
               ))}
-            </div>
+            </select>
 
             <span className="text-[10px] font-bold uppercase tracking-widest block" style={{ color: 'var(--text-muted)' }}>Genre</span>
             <div className="flex gap-1.5 overflow-x-auto pb-0.5" style={{ scrollbarWidth: 'none' }}>

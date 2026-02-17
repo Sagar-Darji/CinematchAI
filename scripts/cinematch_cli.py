@@ -71,13 +71,14 @@ def _main_menu() -> str:
         ("6", "🗑️   Clear Job Queue",       "choose pending, failed, or all"),
         ("7", "🧪  Test Recommendation",   "run full AI pipeline for any user_id"),
         ("8", "🔌  LLM Health Check",      "test Groq + Ollama latency"),
+        ("9", "👥  Manage Users",          "list, view, delete, clear, or rename users"),
         ("0", "🚪  Exit",                  ""),
     ]
     for key, label, hint in items:
         table.add_row(f"[{key}]", label, hint)
 
     console.print(Panel(table, title="[bold]Main Menu[/]", border_style="bright_black"))
-    return Prompt.ask("[bold yellow]  Choose[/]", choices=[str(i) for i in range(9)], default="0")
+    return Prompt.ask("[bold yellow]  Choose[/]", choices=[str(i) for i in range(10)], default="0")
 
 
 # ── Action: Corpus Stats ──────────────────────────────────────────────────────
@@ -472,6 +473,391 @@ def action_llm_check():
     _pause()
 
 
+# ── Action: Manage Users ──────────────────────────────────────────────────────
+
+def action_users():
+    """User management submenu."""
+    console.rule("[yellow]User Management[/]")
+    
+    tbl = Table(box=None, show_header=False, padding=(0, 2))
+    tbl.add_column(style="bold yellow", min_width=4)
+    tbl.add_column(style="white", min_width=24)
+    tbl.add_column(style="dim")
+    
+    for key, label, hint in [
+        ("1", "📋  List Users", "view all users with stats"),
+        ("2", "👤  View User Details", "full profile, ratings, context"),
+        ("3", "❌  Delete User", "permanently remove user and all data"),
+        ("4", "🧹  Clear User Data", "reset user (keep ID, clear ratings)"),
+        ("5", "✏️   Rename User", "change user ID"),
+        ("6", "📊  System Stats", "overview of all users"),
+        ("0", "⬅️   Back to Main Menu", ""),
+    ]:
+        tbl.add_row(f"[{key}]", label, hint)
+    
+    console.print(Panel(tbl, border_style="bright_black"))
+    choice = Prompt.ask("  Choose", choices=[str(i) for i in range(7)], default="0")
+    
+    if choice == "0":
+        return
+    
+    console.print()
+    
+    try:
+        if choice == "1":
+            _user_list()
+        elif choice == "2":
+            _user_view()
+        elif choice == "3":
+            _user_delete()
+        elif choice == "4":
+            _user_clear()
+        elif choice == "5":
+            _user_rename()
+        elif choice == "6":
+            _user_stats()
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/]")
+    
+    _pause()
+
+
+def _user_list():
+    """List all users."""
+    import sqlite3
+    from config.settings import get_settings
+    from pathlib import Path
+    
+    settings = get_settings()
+    db_path = Path(settings.data_dir) / "users.db"
+    
+    with console.status("[bold green]Loading users…"):
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT 
+                u.user_id,
+                u.created_at,
+                COUNT(r.id) as rating_count,
+                ROUND(AVG(r.rating), 2) as avg_rating,
+                MAX(r.timestamp) as last_rating
+            FROM users u
+            LEFT JOIN ratings r ON u.user_id = r.user_id
+            GROUP BY u.user_id
+            ORDER BY u.created_at DESC
+            LIMIT 50
+        """)
+        users = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+    
+    if not users:
+        console.print("[dim]No users found.[/]")
+        return
+    
+    tbl = Table("User ID", "Created", "Ratings", "Avg", "Last Activity",
+                border_style="bright_black", box=box.ROUNDED, header_style="bold yellow")
+    
+    for user in users:
+        created = user['created_at'][:10] if user['created_at'] else 'N/A'
+        rating_count = user['rating_count'] or 0
+        avg_rating = user['avg_rating'] or 0.0
+        last_rating = user['last_rating'][:10] if user['last_rating'] else 'Never'
+        
+        tbl.add_row(
+            user['user_id'][:20],
+            created,
+            f"{rating_count:,}",
+            f"{avg_rating:.1f}",
+            last_rating
+        )
+    
+    console.print(tbl)
+    console.print(f"\n[dim]Showing {len(users)} users[/]")
+
+
+def _user_view():
+    """View user details."""
+    user_id = Prompt.ask("  User ID").strip()
+    if not user_id:
+        return
+    
+    import sqlite3, json
+    from config.settings import get_settings
+    from pathlib import Path
+    
+    settings = get_settings()
+    db_path = Path(settings.data_dir) / "users.db"
+    
+    with console.status(f"[bold green]Loading {user_id}…"):
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        
+        # User info
+        cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
+        user = cursor.fetchone()
+        
+        if not user:
+            console.print(f"[red]User '{user_id}' not found.[/]")
+            conn.close()
+            return
+        
+        # Ratings
+        cursor.execute("""
+            SELECT movie_id, rating, watched, timestamp 
+            FROM ratings 
+            WHERE user_id = ? 
+            ORDER BY timestamp DESC
+            LIMIT 10
+        """, (user_id,))
+        ratings = [dict(row) for row in cursor.fetchall()]
+        
+        # Context
+        cursor.execute("SELECT context_json FROM contexts WHERE user_id = ?", (user_id,))
+        context_row = cursor.fetchone()
+        context = json.loads(context_row['context_json']) if context_row else {}
+        
+        conn.close()
+    
+    # Display
+    console.rule(f"[yellow]{user_id}[/]")
+    
+    info = Table.grid(padding=(0, 2))
+    info.add_column(style="dim")
+    info.add_column(style="white")
+    
+    info.add_row("Created:", user['created_at'][:19] if user['created_at'] else 'N/A')
+    info.add_row("Updated:", user['updated_at'][:19] if user['updated_at'] else 'N/A')
+    info.add_row("Ratings:", str(len(ratings)))
+    info.add_row("Has Embedding:", "Yes" if user['embedding_json'] else "No")
+    info.add_row("Embedding Based On:", f"{user['embedding_rating_count']} ratings")
+    
+    console.print(Panel(info, title="[bold]Profile[/]", border_style="bright_black"))
+    
+    if context:
+        ctx = Table.grid(padding=(0, 2))
+        ctx.add_column(style="dim")
+        ctx.add_column(style="white")
+        for key, value in context.items():
+            ctx.add_row(f"{key}:", str(value))
+        console.print(Panel(ctx, title="[bold]Context[/]", border_style="bright_black"))
+    
+    if ratings:
+        tbl = Table("Movie ID", "Rating", "Watched", "Timestamp",
+                    border_style="bright_black", box=box.SIMPLE)
+        for r in ratings:
+            tbl.add_row(
+                r['movie_id'][:12],
+                f"{r['rating']:.1f}",
+                "✓" if r['watched'] else "✗",
+                r['timestamp'][:19] if r['timestamp'] else 'N/A'
+            )
+        console.print(Panel(tbl, title="[bold]Recent Ratings[/]", border_style="bright_black"))
+
+
+def _user_delete():
+    """Delete user completely."""
+    user_id = Prompt.ask("  User ID to delete").strip()
+    if not user_id:
+        return
+    
+    if not Confirm.ask(f"  [red]Permanently delete user '{user_id}' and ALL their data?[/]", default=False):
+        console.print("[dim]Cancelled.[/]")
+        return
+    
+    import sqlite3
+    from config.settings import get_settings
+    from pathlib import Path
+    
+    settings = get_settings()
+    db_path = Path(settings.data_dir) / "users.db"
+    
+    with console.status(f"[bold red]Deleting {user_id}…"):
+        conn = sqlite3.connect(str(db_path))
+        cursor = conn.cursor()
+        
+        try:
+            cursor.execute("DELETE FROM ratings WHERE user_id = ?", (user_id,))
+            cursor.execute("DELETE FROM contexts WHERE user_id = ?", (user_id,))
+            cursor.execute("DELETE FROM users WHERE user_id = ?", (user_id,))
+            conn.commit()
+            
+            console.print(f"[green]✓ User '{user_id}' deleted successfully.[/]")
+        except Exception as e:
+            conn.rollback()
+            console.print(f"[red]Failed to delete user: {e}[/]")
+        finally:
+            conn.close()
+
+
+def _user_clear():
+    """Clear user data but keep user entry."""
+    user_id = Prompt.ask("  User ID to clear").strip()
+    if not user_id:
+        return
+    
+    if not Confirm.ask(f"  Clear all ratings and profile data for '{user_id}'?", default=False):
+        console.print("[dim]Cancelled.[/]")
+        return
+    
+    import sqlite3, json
+    from datetime import datetime
+    from config.settings import get_settings
+    from pathlib import Path
+    
+    settings = get_settings()
+    db_path = Path(settings.data_dir) / "users.db"
+    
+    with console.status(f"[bold yellow]Clearing {user_id}…"):
+        conn = sqlite3.connect(str(db_path))
+        cursor = conn.cursor()
+        
+        try:
+            cursor.execute("DELETE FROM ratings WHERE user_id = ?", (user_id,))
+            cursor.execute("DELETE FROM contexts WHERE user_id = ?", (user_id,))
+            
+            empty_profile = json.dumps({})
+            cursor.execute("""
+                UPDATE users 
+                SET profile_json = ?,
+                    embedding_json = NULL,
+                    embedding_rating_count = 0,
+                    updated_at = ?
+                WHERE user_id = ?
+            """, (empty_profile, datetime.now().isoformat(), user_id))
+            
+            conn.commit()
+            console.print(f"[green]✓ Data cleared for '{user_id}'.[/]")
+        except Exception as e:
+            conn.rollback()
+            console.print(f"[red]Failed to clear data: {e}[/]")
+        finally:
+            conn.close()
+
+
+def _user_rename():
+    """Rename user."""
+    old_id = Prompt.ask("  Current user ID").strip()
+    if not old_id:
+        return
+    
+    new_id = Prompt.ask("  New user ID").strip()
+    if not new_id:
+        return
+    
+    if not Confirm.ask(f"  Rename '{old_id}' to '{new_id}'?", default=False):
+        console.print("[dim]Cancelled.[/]")
+        return
+    
+    import sqlite3
+    from datetime import datetime
+    from config.settings import get_settings
+    from pathlib import Path
+    
+    settings = get_settings()
+    db_path = Path(settings.data_dir) / "users.db"
+    
+    with console.status(f"[bold yellow]Renaming user…"):
+        conn = sqlite3.connect(str(db_path))
+        cursor = conn.cursor()
+        
+        try:
+            # Check if old user exists
+            cursor.execute("SELECT user_id FROM users WHERE user_id = ?", (old_id,))
+            if not cursor.fetchone():
+                console.print(f"[red]User '{old_id}' not found.[/]")
+                conn.close()
+                return
+            
+            # Check if new ID already exists
+            cursor.execute("SELECT user_id FROM users WHERE user_id = ?", (new_id,))
+            if cursor.fetchone():
+                console.print(f"[red]User '{new_id}' already exists.[/]")
+                conn.close()
+                return
+            
+            # Rename
+            cursor.execute("UPDATE users SET user_id = ?, updated_at = ? WHERE user_id = ?",
+                          (new_id, datetime.now().isoformat(), old_id))
+            cursor.execute("UPDATE ratings SET user_id = ? WHERE user_id = ?", (new_id, old_id))
+            cursor.execute("UPDATE contexts SET user_id = ? WHERE user_id = ?", (new_id, old_id))
+            
+            conn.commit()
+            console.print(f"[green]✓ User renamed: {old_id} → {new_id}[/]")
+        except Exception as e:
+            conn.rollback()
+            console.print(f"[red]Failed to rename user: {e}[/]")
+        finally:
+            conn.close()
+
+
+def _user_stats():
+    """Show system statistics."""
+    import sqlite3
+    from config.settings import get_settings
+    from pathlib import Path
+    
+    settings = get_settings()
+    db_path = Path(settings.data_dir) / "users.db"
+    
+    with console.status("[bold green]Calculating stats…"):
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        
+        # Total users
+        cursor.execute("SELECT COUNT(*) as count FROM users")
+        total_users = cursor.fetchone()['count']
+        
+        # Total ratings
+        cursor.execute("SELECT COUNT(*) as count FROM ratings")
+        total_ratings = cursor.fetchone()['count']
+        
+        # Users with embeddings
+        cursor.execute("SELECT COUNT(*) as count FROM users WHERE embedding_json IS NOT NULL")
+        users_with_embeddings = cursor.fetchone()['count']
+        
+        # Average ratings per user
+        cursor.execute("""
+            SELECT AVG(rating_count) as avg_ratings
+            FROM (SELECT COUNT(*) as rating_count FROM ratings GROUP BY user_id)
+        """)
+        row = cursor.fetchone()
+        avg_ratings_per_user = row['avg_ratings'] if row['avg_ratings'] else 0
+        
+        # Most active user
+        cursor.execute("""
+            SELECT user_id, COUNT(*) as rating_count
+            FROM ratings
+            GROUP BY user_id
+            ORDER BY rating_count DESC
+            LIMIT 1
+        """)
+        most_active = cursor.fetchone()
+        
+        conn.close()
+    
+    # Display
+    console.rule("[yellow]System Statistics[/]")
+    
+    stats = Table.grid(padding=(0, 2))
+    stats.add_column(style="dim", justify="right")
+    stats.add_column(style="bold white")
+    
+    stats.add_row("Total Users:", f"{total_users:,}")
+    stats.add_row("Total Ratings:", f"{total_ratings:,}")
+    stats.add_row("Users with Embeddings:", f"{users_with_embeddings:,}")
+    stats.add_row("Avg Ratings per User:", f"{avg_ratings_per_user:.1f}")
+    
+    if most_active:
+        stats.add_row("Most Active User:", 
+                     f"{most_active['user_id']} ({most_active['rating_count']:,} ratings)")
+    
+    console.print(Panel(stats, border_style="yellow"))
+
+
 # ── Main loop ─────────────────────────────────────────────────────────────────
 
 ACTIONS = {
@@ -483,6 +869,7 @@ ACTIONS = {
     "6": action_clear_queue,
     "7": action_test_rec,
     "8": action_llm_check,
+    "9": action_users,
 }
 
 
