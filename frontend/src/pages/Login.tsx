@@ -5,6 +5,53 @@ import { useGoogleLogin } from '@react-oauth/google'
 import { useUserStore } from '@/store/useUserStore'
 import { loginWithPassword, googleAuth, getUserProfile } from '@/lib/api'
 
+const GOOGLE_ENABLED = (import.meta.env.VITE_GOOGLE_CLIENT_ID ?? '').length > 0
+
+// Rendered only when GoogleOAuthProvider is present, so useGoogleLogin is safe
+function GoogleButton({ onAuth, disabled }: {
+  onAuth: (accessToken: string, sub: string) => void
+  disabled: boolean
+}) {
+  const [loading, setLoading] = useState(false)
+  const login = useGoogleLogin({
+    onSuccess: async (resp) => {
+      setLoading(true)
+      try {
+        const info = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+          headers: { Authorization: `Bearer ${resp.access_token}` },
+        }).then(r => r.json())
+        onAuth(resp.access_token, info.sub)
+      } finally { setLoading(false) }
+    },
+    onError: () => {},
+  })
+  return (
+    <>
+      <button
+        onClick={() => login()}
+        disabled={loading || disabled}
+        className="flex items-center justify-center gap-3 py-4 rounded-xl font-semibold text-base disabled:opacity-40 transition-opacity"
+        style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', color: 'var(--text-primary)', cursor: 'pointer' }}
+      >
+        {loading ? <Loader2 size={18} className="animate-spin" /> : (
+          <svg width="18" height="18" viewBox="0 0 48 48" fill="none">
+            <path fill="#FFC107" d="M43.6 20.1H42V20H24v8h11.3C33.6 32.7 29.3 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.1 7.9 3l5.7-5.7C34 6.4 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.6-.4-3.9z"/>
+            <path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.5 16 19 12 24 12c3.1 0 5.8 1.1 7.9 3l5.7-5.7C34 6.4 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/>
+            <path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.3 35.2 26.8 36 24 36c-5.3 0-9.6-3.3-11.3-8H6.3C9.6 35.5 16.3 44 24 44z"/>
+            <path fill="#1976D2" d="M43.6 20.1H42V20H24v8h11.3c-.8 2.3-2.3 4.3-4.2 5.6l6.2 5.2C43 35 44 30 44 24c0-1.3-.1-2.6-.4-3.9z"/>
+          </svg>
+        )}
+        Continue with Google
+      </button>
+      <div className="flex items-center gap-3 my-1">
+        <div className="flex-1 h-px" style={{ background: 'var(--border)' }} />
+        <span className="text-xs" style={{ color: 'var(--text-muted)' }}>or</span>
+        <div className="flex-1 h-px" style={{ background: 'var(--border)' }} />
+      </div>
+    </>
+  )
+}
+
 export default function Login() {
   const navigate = useNavigate()
   const { setUserId, setEmail, setToken, setOnboarded, setRatingCount } = useUserStore()
@@ -13,13 +60,10 @@ export default function Login() {
   const [password, setPassword] = useState('')
   const [showPw, setShowPw] = useState(false)
   const [loading, setLoading] = useState(false)
-  const [googleLoading, setGoogleLoading] = useState(false)
   const [error, setError] = useState('')
 
   const _onSuccess = async (auth: Awaited<ReturnType<typeof loginWithPassword>>) => {
-    setUserId(auth.user_id)
-    setEmail(auth.email)
-    setToken(auth.token)
+    setUserId(auth.user_id); setEmail(auth.email); setToken(auth.token)
     const profile = await getUserProfile(auth.user_id)
     setRatingCount(profile?.total_ratings ?? 0)
     setOnboarded(true)
@@ -29,79 +73,33 @@ export default function Login() {
   const handleLogin = async () => {
     if (!identifier.trim() || !password) return
     setLoading(true); setError('')
-    try {
-      await _onSuccess(await loginWithPassword(identifier.trim(), password))
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Something went wrong. Please try again.')
-    } finally { setLoading(false) }
+    try { await _onSuccess(await loginWithPassword(identifier.trim(), password)) }
+    catch (err: unknown) { setError(err instanceof Error ? err.message : 'Something went wrong.') }
+    finally { setLoading(false) }
   }
 
-  const handleGoogleLogin = useGoogleLogin({
-    onSuccess: async (tokenResponse) => {
-      setGoogleLoading(true); setError('')
-      try {
-        // Exchange access token for user info, then send id_token to backend
-        const userInfoRes = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
-          headers: { Authorization: `Bearer ${tokenResponse.access_token}` },
-        })
-        const userInfo = await userInfoRes.json()
-        await _onSuccess(await googleAuth(tokenResponse.access_token, userInfo.sub))
-      } catch (err: unknown) {
-        setError(err instanceof Error ? err.message : 'Google sign-in failed.')
-      } finally { setGoogleLoading(false) }
-    },
-    onError: () => setError('Google sign-in was cancelled or failed.'),
-  })
+  const handleGoogleAuth = async (accessToken: string, _sub: string) => {
+    setLoading(true); setError('')
+    try { await _onSuccess(await googleAuth(accessToken)) }
+    catch (err: unknown) { setError(err instanceof Error ? err.message : 'Google sign-in failed.') }
+    finally { setLoading(false) }
+  }
 
   return (
-    <div
-      className="min-h-screen flex flex-col items-center justify-center px-4"
-      style={{ background: 'var(--bg-primary)' }}
-    >
+    <div className="min-h-screen flex flex-col items-center justify-center px-4" style={{ background: 'var(--bg-primary)' }}>
       <div className="w-full max-w-sm">
         <div className="text-center mb-10">
-          <p className="text-xs font-bold tracking-[0.3em] uppercase mb-3" style={{ color: 'var(--accent-gold)' }}>
-            CineMatch AI
-          </p>
+          <p className="text-xs font-bold tracking-[0.3em] uppercase mb-3" style={{ color: 'var(--accent-gold)' }}>CineMatch AI</p>
           <h1 className="text-4xl font-black tracking-tight text-white">Welcome back</h1>
-          <p className="mt-3 text-sm" style={{ color: 'var(--text-muted)' }}>
-            Sign in to access your taste profile and recommendations.
-          </p>
+          <p className="mt-3 text-sm" style={{ color: 'var(--text-muted)' }}>Sign in to access your taste profile and recommendations.</p>
         </div>
 
         <div className="flex flex-col gap-3">
-          {/* Google Sign-In */}
-          <button
-            onClick={() => handleGoogleLogin()}
-            disabled={googleLoading || loading}
-            className="flex items-center justify-center gap-3 py-4 rounded-xl font-semibold text-base disabled:opacity-40 transition-opacity"
-            style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', color: 'var(--text-primary)', cursor: 'pointer' }}
-          >
-            {googleLoading ? (
-              <Loader2 size={18} className="animate-spin" />
-            ) : (
-              <svg width="18" height="18" viewBox="0 0 48 48" fill="none">
-                <path fill="#FFC107" d="M43.6 20.1H42V20H24v8h11.3C33.6 32.7 29.3 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.1 7.9 3l5.7-5.7C34 6.4 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.6-.4-3.9z"/>
-                <path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.5 16 19 12 24 12c3.1 0 5.8 1.1 7.9 3l5.7-5.7C34 6.4 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/>
-                <path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.3 35.2 26.8 36 24 36c-5.3 0-9.6-3.3-11.3-8H6.3C9.6 35.5 16.3 44 24 44z"/>
-                <path fill="#1976D2" d="M43.6 20.1H42V20H24v8h11.3c-.8 2.3-2.3 4.3-4.2 5.6l6.2 5.2C43 35 44 30 44 24c0-1.3-.1-2.6-.4-3.9z"/>
-              </svg>
-            )}
-            Continue with Google
-          </button>
-
-          <div className="flex items-center gap-3 my-1">
-            <div className="flex-1 h-px" style={{ background: 'var(--border)' }} />
-            <span className="text-xs" style={{ color: 'var(--text-muted)' }}>or</span>
-            <div className="flex-1 h-px" style={{ background: 'var(--border)' }} />
-          </div>
+          {GOOGLE_ENABLED && <GoogleButton onAuth={handleGoogleAuth} disabled={loading} />}
 
           <input
-            type="text"
-            autoFocus
-            placeholder="Email or Username"
-            value={identifier}
-            onChange={(e) => setIdentifier(e.target.value)}
+            type="text" autoFocus placeholder="Email or Username"
+            value={identifier} onChange={(e) => setIdentifier(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && handleLogin()}
             className="w-full px-5 py-4 rounded-xl text-base outline-none"
             style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', color: 'var(--text-primary)' }}
@@ -109,34 +107,24 @@ export default function Login() {
 
           <div className="relative">
             <input
-              type={showPw ? 'text' : 'password'}
-              placeholder="Password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
+              type={showPw ? 'text' : 'password'} placeholder="Password"
+              value={password} onChange={(e) => setPassword(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleLogin()}
               className="w-full px-5 py-4 rounded-xl text-base outline-none pr-12"
               style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', color: 'var(--text-primary)' }}
             />
-            <button
-              type="button"
-              onClick={() => setShowPw((v) => !v)}
+            <button type="button" onClick={() => setShowPw(v => !v)}
               className="absolute right-4 top-1/2 -translate-y-1/2"
-              style={{ color: 'var(--text-muted)', background: 'none', border: 'none', cursor: 'pointer' }}
-            >
+              style={{ color: 'var(--text-muted)', background: 'none', border: 'none', cursor: 'pointer' }}>
               {showPw ? <EyeOff size={16} /> : <Eye size={16} />}
             </button>
           </div>
 
-          {error && (
-            <p className="text-sm px-1" style={{ color: 'var(--accent-red)' }}>{error}</p>
-          )}
+          {error && <p className="text-sm px-1" style={{ color: 'var(--accent-red)' }}>{error}</p>}
 
-          <button
-            onClick={handleLogin}
-            disabled={loading || !identifier.trim() || !password}
+          <button onClick={handleLogin} disabled={loading || !identifier.trim() || !password}
             className="flex items-center justify-center gap-2 py-4 rounded-xl font-bold text-base disabled:opacity-40 transition-opacity"
-            style={{ background: 'var(--accent-gold)', color: '#0a0a0f', border: 'none', cursor: 'pointer' }}
-          >
+            style={{ background: 'var(--accent-gold)', color: '#0a0a0f', border: 'none', cursor: 'pointer' }}>
             {loading ? <Loader2 size={18} className="animate-spin" /> : <ArrowRight size={18} />}
             Sign In
           </button>
@@ -144,17 +132,12 @@ export default function Login() {
           <div className="flex justify-between items-center mt-1">
             <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
               New here?{' '}
-              <Link to="/register" className="font-medium hover:underline" style={{ color: 'var(--accent-gold)' }}>
-                Create an account
-              </Link>
+              <Link to="/register" className="font-medium hover:underline" style={{ color: 'var(--accent-gold)' }}>Create an account</Link>
             </p>
-            <Link to="/forgot-password" className="text-sm hover:underline" style={{ color: 'var(--text-muted)' }}>
-              Forgot password?
-            </Link>
+            <Link to="/forgot-password" className="text-sm hover:underline" style={{ color: 'var(--text-muted)' }}>Forgot password?</Link>
           </div>
         </div>
       </div>
     </div>
   )
 }
-

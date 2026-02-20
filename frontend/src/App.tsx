@@ -17,54 +17,57 @@ import MovieWeb from '@/pages/MovieWeb'
 import { useUserStore } from '@/store/useUserStore'
 
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID ?? ''
+const GOOGLE_ENABLED = GOOGLE_CLIENT_ID.length > 0
 
 export default function App() {
   const { userId, isOnboarded } = useUserStore()
 
-  return (
-    <GoogleOAuthProvider clientId={GOOGLE_CLIENT_ID}>
-      <BrowserRouter>
-        <Routes>
-          {/* Public routes */}
-          <Route path="/login" element={userId && isOnboarded ? <Navigate to="/" replace /> : <Login />} />
-          <Route path="/register" element={userId && isOnboarded ? <Navigate to="/" replace /> : <Register />} />
-          <Route path="/forgot-password" element={<ForgotPassword />} />
-          <Route path="/reset-password" element={<ResetPassword />} />
-          <Route path="/onboarding" element={<Onboarding />} />
+  const routes = (
+    <BrowserRouter>
+      <Routes>
+        {/* Public routes */}
+        <Route path="/login" element={userId && isOnboarded ? <Navigate to="/" replace /> : <Login />} />
+        <Route path="/register" element={userId && isOnboarded ? <Navigate to="/" replace /> : <Register />} />
+        <Route path="/forgot-password" element={<ForgotPassword />} />
+        <Route path="/reset-password" element={<ResetPassword />} />
+        <Route path="/onboarding" element={<Onboarding />} />
 
-          {/* Protected routes */}
-          <Route element={<Layout />}>
-            <Route path="/" element={<Home />} />
-            <Route 
-              path="/recommendations" 
-              element={
-                <ProtectedRoute>
-                  <Recommendations />
-                </ProtectedRoute>
-              } 
-            />
-            <Route 
-              path="/browse" 
-              element={
-                <ProtectedRoute>
-                  <Browse />
-                </ProtectedRoute>
-              } 
-            />
-            <Route 
-              path="/profile" 
-              element={
-                <ProtectedRoute>
-                  <Profile />
-                </ProtectedRoute>
-              } 
-            />
-            <Route path="/digest" element={<Digest />} />
-            <Route path="/calendar" element={<ReleaseCalendar />} />
-            <Route path="/web" element={<MovieWeb />} />
-          </Route>
-        </Routes>
-      </BrowserRouter>
-    </GoogleOAuthProvider>
+        {/* Protected routes */}
+        <Route element={<Layout />}>
+          <Route path="/" element={<Home />} />
+          <Route 
+            path="/recommendations" 
+            element={
+              <ProtectedRoute>
+                <Recommendations />
+              </ProtectedRoute>
+            } 
+          />
+          <Route 
+            path="/browse" 
+            element={
+              <ProtectedRoute>
+                <Browse />
+              </ProtectedRoute>
+            } 
+          />
+          <Route 
+            path="/profile" 
+            element={
+              <ProtectedRoute>
+                <Profile />
+              </ProtectedRoute>
+            } 
+          />
+          <Route path="/digest" element={<Digest />} />
+          <Route path="/calendar" element={<ReleaseCalendar />} />
+          <Route path="/web" element={<MovieWeb />} />
+        </Route>
+      </Routes>
+    </BrowserRouter>
   )
+
+  return GOOGLE_ENABLED
+    ? <GoogleOAuthProvider clientId={GOOGLE_CLIENT_ID}>{routes}</GoogleOAuthProvider>
+    : routes
 }
