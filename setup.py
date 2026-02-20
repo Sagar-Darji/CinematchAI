@@ -4,7 +4,7 @@ from setuptools import find_packages, setup
 
 setup(
     name="cinematch-ai",
-    version="1.0.0",
+    version="2.0.0",
     description="Multi-Agent Movie Recommendation System with Explainable AI",
     author="Sagar Darji",
     packages=find_packages(),
@@ -12,4 +12,9 @@ setup(
     install_requires=[
         # Will use requirements.txt
     ],
+    entry_points={
+        "console_scripts": [
+            "cinematch=src.cli.main:main",
+        ],
+    },
 )

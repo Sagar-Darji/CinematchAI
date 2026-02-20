@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react'
-import { User, Film, Star, TrendingUp } from 'lucide-react'
+import { useEffect, useState, useRef } from 'react'
+import { User, Film, Star, TrendingUp, Upload, Loader2, Check, X } from 'lucide-react'
 import { useUserStore } from '@/store/useUserStore'
-import { getUserProfile, getAdminProfile, type UserProfile, type AdminProfile } from '@/lib/api'
+import { getUserProfile, getAdminProfile, importLetterboxd, pollImportJob, type UserProfile, type AdminProfile } from '@/lib/api'
 import { PageLoader } from '@/components/ui/PageLoader'
 
 // ── Skeleton components ────────────────────────────────────────────────────────
@@ -58,6 +58,178 @@ function SkeletonProfile() {
           ))}
         </div>
       </div>
+    </div>
+  )
+}
+
+// ── Main component ─────────────────────────────────────────────────────────────
+
+// ── Letterboxd Import Panel ────────────────────────────────────────────────────
+
+function LetterboxdImport({ userId, onComplete }: { userId: string; onComplete: (count: number) => void }) {
+  const [open, setOpen] = useState(false)
+  const [csvContent, setCsvContent] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const [jobId, setJobId] = useState<string | null>(null)
+  const [total, setTotal] = useState(0)
+  const [progress, setProgress] = useState(0)
+  const [status, setStatus] = useState<'idle' | 'importing' | 'done' | 'error'>('idle')
+  const [error, setError] = useState('')
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = (ev) => setCsvContent(ev.target?.result as string)
+    reader.readAsText(file)
+  }
+
+  const handleStart = async () => {
+    if (!csvContent) { setError('Please select your ratings.csv file.'); return }
+    setError('')
+    setSubmitting(true)
+    try {
+      const result = await importLetterboxd(userId, csvContent)
+      setJobId(result.job_id)
+      setTotal(result.total_movies)
+      setStatus('importing')
+    } catch {
+      setError('Failed to start import. Please try again.')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  useEffect(() => {
+    if (status !== 'importing' || !jobId) return
+    pollRef.current = setInterval(async () => {
+      try {
+        const data = await pollImportJob(jobId)
+        setProgress(data.progress ?? 0)
+        if (data.status === 'completed') {
+          clearInterval(pollRef.current!)
+          setStatus('done')
+          onComplete(total)
+        } else if (data.status === 'failed') {
+          clearInterval(pollRef.current!)
+          setStatus('error')
+          setError('Import failed. Please try again.')
+        }
+      } catch {
+        clearInterval(pollRef.current!)
+        setStatus('error')
+        setError('Lost connection to import job.')
+      }
+    }, 2000)
+    return () => clearInterval(pollRef.current!)
+  }, [status, jobId, total, onComplete])
+
+  if (!open) {
+    return (
+      <button
+        onClick={() => setOpen(true)}
+        className="w-full flex items-center gap-3 rounded-xl p-4 text-left transition-colors hover:opacity-80"
+        style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', cursor: 'pointer' }}
+      >
+        <Upload size={18} style={{ color: 'var(--accent-gold)', flexShrink: 0 }} />
+        <div>
+          <p className="text-sm font-semibold text-white">Import Letterboxd Ratings</p>
+          <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>Upload your ratings.csv to enrich your taste profile</p>
+        </div>
+      </button>
+    )
+  }
+
+  return (
+    <div className="rounded-xl p-5 animate-fade-in" style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}>
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="text-xs font-bold uppercase tracking-widest" style={{ color: 'var(--text-muted)' }}>Import Letterboxd</h3>
+        {status === 'idle' && (
+          <button onClick={() => setOpen(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)' }}>
+            <X size={16} />
+          </button>
+        )}
+      </div>
+
+      {status === 'idle' && (
+        <div className="space-y-4">
+          <div className="rounded-xl p-4 text-sm" style={{ background: 'var(--bg-overlay)', border: '1px solid var(--border)' }}>
+            <p className="font-semibold text-white mb-2">How to export from Letterboxd:</p>
+            <ol className="space-y-1" style={{ color: 'var(--text-muted)' }}>
+              <li>1. Go to letterboxd.com → Settings → Import &amp; Export</li>
+              <li>2. Click <strong className="text-white">Export Your Data</strong></li>
+              <li>3. Download the ZIP, extract <code className="text-yellow-400">ratings.csv</code></li>
+              <li>4. Upload that file below</li>
+            </ol>
+          </div>
+          <label
+            className="flex flex-col items-center justify-center gap-3 rounded-xl p-6 cursor-pointer transition-colors"
+            style={{ border: `2px dashed ${csvContent ? 'var(--accent-gold)' : 'var(--border)'}`, background: 'var(--bg-overlay)' }}
+          >
+            <Upload size={28} style={{ color: csvContent ? 'var(--accent-gold)' : 'var(--text-muted)' }} />
+            <span className="text-sm font-medium" style={{ color: csvContent ? 'var(--accent-gold)' : 'var(--text-muted)' }}>
+              {csvContent ? 'CSV loaded ✓ — ready to import' : 'Click to select ratings.csv'}
+            </span>
+            <input type="file" accept=".csv" onChange={handleFile} className="hidden" />
+          </label>
+          {error && <p className="text-sm" style={{ color: 'var(--accent-red)' }}>{error}</p>}
+          <button
+            onClick={handleStart}
+            disabled={submitting || !csvContent}
+            className="w-full py-3 rounded-xl font-bold flex items-center justify-center gap-2 disabled:opacity-40"
+            style={{ background: 'var(--accent-gold)', color: '#0a0a0f', border: 'none', cursor: 'pointer' }}
+          >
+            {submitting ? <Loader2 size={18} className="animate-spin" /> : <Upload size={18} />}
+            Start Import
+          </button>
+        </div>
+      )}
+
+      {status === 'importing' && (
+        <div className="text-center space-y-5 py-4">
+          <Loader2 size={40} className="animate-spin mx-auto" style={{ color: 'var(--accent-gold)' }} />
+          <div>
+            <p className="text-white font-bold">Importing your ratings…</p>
+            <p className="text-sm mt-1" style={{ color: 'var(--text-muted)' }}>
+              {total ? `${Math.round(progress / 100 * total)} / ${total} movies` : `${progress}% complete`}
+            </p>
+          </div>
+          <div className="score-bar-track max-w-xs mx-auto">
+            <div className="score-bar-fill" style={{ width: `${progress}%`, background: 'var(--accent-gold)' }} />
+          </div>
+        </div>
+      )}
+
+      {status === 'done' && (
+        <div className="text-center py-4 space-y-3">
+          <div className="w-12 h-12 rounded-full flex items-center justify-center mx-auto" style={{ background: 'var(--accent-gold)' }}>
+            <Check size={22} color="#0a0a0f" />
+          </div>
+          <p className="text-white font-bold">Import complete!</p>
+          <p className="text-sm" style={{ color: 'var(--text-muted)' }}>{total} ratings imported from Letterboxd.</p>
+          <button
+            onClick={() => setOpen(false)}
+            className="text-xs font-semibold px-4 py-2 rounded-lg"
+            style={{ background: 'var(--bg-overlay)', color: 'var(--text-muted)', border: '1px solid var(--border)', cursor: 'pointer' }}
+          >
+            Close
+          </button>
+        </div>
+      )}
+
+      {status === 'error' && (
+        <div className="space-y-3">
+          <p className="text-sm" style={{ color: 'var(--accent-red)' }}>{error}</p>
+          <button
+            onClick={() => { setStatus('idle'); setJobId(null); setProgress(0) }}
+            className="text-xs font-semibold px-4 py-2 rounded-lg"
+            style={{ background: 'var(--bg-overlay)', color: 'var(--text-muted)', border: '1px solid var(--border)', cursor: 'pointer' }}
+          >
+            Try again
+          </button>
+        </div>
+      )}
     </div>
   )
 }
@@ -210,6 +382,12 @@ export default function Profile() {
               </div>
             </div>
           )}
+
+          {/* Letterboxd import */}
+          <LetterboxdImport
+            userId={userId}
+            onComplete={(count) => setRatingCount(ratingCount + count)}
+          />
 
           {!profile && !admin && (
             <div className="text-sm text-center py-8" style={{ color: 'var(--text-muted)' }}>

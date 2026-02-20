@@ -251,14 +251,36 @@ class ProfileAnalyzerAgent(BaseAgent):
         Returns:
             User preferences.
         """
-        # Extract genres
-        all_genres = []
-        for genres in movies_df["tmdb_genres"].dropna():
-            if isinstance(genres, list):
-                all_genres.extend(genres)
+        # Extract genres — split into liked (rating > 2.5) and disliked (rating ≤ 2.5)
+        liked_genres_list = []
+        disliked_genre_counts: Counter = Counter()
 
-        genre_counts = Counter(all_genres)
+        has_rating_col = "rating" in movies_df.columns
+        for _, row in movies_df.iterrows():
+            genres = row.get("tmdb_genres")
+            if not isinstance(genres, list):
+                continue
+            rating_val = row.get("rating") if has_rating_col else 3.0
+            try:
+                rating_val = float(rating_val)
+            except (TypeError, ValueError):
+                rating_val = 3.0
+            if rating_val <= 2.5:
+                disliked_genre_counts.update(genres)
+            else:
+                liked_genres_list.extend(genres)
+
+        genre_counts = Counter(liked_genres_list)
         favorite_genres = [genre for genre, _ in genre_counts.most_common(5)]
+
+        # Genres that appear in low-rated films ≥2 times and aren't also favourites
+        favorite_set = set(favorite_genres)
+        low_rated_count = max(len(movies_df[movies_df["rating"] <= 2.5]) if has_rating_col else 0, 1)
+        min_occurrences = max(2, low_rated_count // 5)
+        disliked_genres = [
+            g for g, cnt in disliked_genre_counts.most_common(5)
+            if cnt >= min_occurrences and g not in favorite_set
+        ]
 
         # Extract preferred languages from rated films
         lang_counts: Counter = Counter()
@@ -326,6 +348,7 @@ class ProfileAnalyzerAgent(BaseAgent):
 
         return UserPreferences(
             favorite_genres=favorite_genres,
+            disliked_genres=disliked_genres,
             favorite_directors=favorite_directors,
             favorite_actors=favorite_actors,
             preferred_languages=preferred_languages,
@@ -499,14 +522,14 @@ class ProfileAnalyzerAgent(BaseAgent):
                 if movie.metadata.genres:
                     text += f" Genres: {', '.join(movie.metadata.genres)}"
 
-                # Temporal decay: half-life ≈ 350 days — old favourites still matter.
-                # Negative signal: ratings ≤ 2.5 get a small negative weight so the
-                # profile embedding is pushed *away* from disliked content.
+                # Profile embedding represents positive taste only.
+                # Disliked movies (≤ 2.5) are excluded — negative filtering is handled
+                # separately via disliked_genres in the Critic agent, so mixing
+                # negative weights here only distorts cosine similarity in ChromaDB.
                 raw_rating = rating["rating"]
                 if raw_rating <= 2.5:
-                    rating_weight = -0.3 * (1.0 - raw_rating / 5.0)
-                else:
-                    rating_weight = raw_rating / 5.0
+                    continue  # skip — dislike signal comes from disliked_genres, not the embedding
+                rating_weight = raw_rating / 5.0
                 ts = rating.get("timestamp")
                 days_ago = 0
                 if ts is not None:

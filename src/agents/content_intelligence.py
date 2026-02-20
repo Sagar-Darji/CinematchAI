@@ -94,8 +94,10 @@ class ContentIntelligenceAgent(BaseAgent):
         context_factors = state.get("context_factors", {})
         context = state.get("context", {})
 
+        context_weights = state.get("context_weights", {})
         scored_movies = self._score_and_rerank(
-            candidate_movies, content_features, user_profile, context_factors, context
+            candidate_movies, content_features, user_profile, context_factors, context,
+            context_weights,
         )
 
         # LLM reranking: single Groq call to reorder the top-20 candidates.
@@ -149,6 +151,9 @@ class ContentIntelligenceAgent(BaseAgent):
         fav_langs = ", ".join((prefs.preferred_languages or [])[:2]) if prefs else ""
         mood = context_factors.get("mood", "")
         companion = context_factors.get("companion", "alone")
+        time_of_day = context_factors.get("time_of_day", "")
+        is_weekend = context_factors.get("is_weekend", False)
+        nl_ctx = (context_factors.get("natural_language_context") or "")[:120]
 
         lines = []
         for i, m in enumerate(top):
@@ -161,11 +166,18 @@ class ContentIntelligenceAgent(BaseAgent):
                 f"rating:{md.vote_average or '?'}/10"
             )
 
+        ctx_line = (
+            f"mood={mood or 'none'}, watching_with={companion}, "
+            f"time={time_of_day}, {'weekend' if is_weekend else 'weekday'}"
+        )
+        if nl_ctx:
+            ctx_line += f", request='{nl_ctx}'"
+
         prompt = (
             f"Rate each movie 0-10 for fit with this user.\n\n"
             f"User: loves [{fav_genres}], directors [{fav_dirs}], "
             f"preferred languages [{fav_langs}].\n"
-            f"Context: mood={mood or 'none'}, watching with={companion}.\n\n"
+            f"Context: {ctx_line}.\n\n"
             f"Movies:\n" + "\n".join(lines) +
             "\n\nReply ONLY with lines like \"0:8.5\" (index:score). No text."
         )
@@ -174,7 +186,7 @@ class ContentIntelligenceAgent(BaseAgent):
             response = self.generate_response(
                 prompt=prompt,
                 system_prompt="Score movies for recommendation fit. Output INDEX:SCORE pairs only.",
-                max_tokens=150,
+                max_tokens=220,
             )
             scores: Dict[int, float] = {}
             for line in response.strip().splitlines():
@@ -251,6 +263,7 @@ class ContentIntelligenceAgent(BaseAgent):
         user_profile,
         context_factors: Dict[str, Any],
         context: Dict[str, Any],
+        context_weights: Dict[str, float] = None,
     ) -> List:
         """
         Score candidates by relevance and filter out mismatches.
@@ -388,6 +401,60 @@ class ContentIntelligenceAgent(BaseAgent):
             )
             if _SEQUEL_RE.search(movie.metadata.title or ""):
                 score -= 0.08
+
+            # 10. Context weights (time_of_day / companion / weekend signals)
+            if context_weights:
+                cw = context_weights
+
+                # family_friendly → boost family/animation, penalise adult genres
+                fw = cw.get("family_friendly", 0.0)
+                if fw:
+                    if "family" in movie_genres or "animation" in movie_genres:
+                        score += fw * 0.20
+                    if movie_genres & {"horror", "thriller", "crime", "war"}:
+                        score -= fw * 0.30
+
+                # romantic → boost romance
+                rw = cw.get("romantic", 0.0)
+                if rw and "romance" in movie_genres:
+                    score += rw * 0.12
+
+                # atmospheric (night) → boost thriller/horror/mystery
+                aw = cw.get("atmospheric", 0.0)
+                if aw and movie_genres & {"thriller", "horror", "mystery"}:
+                    score += aw * 0.12
+
+                # lighthearted (morning) → boost comedy, penalise heavy drama
+                lhw = cw.get("lighthearted", 0.0)
+                if lhw:
+                    if "comedy" in movie_genres:
+                        score += lhw * 0.15
+                    elif "drama" in movie_genres and not movie_genres & {"comedy", "romance"}:
+                        score -= lhw * 0.10
+
+                # thought_provoking / cerebral → boost drama/sci-fi/mystery
+                tpw = max(cw.get("thought_provoking", 0.0), cw.get("cerebral", 0.0))
+                if tpw and movie_genres & {"drama", "science fiction", "mystery"}:
+                    score += tpw * 0.12
+
+                # short_runtime preference → use pacing as proxy
+                srw = cw.get("short_runtime", 0.0)
+                if srw:
+                    pacing = features.get("pacing", "moderate")
+                    if pacing == "fast":
+                        score += srw * 0.08
+                    elif pacing == "slow":
+                        score -= srw * 0.05
+
+                # immersive (weekend) → boost epic/adventure genres
+                imw = cw.get("immersive", 0.0)
+                if imw and movie_genres & {"adventure", "fantasy", "science fiction", "action"}:
+                    score += imw * 0.08
+
+                # uplifting → boost feel-good genres
+                uw = cw.get("uplifting", 0.0)
+                if uw and movie_genres & {"comedy", "family", "animation"}:
+                    score += uw * 0.10
 
             scored.append((score, movie))
 

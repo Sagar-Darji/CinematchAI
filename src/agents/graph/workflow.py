@@ -1,5 +1,6 @@
 """LangGraph Workflow - Orchestrates multi-agent recommendation system."""
 
+import json as _json
 import time
 from typing import Any, Callable, Dict, List, Optional
 
@@ -19,6 +20,25 @@ from src.services.trace_service import get_trace_service
 from src.utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+def _get_titles(movies, limit: int = 12) -> list:
+    """Extract movie titles from a list of Movie objects."""
+    out = []
+    for m in (movies or [])[:limit]:
+        meta = getattr(m, "metadata", None)
+        t = (getattr(meta, "title", None) if meta else None) or getattr(m, "title", None)
+        if t:
+            out.append(str(t))
+    return out
+
+
+def _fmt(text: str, **movie_lists) -> str:
+    """Return a JSON detail string when movie lists are provided, else plain text."""
+    filled = {k: v for k, v in movie_lists.items() if v}
+    if not filled:
+        return text
+    return _json.dumps({"text": text, **filled})
 
 
 # Initialize all agents (singleton pattern)
@@ -120,15 +140,26 @@ def content_intelligence_node(state: RecommendationState) -> RecommendationState
     """Content Intelligence node."""
     start = time.time()
     agents = get_agents()
+
+    # Capture before-titles so we can diff what was kept vs dropped
+    before_movies = list(state.get("candidate_movies") or [])
     result = agents["content_intelligence"].process(state)
 
-    candidates_before = len(state.get("candidate_movies", []))
+    candidates_before = len(before_movies)
     candidates_after = len(result.get("candidate_movies", []))
-    details = {
-        "analyzed_count": candidates_before,
-        "reranked_count": candidates_after,
-    }
-    summary = f"Analyzed {candidates_before} candidates, reranked to {candidates_after}"
+
+    before_titles = _get_titles(before_movies, limit=40)
+    after_titles = _get_titles(result.get("candidate_movies", []), limit=20)
+    after_set = set(after_titles)
+    kept = [t for t in before_titles if t in after_set][:10]
+    dropped = [t for t in before_titles if t not in after_set][:8]
+
+    details = {"analyzed_count": candidates_before, "reranked_count": candidates_after}
+    summary = _fmt(
+        f"Analyzed {candidates_before} candidates, reranked to {candidates_after}",
+        selected=kept,
+        rejected=dropped,
+    )
     _add_trace_step(result, "Content Intelligence", start, summary, details)
     return result
 
@@ -154,8 +185,14 @@ def serendipity_node(state: RecommendationState) -> RecommendationState:
 
     diverse_count = len(result.get("diverse_candidates", []))
     exploration_count = len(result.get("exploration_items", []))
+    diverse_titles = _get_titles(result.get("diverse_candidates", []))
+    exploration_titles = _get_titles(result.get("exploration_items", []))
     details = {"diverse_count": diverse_count, "exploration_count": exploration_count}
-    summary = f"Selected {diverse_count} diverse candidates, {exploration_count} exploration items"
+    summary = _fmt(
+        f"Selected {diverse_count} diverse, {exploration_count} exploration",
+        selected=diverse_titles[:10],
+        exploration=exploration_titles[:4],
+    )
     _add_trace_step(result, "Serendipity", start, summary, details)
     return result
 
@@ -168,8 +205,25 @@ def critic_node(state: RecommendationState) -> RecommendationState:
 
     verdicts = result.get("critic_verdicts", {})
     demoted = sum(1 for v in verdicts.values() if v.startswith("flagged"))
+
+    # Build id → title map from candidates
+    id_to_title: Dict[str, str] = {}
+    for m in (result.get("candidate_movies") or state.get("candidate_movies") or []):
+        meta = getattr(m, "metadata", None)
+        tmdb_id = str(getattr(meta, "tmdb_id", "") if meta else getattr(m, "tmdb_id", ""))
+        title = (getattr(meta, "title", None) if meta else None) or getattr(m, "title", None)
+        if tmdb_id and title:
+            id_to_title[tmdb_id] = str(title)
+
+    approved = [id_to_title[k] for k, v in verdicts.items() if not v.startswith("flagged") and k in id_to_title][:8]
+    rejected = [id_to_title[k] for k, v in verdicts.items() if v.startswith("flagged") and k in id_to_title][:6]
+
     details = {"total_checked": len(verdicts), "demoted": demoted}
-    summary = f"Checked {len(verdicts)} candidates, demoted {demoted}"
+    summary = _fmt(
+        f"Checked {len(verdicts)} candidates, demoted {demoted}",
+        approved=approved,
+        rejected=rejected,
+    )
     _add_trace_step(result, "Adversarial Critic", start, summary, details)
     return result
 
@@ -227,7 +281,11 @@ def retrieval_node(state: RecommendationState) -> RecommendationState:
 
     candidate_count = len(result.get("candidate_movies", []))
     details = {"source": source, "candidate_count": candidate_count}
-    summary = f"Retrieved {candidate_count} candidates via {source}"
+    titles = _get_titles(result.get("candidate_movies", []))
+    summary = _fmt(
+        f"Retrieved {candidate_count} candidates via {source}",
+        considered=titles,
+    )
     _add_trace_step(result, "Retrieval", start, summary, details)
 
     result["_retrieval_source"] = source
@@ -241,9 +299,21 @@ def aggregation_node(state: RecommendationState) -> RecommendationState:
     agents = get_agents()
     result = agents["supervisor"].aggregate_results(state)
 
-    final_count = len(result.get("final_recommendations", []))
+    final_recs = result.get("final_recommendations", [])
+    final_count = len(final_recs)
+    final_titles = []
+    for rec in final_recs:
+        m = getattr(rec, "movie", rec)
+        meta = getattr(m, "metadata", None)
+        t = (getattr(meta, "title", None) if meta else None) or getattr(m, "title", None)
+        if t:
+            final_titles.append(str(t))
+
     details = {"final_count": final_count}
-    summary = f"Aggregated {final_count} final recommendations"
+    summary = _fmt(
+        f"Aggregated {final_count} final recommendations",
+        selected=final_titles,
+    )
     _add_trace_step(result, "Aggregation", start, summary, details)
     return result
 

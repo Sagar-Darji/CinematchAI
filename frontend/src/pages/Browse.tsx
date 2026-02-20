@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Search, X, SlidersHorizontal } from 'lucide-react'
+import { Search, X, SlidersHorizontal, ChevronLeft, ChevronRight } from 'lucide-react'
 import { getTrending, searchMovies, discoverByGenre } from '@/lib/api'
 import type { Movie } from '@/lib/api'
 import { MovieCard, movieToRec } from '@/components/ui/MovieCard'
@@ -32,42 +32,62 @@ export default function Browse() {
   const [activeGenre, setActiveGenre] = useState('')
   const [activeLang, setActiveLang] = useState('')
   const [filtersOpen, setFiltersOpen] = useState(false)
+  const [currentPage, setCurrentPage] = useState(1)
+  const [hasMore, setHasMore] = useState(true)
 
-  const load = useCallback(async (q: string, genre: string, lang: string) => {
+  const load = useCallback(async (q: string, genre: string, lang: string, page: number) => {
     setLoading(true)
     setError(false)
     try {
       let results: Movie[]
       if (q.trim()) {
-        results = await searchMovies(q.trim(), 48, lang || undefined)
+        results = await searchMovies(q.trim(), 18, lang || undefined, page)
       } else if (genre) {
-        results = await discoverByGenre(genre, 48, lang || undefined)
+        results = await discoverByGenre(genre, 18, lang || undefined, page)
       } else {
-        results = await getTrending(48, lang || undefined)
+        results = await getTrending(18, lang || undefined, page)
       }
       setMovies(results)
+      setHasMore(results.length >= 18)
     } catch {
       setMovies([])
       setError(true)
+      setHasMore(false)
     } finally {
       setLoading(false)
     }
   }, [])
 
-  useEffect(() => { load('', '', '') }, [load])
-
   useEffect(() => {
+    setCurrentPage(1)
     if (!query.trim()) {
-      load('', activeGenre, activeLang)
+      load('', activeGenre, activeLang, 1)
       return
     }
-    const t = setTimeout(() => load(query, activeGenre, activeLang), 380)
+    const t = setTimeout(() => load(query, activeGenre, activeLang, 1), 380)
     return () => clearTimeout(t)
   }, [query, activeGenre, activeLang, load])
 
-  const toggleGenre = (g: string) => { setActiveGenre(g === activeGenre ? '' : g); setQuery('') }
-  const toggleLang = (code: string) => { setActiveLang(code === activeLang ? '' : code) }
-  const clearAll = () => { setQuery(''); setActiveGenre(''); setActiveLang('') }
+  const toggleGenre = (g: string) => { setActiveGenre(g === activeGenre ? '' : g); setQuery(''); setCurrentPage(1) }
+  const toggleLang = (code: string) => { setActiveLang(code === activeLang ? '' : code); setCurrentPage(1) }
+  const clearAll = () => { setQuery(''); setActiveGenre(''); setActiveLang(''); setCurrentPage(1) }
+
+  const nextPage = () => {
+    if (hasMore) {
+      const newPage = currentPage + 1
+      setCurrentPage(newPage)
+      load(query, activeGenre, activeLang, newPage)
+      window.scrollTo({ top: 0, behavior: 'smooth' })
+    }
+  }
+  const prevPage = () => {
+    if (currentPage > 1) {
+      const newPage = currentPage - 1
+      setCurrentPage(newPage)
+      load(query, activeGenre, activeLang, newPage)
+      window.scrollTo({ top: 0, behavior: 'smooth' })
+    }
+  }
 
   const hasFilters = !!(activeGenre || activeLang || query)
   const heading = query ? `"${query}"`
@@ -173,20 +193,21 @@ export default function Browse() {
         )}
 
         {/* Results count */}
-        {!loading && (
-          <div className="px-4 md:px-6 py-1.5 flex items-center gap-2 flex-wrap border-t" style={{ borderColor: 'var(--border)' }}>
-            <span className="text-[11px] tabular-nums" style={{ color: 'var(--text-muted)' }}>
+        {!loading && movies.length > 0 && (
+          <div className="px-4 md:px-6 py-2 flex items-center gap-2 flex-wrap border-t" style={{ borderColor: 'var(--border)' }}>
+            <span className="text-[11px] font-semibold tabular-nums" style={{ color: 'var(--accent-gold)' }}>
               {movies.length} {movies.length === 1 ? 'film' : 'films'}
             </span>
+            <span className="text-[11px]" style={{ color: 'var(--text-muted)' }}>on this page</span>
             {activeGenre && (
-              <span className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full"
+              <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full"
                 style={{ background: 'rgba(229,9,20,0.12)', color: '#ff6b6b', border: '1px solid rgba(229,9,20,0.25)' }}>
                 {activeGenre}
                 <button onClick={() => setActiveGenre('')} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'inherit', padding: 0, lineHeight: 0 }}><X size={9} /></button>
               </span>
             )}
             {activeLang && (
-              <span className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full"
+              <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full"
                 style={{ background: 'rgba(245,197,24,0.1)', color: 'var(--accent-gold)', border: '1px solid rgba(245,197,24,0.2)' }}>
                 {LANGUAGES.find(l => l.code === activeLang)?.label}
                 <button onClick={() => setActiveLang('')} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'inherit', padding: 0, lineHeight: 0 }}><X size={9} /></button>
@@ -199,44 +220,103 @@ export default function Browse() {
       {/* Grid */}
       <div className="px-3 md:px-4 pt-3 pb-10">
         {loading ? (
-          <div className="grid grid-cols-4 sm:grid-cols-5 md:grid-cols-6 lg:grid-cols-7 xl:grid-cols-8 gap-2 md:gap-2.5">
-            {Array.from({ length: 40 }).map((_, i) => (
+          <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-3 md:gap-4">
+            {Array.from({ length: 18 }).map((_, i) => (
               <div key={i} className="skeleton rounded-xl" style={{ aspectRatio: '2/3', animationDelay: `${i * 0.025}s` }} />
             ))}
           </div>
         ) : error ? (
-          <div className="flex flex-col items-center justify-center py-28 text-center">
-            <div className="text-3xl mb-3">⚠️</div>
-            <p className="text-sm font-semibold text-white mb-1">Failed to load</p>
-            <p className="text-xs mb-4" style={{ color: 'var(--text-muted)' }}>API server may not be running</p>
-            <button onClick={() => load(query, activeGenre, activeLang)}
-              className="px-4 py-2 rounded-lg text-xs font-bold"
+          <div className="flex flex-col items-center justify-center py-32 text-center px-4">
+            <div className="w-16 h-16 rounded-full flex items-center justify-center mb-4"
+              style={{ background: 'rgba(229,9,20,0.1)', color: 'var(--accent-red)' }}>
+              <span className="text-3xl">⚠️</span>
+            </div>
+            <p className="text-base font-bold text-white mb-2">Unable to load movies</p>
+            <p className="text-sm mb-5 max-w-sm" style={{ color: 'var(--text-muted)' }}>
+              The API server might be offline or experiencing issues. Please try again.
+            </p>
+            <button onClick={() => load(query, activeGenre, activeLang, currentPage)}
+              className="px-5 py-2.5 rounded-xl text-sm font-bold transition-transform hover:scale-105"
               style={{ background: 'var(--accent-gold)', color: '#0a0a0f', border: 'none', cursor: 'pointer' }}>
               Retry
             </button>
           </div>
         ) : movies.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-28 text-center">
-            <div className="text-4xl mb-3">🎬</div>
-            <p className="text-sm font-semibold text-white mb-1">No films found</p>
-            <p className="text-xs mb-4" style={{ color: 'var(--text-muted)' }}>
-              Try a different {activeGenre ? 'genre' : activeLang ? 'language' : 'search'}, or clear the filters.
+          <div className="flex flex-col items-center justify-center py-32 text-center px-4">
+            <div className="w-16 h-16 rounded-full flex items-center justify-center mb-4"
+              style={{ background: 'rgba(245,197,24,0.1)', color: 'var(--accent-gold)' }}>
+              <span className="text-3xl">🎬</span>
+            </div>
+            <p className="text-base font-bold text-white mb-2">No films found</p>
+            <p className="text-sm mb-1 max-w-sm" style={{ color: 'var(--text-muted)' }}>
+              {query 
+                ? `We couldn't find any movies matching "${query}"`
+                : activeGenre 
+                ? `No ${activeGenre} films available with current filters`
+                : activeLang
+                ? `No films found in ${LANGUAGES.find(l => l.code === activeLang)?.label ?? activeLang}`
+                : 'No movies available'}
+            </p>
+            <p className="text-xs mb-5" style={{ color: 'var(--text-muted)' }}>
+              Try adjusting your filters or search terms.
             </p>
             {hasFilters && (
-              <button onClick={clearAll} className="px-4 py-2 rounded-lg text-xs font-bold"
-                style={{ background: 'var(--bg-overlay)', color: 'var(--text-muted)', border: '1px solid var(--border)', cursor: 'pointer' }}>
-                Clear filters
+              <button onClick={clearAll} className="px-5 py-2.5 rounded-xl text-sm font-bold transition-transform hover:scale-105"
+                style={{ background: 'var(--bg-overlay)', color: 'var(--text-primary)', border: '1px solid var(--border)', cursor: 'pointer' }}>
+                Clear all filters
               </button>
             )}
           </div>
         ) : (
-          <div className="grid grid-cols-4 sm:grid-cols-5 md:grid-cols-6 lg:grid-cols-7 xl:grid-cols-8 gap-2 md:gap-2.5">
-            {movies.map((movie, i) => (
-              <div key={movie.tmdb_id ?? i} className="animate-fade-in" style={{ animationDelay: `${Math.min(i * 0.02, 0.6)}s` }}>
-                <MovieCard rec={movieToRec(movie, i + 1)} compact={false} />
+          <>
+            <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-3 md:gap-4">
+              {movies.map((movie, i) => (
+                <div key={movie.tmdb_id ?? i} className="animate-fade-in" style={{ animationDelay: `${Math.min(i * 0.02, 0.6)}s` }}>
+                  <MovieCard rec={movieToRec(movie, i + 1)} compact={false} />
+                </div>
+              ))}
+            </div>
+
+            {/* Pagination */}
+            <div className="flex items-center justify-center gap-3 mt-10 mb-6">
+              <button
+                onClick={prevPage}
+                disabled={currentPage === 1}
+                className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold transition-all hover:scale-105 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:scale-100"
+                style={{
+                  background: currentPage === 1 ? 'var(--bg-card)' : 'var(--accent-gold)',
+                  color: currentPage === 1 ? 'var(--text-muted)' : '#0a0a0f',
+                  border: currentPage === 1 ? '1px solid var(--border)' : 'none',
+                  cursor: currentPage === 1 ? 'not-allowed' : 'pointer',
+                }}
+              >
+                <ChevronLeft size={16} />
+                Previous
+              </button>
+
+              <div className="flex items-center gap-2">
+                <span className="px-4 py-2.5 rounded-xl text-sm font-bold tabular-nums min-w-[80px] text-center"
+                  style={{ background: 'var(--bg-overlay)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}>
+                  Page <span style={{ color: 'var(--accent-gold)' }}>{currentPage}</span>
+                </span>
               </div>
-            ))}
-          </div>
+
+              <button
+                onClick={nextPage}
+                disabled={!hasMore}
+                className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold transition-all hover:scale-105 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:scale-100"
+                style={{
+                  background: !hasMore ? 'var(--bg-card)' : 'var(--accent-gold)',
+                  color: !hasMore ? 'var(--text-muted)' : '#0a0a0f',
+                  border: !hasMore ? '1px solid var(--border)' : 'none',
+                  cursor: !hasMore ? 'not-allowed' : 'pointer',
+                }}
+              >
+                Next
+                <ChevronRight size={16} />
+              </button>
+            </div>
+          </>
         )}
       </div>
     </div>

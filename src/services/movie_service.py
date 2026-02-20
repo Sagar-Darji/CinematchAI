@@ -119,6 +119,7 @@ class MovieService:
         year: Optional[int] = None,
         language: Optional[str] = None,
         limit: int = 20,
+        page: int = 1,
     ) -> List[Movie]:
         """
         Search movies by title.
@@ -128,6 +129,7 @@ class MovieService:
             year: Filter by year.
             language: Filter by language (e.g., "en", "hi", "ko", "ja").
             limit: Max results.
+            page: Page number for pagination.
 
         Returns:
             List of movies.
@@ -137,7 +139,7 @@ class MovieService:
             params = {
                 "api_key": self.api_key,
                 "query": query,
-                "page": 1,
+                "page": page,
             }
 
             if year:
@@ -167,7 +169,7 @@ class MovieService:
             return []
 
     def get_trending_movies(
-        self, time_window: str = "week", language: Optional[str] = None
+        self, time_window: str = "week", language: Optional[str] = None, page: int = 1
     ) -> List[Movie]:
         """
         Get trending movies.
@@ -175,11 +177,12 @@ class MovieService:
         Args:
             time_window: "day" or "week".
             language: Filter by language.
+            page: Page number for pagination.
 
         Returns:
             List of trending movies.
         """
-        cache_key = f"trending_{time_window}_{language or 'all'}"
+        cache_key = f"trending_{time_window}_{language or 'all'}_{page}"
 
         # Check cache (1 hour for trending)
         cached = cache.get(cache_key)
@@ -188,7 +191,7 @@ class MovieService:
 
         try:
             url = f"{self.base_url}/trending/movie/{time_window}"
-            params = {"api_key": self.api_key}
+            params = {"api_key": self.api_key, "page": page}
 
             if language:
                 params["language"] = language
@@ -332,6 +335,126 @@ class MovieService:
             logger.error(f"Failed to get recent releases: {e}")
             return []
 
+    def get_now_playing(
+        self, region: Optional[str] = None, language: Optional[str] = None, page: int = 1
+    ) -> List[Movie]:
+        """Get movies currently playing in theaters via TMDB now_playing endpoint."""
+        cache_key = f"now_playing_{region or 'all'}_{language or 'all'}_{page}"
+        cached = cache.get(cache_key)
+        if cached:
+            return cached
+
+        try:
+            url = f"{self.base_url}/movie/now_playing"
+            params = {"api_key": self.api_key, "page": page}
+            if region:
+                params["region"] = region
+            if language:
+                params["language"] = language
+
+            response = self._session.get(url, params=params, timeout=10)
+            if response.status_code == 200:
+                data = response.json()
+                movies = [
+                    m for item in data.get("results", [])
+                    if (m := self._parse_tmdb_search_result(item))
+                ]
+                cache.set(cache_key, movies, expire=3600)
+                return movies
+            return []
+        except Exception as e:
+            logger.error(f"Failed to get now_playing: {e}")
+            return []
+
+    def get_upcoming(
+        self, region: Optional[str] = None, language: Optional[str] = None, page: int = 1
+    ) -> List[Movie]:
+        """Get upcoming theatrical releases via TMDB upcoming endpoint."""
+        cache_key = f"upcoming_{region or 'all'}_{language or 'all'}_{page}"
+        cached = cache.get(cache_key)
+        if cached:
+            return cached
+
+        try:
+            url = f"{self.base_url}/movie/upcoming"
+            params = {"api_key": self.api_key, "page": page}
+            if region:
+                params["region"] = region
+            if language:
+                params["language"] = language
+
+            response = self._session.get(url, params=params, timeout=10)
+            if response.status_code == 200:
+                data = response.json()
+                movies = [
+                    m for item in data.get("results", [])
+                    if (m := self._parse_tmdb_search_result(item))
+                ]
+                cache.set(cache_key, movies, expire=3600)
+                return movies
+            return []
+        except Exception as e:
+            logger.error(f"Failed to get upcoming: {e}")
+            return []
+
+    def get_ott_releases(
+        self,
+        provider_ids: Optional[str] = None,
+        region: str = "US",
+        language: Optional[str] = None,
+        days: int = 30,
+        page: int = 1,
+    ) -> List[Movie]:
+        """Get recent OTT/streaming releases via TMDB discover with watch providers.
+
+        Args:
+            provider_ids: Pipe-separated TMDB provider IDs (e.g. "8|9|337").
+                          Defaults to Netflix|Prime|Disney+|Apple TV+|HBO Max.
+            region: Region code for watch providers (default: US).
+            language: Language filter.
+            days: Look back N days for releases.
+            page: Page number.
+        """
+        default_providers = "8|9|337|2|384"  # Netflix|Prime|Disney+|Apple TV+|HBO Max
+        providers = provider_ids or default_providers
+        cache_key = f"ott_{providers}_{region}_{language or 'all'}_{days}_{page}"
+        cached = cache.get(cache_key)
+        if cached:
+            return cached
+
+        try:
+            today = datetime.now()
+            start_date = (today - timedelta(days=days)).strftime("%Y-%m-%d")
+            end_date = today.strftime("%Y-%m-%d")
+
+            url = f"{self.base_url}/discover/movie"
+            params = {
+                "api_key": self.api_key,
+                "with_watch_providers": providers,
+                "watch_region": region,
+                "with_watch_monetization_types": "flatrate",
+                "primary_release_date.gte": start_date,
+                "primary_release_date.lte": end_date,
+                "sort_by": "popularity.desc",
+                "page": page,
+            }
+            if language:
+                params["with_original_language"] = language
+
+            response = self._session.get(url, params=params, timeout=10)
+            if response.status_code == 200:
+                data = response.json()
+                movies = [
+                    m for item in data.get("results", [])
+                    if (m := self._parse_tmdb_search_result(item))
+                ]
+                cache.set(cache_key, movies, expire=3600)
+                return movies
+            return []
+        except Exception as e:
+            logger.error(f"Failed to get OTT releases: {e}")
+            return []
+
     def discover_by_criteria(self, params: Dict[str, Any], limit: int = 20) -> List[Movie]:
         """Execute a TMDB discover query with arbitrary params.
 
@@ -351,7 +474,10 @@ class MovieService:
         target_k = params.pop("_target_k", limit)
         actual_limit = min(limit, target_k)
 
-        # Build a stable cache key from the API params
+        # Build cache key from ALL API params (including the random page injected by
+        # SmartQueryStrategy._genre_query). This ensures different users/calls with
+        # different starting pages get distinct cache entries, preventing the bug where
+        # all users received the same cached movie set.
         api_params = {k: v for k, v in sorted(params.items()) if not k.startswith("_")}
         param_hash = hashlib.md5(str(api_params).encode()).hexdigest()[:12]
         cache_key = f"discover_{param_hash}"
@@ -360,11 +486,15 @@ class MovieService:
         if cached:
             return cached[:actual_limit]
 
+        # Extract the starting page (random 1-5 set by _genre_query) so the TMDB
+        # request loop begins from that page rather than always page 1.
+        start_page = int(api_params.pop("page", 1))
+
         try:
             all_movies: List[Movie] = []
             seen_ids: set = set()
 
-            for page in range(1, pages + 1):
+            for page in range(start_page, start_page + pages):
                 url = f"{self.base_url}/discover/movie"
                 request_params = {"api_key": self.api_key, **api_params, "page": page}
 
@@ -388,10 +518,12 @@ class MovieService:
 
             result = all_movies[:actual_limit]
 
-            # Cache for 6 hours
-            cache.set(cache_key, result, expire=21600)
+            # Reduced from 6h → 30min: shorter TTL limits how long two users can
+            # collide on the same cached page even if they happen to pick the same
+            # random page offset.
+            cache.set(cache_key, result, expire=1800)
 
-            logger.info(f"Discover ({strategy}): {len(result)} movies fetched")
+            logger.info(f"Discover ({strategy}, page_start={start_page}): {len(result)} movies fetched")
             return result
 
         except Exception as e:
@@ -432,13 +564,17 @@ class MovieService:
         return Movie(movie_id=str(data["id"]), metadata=metadata)
 
     def _parse_tmdb_search_result(self, data: Dict) -> Optional[Movie]:
-        """Parse TMDB search result."""
+        """Parse TMDB search/discover/trending result (includes genre_ids)."""
         try:
+            from src.services.smart_query import GENRE_ID_TO_NAME
+            genre_ids = data.get("genre_ids", [])
+            genres = [GENRE_ID_TO_NAME[gid] for gid in genre_ids if gid in GENRE_ID_TO_NAME]
+
             metadata = MovieMetadata(
                 tmdb_id=str(data["id"]),
                 title=data.get("title", "Unknown"),
                 overview=data.get("overview", ""),
-                genres=[],  # Search results don't include genre names
+                genres=genres,
                 year=int(data.get("release_date", "1900")[:4])
                 if data.get("release_date")
                 else None,

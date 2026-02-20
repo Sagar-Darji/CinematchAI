@@ -6,11 +6,26 @@ import { tmdbPoster, scoreColor, formatRuntime, cn } from '@/lib/utils'
 import { submitFeedback, recordInteraction } from '@/lib/api'
 import { useUserStore } from '@/store/useUserStore'
 
+// ── Embed source list — update domains here when a provider changes ───────────
+// Sources are tried in order; the player shows a "Try next source" button and
+// also auto-advances on iframe load-error (best-effort, cross-origin limited).
+const EMBED_SOURCES = [
+  { name: 'VidSrc',     url: (type: string, id: string | number) => `https://vsembed.su/embed/${type}/${id}` },
+  { name: 'VidSrc.to',  url: (type: string, id: string | number) => `https://vidsrc.to/embed/${type}/${id}` },
+  { name: 'VidSrc.xyz', url: (type: string, id: string | number) => `https://vidsrc.xyz/embed/${type}/${id}` },
+  { name: '2embed',     url: (_type: string, id: string | number) => `https://www.2embed.cc/embed/${id}` },
+]
+
 // ── Full-screen video player overlay ─────────────────────────────────────────
 
 export function FullScreenPlayer({ tmdbId, title, onClose }: { tmdbId: number | string; title: string; onClose: () => void }) {
   const [mode, setMode] = useState<'movie' | 'tv'>('movie')
   const [adShield, setAdShield] = useState(true)
+  const [srcIdx, setSrcIdx] = useState(0)
+
+  const nextSource = () => setSrcIdx((i) => (i + 1) % EMBED_SOURCES.length)
+
+  useEffect(() => { setSrcIdx(0) }, [mode]) // reset source when switching movie/tv
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
@@ -26,7 +41,7 @@ export function FullScreenPlayer({ tmdbId, title, onClose }: { tmdbId: number | 
     }
   }, [onClose])
 
-  const src = `https://vidsrc.to/embed/${mode}/${tmdbId}`
+  const src = EMBED_SOURCES[srcIdx].url(mode, tmdbId)
 
   return createPortal(
     <div
@@ -40,21 +55,35 @@ export function FullScreenPlayer({ tmdbId, title, onClose }: { tmdbId: number | 
         background: '#000',
       }}
     >
-      {/* Top bar: mode toggle + close */}
+      {/* Top bar: mode toggle + source switcher + close */}
       <div className="absolute top-0 inset-x-0 z-10 flex items-center justify-between px-4 py-3"
         style={{ background: 'linear-gradient(to bottom, rgba(0,0,0,0.8), transparent)' }}>
-        <div className="flex items-center gap-1 rounded-full p-0.5" style={{ background: 'rgba(255,255,255,0.1)' }}>
-          {(['movie', 'tv'] as const).map((m) => (
-            <button key={m} onClick={() => setMode(m)}
-              className="px-3.5 py-1.5 rounded-full text-xs font-bold capitalize"
-              style={{
-                background: mode === m ? 'var(--accent-gold)' : 'transparent',
-                color: mode === m ? '#0a0a0f' : 'rgba(255,255,255,0.6)',
-                border: 'none', cursor: 'pointer',
-              }}>
-              {m === 'tv' ? 'TV Show' : 'Movie'}
-            </button>
-          ))}
+        <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1 rounded-full p-0.5" style={{ background: 'rgba(255,255,255,0.1)' }}>
+            {(['movie', 'tv'] as const).map((m) => (
+              <button key={m} onClick={() => setMode(m)}
+                className="px-3.5 py-1.5 rounded-full text-xs font-bold capitalize"
+                style={{
+                  background: mode === m ? 'var(--accent-gold)' : 'transparent',
+                  color: mode === m ? '#0a0a0f' : 'rgba(255,255,255,0.6)',
+                  border: 'none', cursor: 'pointer',
+                }}>
+                {m === 'tv' ? 'TV Show' : 'Movie'}
+              </button>
+            ))}
+          </div>
+          {/* Source switcher */}
+          <button
+            onClick={nextSource}
+            title="Try next streaming source"
+            style={{
+              fontSize: '11px', padding: '4px 10px', borderRadius: '12px',
+              border: '1px solid rgba(255,255,255,0.25)', background: 'rgba(255,255,255,0.1)',
+              color: 'rgba(255,255,255,0.75)', cursor: 'pointer', whiteSpace: 'nowrap',
+            }}
+          >
+            ⟳ {EMBED_SOURCES[srcIdx].name}
+          </button>
         </div>
         <span className="text-white text-sm font-semibold truncate mx-4 flex-1 text-center opacity-70">{title}</span>
         <button
@@ -81,7 +110,7 @@ export function FullScreenPlayer({ tmdbId, title, onClose }: { tmdbId: number | 
       )}
 
       <iframe
-        key={mode}
+        key={`${mode}-${srcIdx}`}
         src={src}
         style={{ width: '100%', height: '100%', border: 'none', display: 'block' }}
         referrerPolicy="no-referrer"
@@ -89,6 +118,7 @@ export function FullScreenPlayer({ tmdbId, title, onClose }: { tmdbId: number | 
         allowFullScreen
         loading="lazy"
         title={`Watch ${title}`}
+        onError={nextSource}
       />
     </div>,
     document.body
@@ -335,19 +365,42 @@ export function MovieCard({ rec, rank, compact = true }: MovieCardProps) {
             </div>
           </>
         ) : (
-          // Poster grid cell
-          <div className="rounded-xl overflow-hidden relative" style={{ border: '1px solid var(--border)' }}>
+          // Poster grid cell - Browse mode with enhanced hover
+          <div className="rounded-xl overflow-hidden relative group/card" style={{ border: '1px solid var(--border)' }}>
             {poster
-              ? <img src={poster} alt={movie.title} className="w-full aspect-[2/3] object-cover" loading="lazy" />
-              : <div className="w-full aspect-[2/3]" style={{ background: 'linear-gradient(135deg,#1a1a2e,#0f3460)' }} />}
-            <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex flex-col justify-end p-2"
-              style={{ background: 'linear-gradient(to top, rgba(0,0,0,0.92) 0%, transparent 55%)' }}>
-              <p className="text-white text-[10px] font-bold line-clamp-2 leading-tight">{movie.title}</p>
-              {movie.year && <p className="text-[9px] mt-0.5" style={{ color: 'var(--text-muted)' }}>{movie.year}</p>}
-              <p className="text-[10px] font-bold mt-0.5" style={{ color: barColor }}>{pct}%</p>
+              ? <img src={poster} alt={movie.title} className="w-full aspect-[2/3] object-cover group-hover/card:scale-105 transition-transform duration-300" loading="lazy" />
+              : <div className="w-full aspect-[2/3] flex items-center justify-center text-center p-2" style={{ background: 'linear-gradient(135deg,#1a1a2e,#0f3460)' }}>
+                  <span className="text-[10px] font-bold text-white leading-tight">{movie.title}</span>
+                </div>}
+            
+            {/* Hover overlay with info */}
+            <div className="absolute inset-0 opacity-0 group-hover/card:opacity-100 transition-all duration-200 flex flex-col justify-end p-2.5"
+              style={{ background: 'linear-gradient(to top, rgba(0,0,0,0.95) 0%, rgba(0,0,0,0.7) 45%, transparent 80%)' }}>
+              <p className="text-white text-[11px] font-bold line-clamp-2 leading-tight mb-1">{movie.title}</p>
+              
+              <div className="flex items-center gap-1.5 mb-1 flex-wrap">
+                {movie.year && (
+                  <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(255,255,255,0.15)', color: '#fff' }}>
+                    {movie.year}
+                  </span>
+                )}
+                {movie.vote_average && (
+                  <span className="flex items-center gap-0.5 text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(245,197,24,0.2)', color: 'var(--accent-gold)' }}>
+                    <Star size={8} fill="currentColor" />
+                    {Number(movie.vote_average).toFixed(1)}
+                  </span>
+                )}
+              </div>
+              
+              {movie.genres && movie.genres.length > 0 && (
+                <p className="text-[9px] line-clamp-1 leading-tight" style={{ color: 'rgba(255,255,255,0.7)' }}>
+                  {movie.genres.slice(0, 2).join(' · ')}
+                </p>
+              )}
             </div>
+            
             {rank && (
-              <div className="absolute top-1.5 left-1.5 w-5 h-5 flex items-center justify-center rounded-full text-[9px] font-black"
+              <div className="absolute top-1.5 left-1.5 w-5 h-5 flex items-center justify-center rounded-full text-[9px] font-black shadow-lg"
                 style={{ background: 'var(--accent-gold)', color: '#0a0a0f' }}>{rank}</div>
             )}
           </div>

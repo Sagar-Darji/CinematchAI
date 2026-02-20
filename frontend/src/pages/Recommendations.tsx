@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { SlidersHorizontal, RefreshCw, ChevronDown, ChevronUp } from 'lucide-react'
+import { SlidersHorizontal, RefreshCw } from 'lucide-react'
 import { submitRecommendationJob, pollJobStatus } from '@/lib/api'
 import { useUserStore } from '@/store/useUserStore'
 import { useRecommendationStore } from '@/store/useRecommendationStore'
@@ -10,7 +10,7 @@ import { cn } from '@/lib/utils'
 
 const ALL_AGENTS = [
   'Profile Analyzer', 'Context-Aware', 'Retrieval',
-  'Content Intelligence', 'Serendipity', 'Explanation', 'Aggregation',
+  'Content Intelligence', 'Serendipity', 'Adversarial Critic', 'Explanation', 'Aggregation',
 ]
 
 const LANGUAGE_MAP: Record<string, string> = {
@@ -105,7 +105,7 @@ export default function Recommendations() {
   const pipelinePct = isDone
     ? 100
     : isRunning
-    ? Math.max(5, Math.round((steps.length / 7) * 85))
+    ? Math.max(5, Math.round((steps.length / 8) * 85))
     : 0
 
   const activeFilters = [...mood, language, companion, naturalCtx, yearMin, yearMax].filter(Boolean).length
@@ -129,6 +129,22 @@ export default function Recommendations() {
           </div>
 
           <div className="flex items-center gap-2">
+            {/* Pipeline trace toggle — only shown when done */}
+            {isDone && steps.length > 0 && !isRunning && (
+              <button
+                onClick={() => setTraceCollapsed((v) => !v)}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold"
+                style={{
+                  background: traceCollapsed ? 'var(--bg-card)' : 'var(--bg-overlay)',
+                  border: `1px solid ${traceCollapsed ? 'var(--border)' : 'rgba(245,197,24,0.35)'}`,
+                  color: traceCollapsed ? 'var(--text-muted)' : 'var(--accent-gold)',
+                  cursor: 'pointer',
+                }}
+              >
+                🎬 {traceCollapsed ? 'Pipeline' : 'Hide'}
+              </button>
+            )}
+
             <button
               onClick={() => setSidebarOpen((v) => !v)}
               className="relative p-2.5 rounded-xl"
@@ -160,22 +176,10 @@ export default function Recommendations() {
         </div>
 
         <div className="px-4 md:px-8 py-6 pb-16">
-          {/* Trace */}
-          {(isRunning || (isDone && steps.length > 0)) && (
+          {/* Running trace — shown above while pipeline is active (no films yet) */}
+          {isRunning && (
             <div className="mb-10 max-w-2xl mx-auto">
-              {isDone && !isRunning && (
-                <button
-                  onClick={() => setTraceCollapsed((v) => !v)}
-                  className="flex items-center gap-1.5 text-xs font-semibold mb-2 mx-auto"
-                  style={{ color: 'var(--text-muted)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
-                >
-                  {traceCollapsed ? <ChevronDown size={12} /> : <ChevronUp size={12} />}
-                  {traceCollapsed ? 'Show pipeline trace' : 'Hide pipeline trace'}
-                </button>
-              )}
-              {!traceCollapsed && (
-                <TraceDisplay steps={steps} runningStep={isRunning ? currentRunningStep : null} isComplete={isDone} />
-              )}
+              <TraceDisplay steps={steps} runningStep={currentRunningStep} isComplete={false} />
             </div>
           )}
 
@@ -187,9 +191,16 @@ export default function Recommendations() {
             </div>
           )}
 
-          {/* Film stack */}
+          {/* Film stack — always first when done so no scrolling needed */}
           {recommendations.length > 0 && !isRunning && (
             <FilmStack recs={recommendations} />
+          )}
+
+          {/* Completed trace — below films, toggle via header button */}
+          {isDone && steps.length > 0 && !isRunning && !traceCollapsed && (
+            <div className="mt-10 max-w-2xl mx-auto">
+              <TraceDisplay steps={steps} runningStep={null} isComplete={true} />
+            </div>
           )}
 
           {!isRunning && recommendations.length === 0 && jobStatus !== 'failed' && (

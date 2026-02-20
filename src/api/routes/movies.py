@@ -24,16 +24,18 @@ router = APIRouter(prefix="/movies", tags=["movies"])
 async def get_trending_movies(
     time_window: str = Query("week", description="Time window: day or week"),
     language: Optional[str] = Query(None, description="Filter by language (e.g., en, hi, ko, ja)"),
+    page: int = Query(1, ge=1, le=500, description="Page number (default: 1)"),
 ):
     """
     Get trending movies from TMDB.
 
     - **time_window**: "day" or "week" (default: week)
     - **language**: Optional language filter (ISO 639-1 code)
+    - **page**: Page number for pagination (default: 1)
 
     Returns currently trending movies, optionally filtered by language.
     """
-    logger.info(f"GET /movies/trending: time_window={time_window}, language={language}")
+    logger.info(f"GET /movies/trending: time_window={time_window}, language={language}, page={page}")
 
     if time_window not in ["day", "week"]:
         raise HTTPException(
@@ -46,6 +48,7 @@ async def get_trending_movies(
         movies = service.get_trending_movies(
             time_window=time_window,
             language=language,
+            page=page,
         )
 
         # Convert to MovieResponse format
@@ -68,6 +71,7 @@ async def get_trending_movies(
             "count": len(movie_responses),
             "time_window": time_window,
             "language": language,
+            "page": page,
         }
 
     except Exception as e:
@@ -218,6 +222,7 @@ async def search_movies(
     year: Optional[int] = Query(None, description="Filter by year"),
     language: Optional[str] = Query(None, description="Filter by language"),
     limit: int = Query(20, ge=1, le=50, description="Number of results (max 50)"),
+    page: int = Query(1, ge=1, le=500, description="Page number (default: 1)"),
 ):
     """
     Search movies by title.
@@ -226,11 +231,12 @@ async def search_movies(
     - **year**: Optional year filter
     - **language**: Optional language filter
     - **limit**: Number of results (default: 20, max: 50)
+    - **page**: Page number for pagination (default: 1)
 
     Returns movies matching the search query.
     """
     logger.info(
-        f"GET /movies/search: query={query}, year={year}, language={language}, limit={limit}"
+        f"GET /movies/search: query={query}, year={year}, language={language}, limit={limit}, page={page}"
     )
 
     try:
@@ -240,6 +246,7 @@ async def search_movies(
             year=year,
             language=language,
             limit=limit,
+            page=page,
         )
 
         movie_responses = [
@@ -262,6 +269,7 @@ async def search_movies(
             "query": query,
             "year": year,
             "language": language,
+            "page": page,
         }
 
     except Exception as e:
@@ -273,6 +281,113 @@ async def search_movies(
 
 
 @router.get(
+    "/now-playing",
+    status_code=status.HTTP_200_OK,
+    responses={500: {"model": ErrorResponse}},
+)
+async def get_now_playing(
+    region: Optional[str] = Query(None, description="Region code (e.g., US, IN, GB)"),
+    language: Optional[str] = Query(None, description="Language code (e.g., en, hi)"),
+    page: int = Query(1, ge=1, le=500),
+):
+    """Get movies currently playing in theaters."""
+    try:
+        service = get_movie_service()
+        movies = service.get_now_playing(region=region, language=language, page=page)
+        movie_responses = [
+            MovieResponse(
+                tmdb_id=int(m.metadata.tmdb_id),
+                title=m.metadata.title,
+                year=m.metadata.year,
+                genres=m.metadata.genres,
+                overview=m.metadata.overview,
+                vote_average=m.metadata.vote_average,
+                director=m.metadata.director,
+                poster_path=m.metadata.poster_path,
+            )
+            for m in movies
+        ]
+        return {"movies": movie_responses, "count": len(movie_responses), "region": region, "page": page}
+    except Exception as e:
+        logger.error(f"Failed to get now playing: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get now playing movies")
+
+
+@router.get(
+    "/upcoming",
+    status_code=status.HTTP_200_OK,
+    responses={500: {"model": ErrorResponse}},
+)
+async def get_upcoming(
+    region: Optional[str] = Query(None, description="Region code (e.g., US, IN, GB)"),
+    language: Optional[str] = Query(None, description="Language code (e.g., en, hi)"),
+    page: int = Query(1, ge=1, le=500),
+):
+    """Get upcoming theatrical releases."""
+    try:
+        service = get_movie_service()
+        movies = service.get_upcoming(region=region, language=language, page=page)
+        movie_responses = [
+            MovieResponse(
+                tmdb_id=int(m.metadata.tmdb_id),
+                title=m.metadata.title,
+                year=m.metadata.year,
+                genres=m.metadata.genres,
+                overview=m.metadata.overview,
+                vote_average=m.metadata.vote_average,
+                director=m.metadata.director,
+                poster_path=m.metadata.poster_path,
+            )
+            for m in movies
+        ]
+        return {"movies": movie_responses, "count": len(movie_responses), "region": region, "page": page}
+    except Exception as e:
+        logger.error(f"Failed to get upcoming: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get upcoming movies")
+
+
+@router.get(
+    "/ott-releases",
+    status_code=status.HTTP_200_OK,
+    responses={500: {"model": ErrorResponse}},
+)
+async def get_ott_releases(
+    providers: Optional[str] = Query(None, description="Pipe-separated provider IDs (e.g. '8|9|337')"),
+    region: str = Query("US", description="Watch region (e.g., US, IN, GB)"),
+    language: Optional[str] = Query(None, description="Language filter"),
+    days: int = Query(30, ge=1, le=365, description="Look back N days"),
+    page: int = Query(1, ge=1, le=500),
+):
+    """Get recent OTT/streaming releases (Netflix, Prime Video, Disney+, etc.)."""
+    try:
+        service = get_movie_service()
+        movies = service.get_ott_releases(
+            provider_ids=providers,
+            region=region,
+            language=language,
+            days=days,
+            page=page,
+        )
+        movie_responses = [
+            MovieResponse(
+                tmdb_id=int(m.metadata.tmdb_id),
+                title=m.metadata.title,
+                year=m.metadata.year,
+                genres=m.metadata.genres,
+                overview=m.metadata.overview,
+                vote_average=m.metadata.vote_average,
+                director=m.metadata.director,
+                poster_path=m.metadata.poster_path,
+            )
+            for m in movies
+        ]
+        return {"movies": movie_responses, "count": len(movie_responses), "region": region, "days": days, "page": page}
+    except Exception as e:
+        logger.error(f"Failed to get OTT releases: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get OTT releases")
+
+
+@router.get(
     "/discover",
     status_code=status.HTTP_200_OK,
 )
@@ -280,20 +395,21 @@ async def discover_movies(
     genre: Optional[str] = Query(None, description="Genre name (e.g. Action, Comedy)"),
     language: Optional[str] = Query(None, description="Language code (e.g. en, hi, ko)"),
     limit: int = Query(40, ge=1, le=50, description="Number of results"),
+    page: int = Query(1, ge=1, le=500, description="Page number (default: 1)"),
 ):
     """
     Discover movies by genre and/or language via TMDB.
 
     Falls back to trending if no genre specified.
     """
-    logger.info(f"GET /movies/discover: genre={genre}, language={language}, limit={limit}")
+    logger.info(f"GET /movies/discover: genre={genre}, language={language}, limit={limit}, page={page}")
     try:
         service = get_movie_service()
         # Use search with genre keyword, or trending as fallback
         if genre:
-            movies = service.search_movies(query=genre, language=language, limit=limit)
+            movies = service.search_movies(query=genre, language=language, limit=limit, page=page)
         else:
-            movies = service.get_trending_movies(time_window="week", language=language)
+            movies = service.get_trending_movies(time_window="week", language=language, page=page)
             movies = movies[:limit]
 
         movie_responses = [
@@ -309,7 +425,7 @@ async def discover_movies(
             )
             for m in movies
         ]
-        return {"movies": movie_responses, "count": len(movie_responses), "genre": genre, "language": language}
+        return {"movies": movie_responses, "count": len(movie_responses), "genre": genre, "language": language, "page": page}
     except Exception as e:
         logger.error(f"Failed to discover movies: {e}")
         raise HTTPException(status_code=500, detail="Failed to discover movies")

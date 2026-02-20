@@ -7,6 +7,8 @@ import Onboarding from '@/pages/Onboarding'
 import Recommendations from '@/pages/Recommendations'
 import Browse from '@/pages/Browse'
 import Profile from '@/pages/Profile'
+import Digest from '@/pages/Digest'
+import ReleaseCalendar from '@/pages/ReleaseCalendar'
 import { useUserStore } from '@/store/useUserStore'
 
 export default function App() {
@@ -46,6 +48,8 @@ export default function App() {
               </ProtectedRoute>
             } 
           />
+          <Route path="/digest" element={<Digest />} />
+          <Route path="/calendar" element={<ReleaseCalendar />} />
         </Route>
       </Routes>
     </BrowserRouter>

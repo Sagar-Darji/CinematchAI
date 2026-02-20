@@ -1,16 +1,18 @@
 import { useEffect, useState } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
-import { Clapperboard, Sparkles, Search, User, Home, LogOut } from 'lucide-react'
+import { Clapperboard, Sparkles, Search, User, Home, LogOut, Rss, CalendarDays } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { getSystemStats } from '@/lib/api'
 import { useUserStore } from '@/store/useUserStore'
 import { useRecommendationStore } from '@/store/useRecommendationStore'
 
 const NAV = [
-  { to: '/', icon: Home, label: 'Home' },
+  { to: '/',         icon: Home,         label: 'Home'      },
   { to: '/recommendations', icon: Sparkles, label: 'For You' },
-  { to: '/browse', icon: Search, label: 'Browse' },
-  { to: '/profile', icon: User, label: 'Profile' },
+  { to: '/browse',   icon: Search,       label: 'Browse'    },
+  { to: '/calendar', icon: CalendarDays, label: 'Calendar'  },
+  { to: '/digest',   icon: Rss,          label: 'CineDigest'},
+  { to: '/profile',  icon: User,         label: 'Profile'   },
 ]
 
 export function Sidebar() {

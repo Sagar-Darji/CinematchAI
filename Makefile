@@ -7,7 +7,7 @@
         logs logs-api logs-frontend logs-monitor \
         monitor ps shell-api shell-frontend \
         k8s-apply k8s-delete k8s-status \
-        dev dev-api dev-frontend clean
+        dev dev-api dev-frontend streamlit clean
 
 COMPOSE := docker compose
 KUBECTL  := kubectl
@@ -93,10 +93,22 @@ monitor: ## Open Grafana in browser (macOS / Linux)
 
 # ── Local development (no Docker) ────────────────────────────────────────────
 
-dev: ## Start API + frontend locally (no Docker)
+dev: ## Start API + Vite frontend locally (Ctrl+C stops everything cleanly)
 	@echo "$(BOLD)Starting API on :8000 and frontend on :5173…$(RESET)"
-	@$(MAKE) dev-api &
-	@$(MAKE) dev-frontend
+	@echo "$(GOLD)Press Ctrl+C once to stop all processes.$(RESET)"
+	@bash -c 'trap "kill 0" EXIT INT TERM; \
+	  PYTHONPATH=. uvicorn src.api.main:app --reload --host 0.0.0.0 --port 8000 & \
+	  cd frontend && npm run dev; \
+	  wait'
+
+streamlit: ## Start API + Streamlit UI locally (Ctrl+C stops everything cleanly)
+	@echo "$(BOLD)Starting API on :8000 and Streamlit on :8501…$(RESET)"
+	@echo "$(GOLD)Press Ctrl+C once to stop all processes.$(RESET)"
+	@bash -c 'trap "kill 0" EXIT INT TERM; \
+	  PYTHONPATH=. uvicorn src.api.main:app --reload --host 0.0.0.0 --port 8000 & \
+	  sleep 3 && \
+	  PYTHONPATH=. streamlit run src/ui/app.py --server.port 8501 --server.address 0.0.0.0; \
+	  wait'
 
 dev-api: ## Start FastAPI dev server locally
 	PYTHONPATH=. uvicorn src.api.main:app --reload --host 0.0.0.0 --port 8000

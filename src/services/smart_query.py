@@ -54,6 +54,17 @@ MOOD_GENRE_MAP = {
 
 ALL_GENRE_IDS = list(TMDB_GENRE_IDS.values())
 
+# Viewing-situation → TMDB genre IDs string + sort order
+SITUATION_QUERY_MAP = {
+    "late_night_solo":          ("27,53,878",  "vote_average.desc"),  # Horror, Thriller, Sci-Fi
+    "family_movie_night":       ("10751,16",   "popularity.desc"),    # Family, Animation
+    "weekend_social_gathering": ("35,28",      "popularity.desc"),    # Comedy, Action
+    "weeknight_unwind":         ("18,10749",   "vote_average.desc"),  # Drama, Romance
+    "lazy_weekend_afternoon":   ("12,14",      "popularity.desc"),    # Adventure, Fantasy
+    "weeknight_date":           ("10749,18",   "vote_average.desc"),  # Romance, Drama
+    "weekend_relaxation":       ("35,12",      "popularity.desc"),    # Comedy, Adventure
+}
+
 
 class SmartQueryStrategy:
     """Builds targeted TMDB discover queries from user profile + context."""
@@ -90,6 +101,12 @@ class SmartQueryStrategy:
         year_min = context.get("year_min")
         year_max = context.get("year_max")
         preferred_decades = self._get_preferred_decades(user_profile)
+        viewing_situation = context_factors.get("viewing_situation", "casual_viewing")
+        nl_context = (
+            context_factors.get("natural_language_context")
+            or context.get("natural_language_context")
+            or ""
+        )
 
         # ---- 1. GENRE-BASED (40% of k) ----
         genre_k = max(int(k * 0.40), 5)
@@ -122,26 +139,41 @@ class SmartQueryStrategy:
             q["_target_k"] = genre_k
             queries.append(self._apply_context_filters(q, context))
 
-        # ---- 2. EXPLORATION (15% of k) ----
-        explore_k = max(int(k * 0.15), 3)
-        if unexplored:
-            import random
-            explore_genres = random.sample(unexplored, min(2, len(unexplored)))
-            q = self._genre_query(
-                genre_ids=explore_genres,
-                sort_by="popularity.desc",
-                pages=1,
-                year_min=year_min,
-                year_max=year_max,
-            )
-            q["_strategy"] = "exploration"
-            q["_target_k"] = explore_k
-            queries.append(self._apply_context_filters(q, context))
+        # ---- 2. EXPLORATION / SITUATION / NL-FREEFORM (15% of k) ----
+        # Priority: NL freeform > viewing_situation > random exploration
+        # When mood is explicit, exploration shrinks to 5% and mood grows to 25%.
+        mood_explicit = bool(mood)
+        explore_k = max(int(k * 0.05) if mood_explicit else int(k * 0.15), 2)
 
-        # ---- 3. MOOD-MATCHED (15% of k) ----
-        mood_k = max(int(k * 0.15), 3)
+        if nl_context and len(nl_context) > 15:
+            # Parse freeform text into a structured TMDB discover query
+            nl_params = self._parse_nl_to_tmdb_params(nl_context, year_min, year_max)
+            if nl_params:
+                nl_params["_strategy"] = "nl_freeform"
+                nl_params["_target_k"] = max(int(k * 0.25), 5)
+                queries.append(nl_params)
+            else:
+                # LLM parse failed — fall through to situation or random
+                self._add_exploration_query(
+                    queries, viewing_situation, explore_k, unexplored,
+                    year_min, year_max, context
+                )
+        else:
+            self._add_exploration_query(
+                queries, viewing_situation, explore_k, unexplored,
+                year_min, year_max, context
+            )
+
+        # ---- 3. MOOD-MATCHED (25% of k when explicit, else 15%) ----
+        mood_k = max(int(k * 0.25) if mood_explicit else int(k * 0.15), 3)
         if mood and mood.lower() in MOOD_GENRE_MAP:
             mood_genres = MOOD_GENRE_MAP[mood.lower()]
+            # Only narrow by user's genre history if we retain ≥2 mood genres —
+            # a single intersected genre makes the mood query too thin.
+            user_genre_ids = {TMDB_GENRE_IDS[g] for g in top_genres if g in TMDB_GENRE_IDS}
+            if user_genre_ids:
+                intersected = [gid for gid in mood_genres if gid in user_genre_ids]
+                mood_genres = intersected if len(intersected) >= 2 else mood_genres
             q = self._genre_query(
                 genre_ids=mood_genres[:2],
                 sort_by="popularity.desc",
@@ -172,11 +204,12 @@ class SmartQueryStrategy:
         # ---- 5. LANGUAGE-SPECIFIC (15% of k) ----
         lang_k = max(int(k * 0.15), 3)
         if language:
+            import random
             q = {
                 "sort_by": "popularity.desc",
                 "with_original_language": language,
                 "vote_count.gte": 50,
-                "page": 1,
+                "page": random.randint(1, 5),
                 "_strategy": "language_specific",
                 "_target_k": lang_k,
             }
@@ -188,11 +221,113 @@ class SmartQueryStrategy:
 
         logger.info(
             f"SmartQuery: built {len(queries)} discover queries "
-            f"(genres={top_genres[:3]}, mood={mood}, lang={language})"
+            f"(genres={top_genres[:3]}, mood={mood}, situation={viewing_situation}, "
+            f"nl={'yes' if nl_context else 'no'}, lang={language})"
         )
         return queries
 
     # ---------------------------------------------------------------- helpers
+
+    def _add_exploration_query(
+        self,
+        queries: list,
+        viewing_situation: str,
+        explore_k: int,
+        unexplored: list,
+        year_min,
+        year_max,
+        context: dict,
+    ) -> None:
+        """Append one exploration query: situation-aware if possible, else random."""
+        import random
+
+        if viewing_situation in SITUATION_QUERY_MAP:
+            genre_str, sort_by = SITUATION_QUERY_MAP[viewing_situation]
+            q: Dict[str, Any] = {
+                "with_genres": genre_str,
+                "sort_by": sort_by,
+                "vote_count.gte": 50,
+                "page": random.randint(1, 3),
+                "_strategy": "situation_based",
+                "_target_k": explore_k,
+            }
+            if year_min:
+                q["primary_release_date.gte"] = f"{year_min}-01-01"
+            if year_max:
+                q["primary_release_date.lte"] = f"{year_max}-12-31"
+            queries.append(self._apply_context_filters(q, context))
+        elif unexplored:
+            explore_genres = random.sample(unexplored, min(2, len(unexplored)))
+            q = self._genre_query(
+                genre_ids=explore_genres,
+                sort_by="popularity.desc",
+                pages=1,
+                year_min=year_min,
+                year_max=year_max,
+            )
+            q["_strategy"] = "exploration"
+            q["_target_k"] = explore_k
+            queries.append(self._apply_context_filters(q, context))
+
+    def _parse_nl_to_tmdb_params(
+        self,
+        nl_text: str,
+        year_min=None,
+        year_max=None,
+    ) -> Optional[Dict[str, Any]]:
+        """Call LLM to parse freeform natural language into TMDB discover params.
+
+        Returns a param dict or None if parsing fails / no Groq key configured.
+        """
+        try:
+            from config.settings import get_settings
+            settings = get_settings()
+            if not settings.groq_api_key:
+                return None
+
+            import json
+            import re
+            from groq import Groq
+
+            client = Groq(api_key=settings.groq_api_key)
+
+            parse_prompt = (
+                f'Parse this movie request into TMDB discover params JSON.\n'
+                f'Request: "{nl_text}"\n'
+                f'Return ONLY a JSON object. Valid keys: with_genres (comma-separated TMDB genre IDs), '
+                f'with_original_language (ISO code), sort_by, vote_average.gte.\n'
+                f'TMDB IDs — Action:28 Adventure:12 Animation:16 Comedy:35 Crime:80 '
+                f'Drama:18 Family:10751 Fantasy:14 History:36 Horror:27 Music:10402 '
+                f'Mystery:9648 Romance:10749 SciFi:878 Thriller:53 War:10752.\n'
+                f'Example: {{"with_genres": "10749,35", "sort_by": "popularity.desc"}}'
+            )
+
+            resp = client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[{"role": "user", "content": parse_prompt}],
+                max_tokens=120,
+                temperature=0.0,
+            )
+            text = resp.choices[0].message.content.strip()
+            m = re.search(r'\{[^{}]+\}', text)
+            if not m:
+                return None
+
+            params: Dict[str, Any] = json.loads(m.group(0))
+            params.setdefault("vote_count.gte", 30)
+            params.setdefault("page", 1)
+            if year_min:
+                params["primary_release_date.gte"] = f"{year_min}-01-01"
+            if year_max:
+                params["primary_release_date.lte"] = f"{year_max}-12-31"
+
+            logger.info(f"NL→TMDB parse: '{nl_text[:60]}' → {params}")
+            return params
+
+        except Exception as e:
+            logger.warning(f"NL→TMDB parse failed (non-critical): {e}")
+            return None
+
     def _genre_query(
         self,
         genre_ids: List[int],
@@ -202,10 +337,14 @@ class SmartQueryStrategy:
         year_max: Optional[int],
     ) -> Dict[str, Any]:
         """Build a single discover query dict."""
+        import random
         params: Dict[str, Any] = {
             "sort_by": sort_by,
             "vote_count.gte": 50,
-            "page": 1,
+            # Random starting page (1-5) so each query invocation produces a unique
+            # cache key in discover_by_criteria(), preventing all users from hitting
+            # the same cached result set.
+            "page": random.randint(1, 5),
         }
         if genre_ids:
             params["with_genres"] = ",".join(str(gid) for gid in genre_ids)

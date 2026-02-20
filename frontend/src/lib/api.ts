@@ -93,27 +93,30 @@ export async function pollJobStatus(jobId: string): Promise<JobStatus> {
 
 // ── Browse / Search ───────────────────────────────────────────────────────────
 
-export async function getTrending(limit = 40, language?: string): Promise<Movie[]> {
+export async function getTrending(limit = 40, language?: string, page = 1): Promise<Movie[]> {
   const params = new URLSearchParams({ time_window: 'week' })
   if (language) params.set('language', language)
+  if (page > 1) params.set('page', String(page))
   const res = await fetch(`${BASE}/movies/trending?${params}`)
   if (!res.ok) return []
   const data = await res.json()
   return (data.movies ?? []).slice(0, limit)
 }
 
-export async function searchMovies(query: string, limit = 40, language?: string): Promise<Movie[]> {
+export async function searchMovies(query: string, limit = 40, language?: string, page = 1): Promise<Movie[]> {
   const params = new URLSearchParams({ query, limit: String(limit) })
   if (language) params.set('language', language)
+  if (page > 1) params.set('page', String(page))
   const res = await fetch(`${BASE}/movies/search?${params}`)
   if (!res.ok) return []
   const data = await res.json()
   return data.movies ?? []
 }
 
-export async function discoverByGenre(genre: string, limit = 40, language?: string): Promise<Movie[]> {
+export async function discoverByGenre(genre: string, limit = 40, language?: string, page = 1): Promise<Movie[]> {
   const params = new URLSearchParams({ genre, limit: String(limit) })
   if (language) params.set('language', language)
+  if (page > 1) params.set('page', String(page))
   const res = await fetch(`${BASE}/movies/discover?${params}`)
   if (!res.ok) return []
   const data = await res.json()
@@ -206,4 +209,81 @@ export function recordInteraction(
   } else {
     fetch(`${BASE}/users/interaction?${params}`, { method: 'POST' }).catch(() => {})
   }
+}
+
+// ── Release Calendar ──────────────────────────────────────────────────────────
+
+export async function getNowPlaying(region?: string, language?: string, page = 1): Promise<Movie[]> {
+  const params = new URLSearchParams()
+  if (region) params.set('region', region)
+  if (language) params.set('language', language)
+  if (page > 1) params.set('page', String(page))
+  const res = await fetch(`${BASE}/movies/now-playing?${params}`)
+  if (!res.ok) return []
+  const data = await res.json()
+  return data.movies ?? []
+}
+
+export async function getUpcoming(region?: string, language?: string, page = 1): Promise<Movie[]> {
+  const params = new URLSearchParams()
+  if (region) params.set('region', region)
+  if (language) params.set('language', language)
+  if (page > 1) params.set('page', String(page))
+  const res = await fetch(`${BASE}/movies/upcoming?${params}`)
+  if (!res.ok) return []
+  const data = await res.json()
+  return data.movies ?? []
+}
+
+export async function getOttReleases(providers?: string, region = 'US', language?: string, days = 30, page = 1): Promise<Movie[]> {
+  const params = new URLSearchParams({ region, days: String(days) })
+  if (providers) params.set('providers', providers)
+  if (language) params.set('language', language)
+  if (page > 1) params.set('page', String(page))
+  const res = await fetch(`${BASE}/movies/ott-releases?${params}`)
+  if (!res.ok) return []
+  const data = await res.json()
+  return data.movies ?? []
+}
+
+// ── CineDigest ───────────────────────────────────────────────────────────────
+
+export type DigestCategory = 'all' | 'bollywood' | 'hollywood' | 'trailer' | 'casting' | 'leak' | 'ott' | 'general'
+export type DigestLang = 'all' | 'hindi' | 'english'
+
+export interface DigestItem {
+  id: string
+  source_name: string
+  source_url: string
+  title: string
+  description: string
+  image_url: string | null
+  published_at: string
+  category: DigestCategory
+  lang: DigestLang
+  bullets: string[]
+  headline: string
+  fetched_at: string
+}
+
+export interface DigestResponse {
+  items: DigestItem[]
+  total: number
+  last_refresh: string | null
+}
+
+export async function fetchDigest(
+  category: DigestCategory = 'all',
+  lang: DigestLang = 'all',
+  limit = 40,
+  offset = 0,
+): Promise<DigestResponse> {
+  const params = new URLSearchParams({ category, lang, limit: String(limit), offset: String(offset) })
+  const res = await fetch(`${BASE}/news/digest?${params}`)
+  if (!res.ok) throw new Error(await res.text())
+  return res.json()
+}
+
+export async function triggerDigestRefresh(): Promise<void> {
+  await fetch(`${BASE}/news/refresh`, { method: 'POST' })
 }

@@ -11,7 +11,7 @@ from pathlib import Path
 import time
 import uuid
 
-from src.api.routes import admin, groups, health, movies, recommendations, users
+from src.api.routes import admin, groups, health, movies, news, recommendations, users
 from src.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -74,6 +74,13 @@ async def lifespan(app: FastAPI):
         logger.warning(f"Startup enrichment setup failed: {e}")
 
     logger.info("CineMatch AI API startup complete")
+
+    # Start CineDigest background news refresh
+    try:
+        from src.services.news_service import start_background_refresh
+        start_background_refresh()
+    except Exception as e:
+        logger.warning(f"CineDigest startup failed: {e}")
 
     yield
 
@@ -161,6 +168,7 @@ app.include_router(groups.router, prefix="/api/v1")
 app.include_router(users.router, prefix="/api/v1")
 app.include_router(movies.router, prefix="/api/v1")
 app.include_router(admin.router, prefix="/api/v1")
+app.include_router(news.router, prefix="/api/v1")
 
 # ── Prometheus metrics endpoint at /metrics ───────────────────────────────────
 # Exposes: request count, latency histograms, in-flight requests, response sizes

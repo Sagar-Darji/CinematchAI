@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Upload, Star, ArrowRight, Loader2, Check } from 'lucide-react'
+import { Upload, Star, ArrowRight, Loader2, Check, Search, X } from 'lucide-react'
 import { useUserStore } from '@/store/useUserStore'
-import { getOnboardingMovies, onboardUser, importLetterboxd, pollImportJob, type OnboardingMovie } from '@/lib/api'
+import { getOnboardingMovies, onboardUser, importLetterboxd, pollImportJob, searchMovies, type OnboardingMovie } from '@/lib/api'
 import { tmdbPoster, cn } from '@/lib/utils'
 
 type Step = 'username' | 'method' | 'rate' | 'letterboxd' | 'importing' | 'done'
@@ -23,6 +23,9 @@ export default function Onboarding() {
   const [importProgress, setImportProgress] = useState(0)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchResults, setSearchResults] = useState<OnboardingMovie[]>([])
+  const [searching, setSearching] = useState(false)
 
   // Load onboarding movies when entering rate step
   useEffect(() => {
@@ -34,6 +37,26 @@ export default function Onboarding() {
       })
     }
   }, [step, movies.length])
+
+  // Search movies with debounce
+  useEffect(() => {
+    if (!searchQuery.trim()) {
+      setSearchResults([])
+      return
+    }
+    const timer = setTimeout(async () => {
+      setSearching(true)
+      try {
+        const results = await searchMovies(searchQuery.trim(), 10)
+        setSearchResults(results as OnboardingMovie[])
+      } catch {
+        setSearchResults([])
+      } finally {
+        setSearching(false)
+      }
+    }, 400)
+    return () => clearTimeout(timer)
+  }, [searchQuery])
 
   // Poll import job
   useEffect(() => {
@@ -171,7 +194,7 @@ export default function Onboarding() {
                 key: 'rate',
                 icon: <Star size={28} style={{ color: 'var(--accent-gold)' }} />,
                 title: 'Rate Movies',
-                desc: 'Pick from 20 curated titles and give each a star rating. Quick and easy.',
+                desc: 'Search and rate movies you\'ve watched. We need at least 5 to start.',
               },
               {
                 key: 'letterboxd',
@@ -197,8 +220,30 @@ export default function Onboarding() {
         {/* ── Step: Rate movies ── */}
         {step === 'rate' && (
           <div>
+            {/* Search bar */}
+            <div className="flex items-center gap-2 rounded-xl px-4 py-3 mb-4"
+              style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}>
+              <Search size={16} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
+              <input
+                type="text"
+                placeholder="Search movies you've watched..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="flex-1 bg-transparent outline-none text-sm"
+                style={{ color: 'var(--text-primary)' }}
+              />
+              {searchQuery && (
+                <button
+                  onClick={() => setSearchQuery('')}
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+                >
+                  <X size={16} style={{ color: 'var(--text-muted)' }} />
+                </button>
+              )}
+            </div>
+
             <p className="text-sm mb-4" style={{ color: 'var(--text-muted)' }}>
-              Rated {Object.keys(ratings).length} of 20 · Need at least 5
+              Rated {Object.keys(ratings).length} movies · Need at least 5
             </p>
             {loadingMovies ? (
               /* Skeleton cards while movies load */
@@ -224,6 +269,84 @@ export default function Onboarding() {
               </div>
             ) : (
               <div className="space-y-3 max-h-[55vh] overflow-y-auto pr-1">
+                {/* Show search results if searching */}
+                {searchQuery.trim() && (
+                  <>
+                    {searching ? (
+                      <div className="text-center py-6">
+                        <Loader2 size={20} className="animate-spin mx-auto" style={{ color: 'var(--accent-gold)' }} />
+                        <p className="text-xs mt-2" style={{ color: 'var(--text-muted)' }}>Searching...</p>
+                      </div>
+                    ) : searchResults.length === 0 ? (
+                      <div className="text-center py-6">
+                        <p className="text-sm" style={{ color: 'var(--text-muted)' }}>No results found for "{searchQuery}"</p>
+                      </div>
+                    ) : (
+                      searchResults.map((movie) => {
+                        const id = String(movie.tmdb_id)
+                        const poster = tmdbPoster(movie.poster_path, 'w185')
+                        const userRating = ratings[id]
+                        return (
+                          <div
+                            key={id}
+                            className="flex items-center gap-4 rounded-xl p-3"
+                            style={{
+                              background: userRating ? 'var(--bg-overlay)' : 'var(--bg-card)',
+                              border: `1px solid ${userRating ? 'var(--accent-gold)' : 'var(--border)'}`,
+                              transition: 'all 0.2s ease',
+                            }}
+                          >
+                            {poster ? (
+                              <img src={poster} alt={movie.title} className="w-10 h-14 object-cover rounded flex-shrink-0" />
+                            ) : (
+                              <div className="w-10 h-14 rounded flex-shrink-0 flex items-center justify-center text-[9px] text-center"
+                                style={{ background: '#1a1a2e', color: 'var(--accent-gold)' }}>
+                                {movie.title.slice(0, 10)}
+                              </div>
+                            )}
+                            <div className="flex-1 min-w-0">
+                              <p className="font-semibold text-sm text-white truncate">{movie.title}</p>
+                              <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                                {movie.year} · {(movie.genres ?? []).slice(0, 2).join(', ')}
+                              </p>
+                            </div>
+                            <div className="flex gap-1 flex-shrink-0">
+                              {STARS.map((s) => (
+                                <button
+                                  key={s}
+                                  onClick={() => {
+                                    setRatings((r) => {
+                                      const newRatings = { ...r }
+                                      if (newRatings[id] === s) {
+                                        delete newRatings[id]
+                                      } else {
+                                        newRatings[id] = s
+                                      }
+                                      return newRatings
+                                    })
+                                  }}
+                                  className="transition-transform hover:scale-125"
+                                  style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px' }}
+                                >
+                                  <Star
+                                    size={16}
+                                    fill={userRating && userRating >= s ? 'var(--accent-gold)' : 'none'}
+                                    style={{ color: userRating && userRating >= s ? 'var(--accent-gold)' : 'var(--border)' }}
+                                  />
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        )
+                      })
+                    )}
+                    <div className="border-t pt-3 mt-3" style={{ borderColor: 'var(--border)' }}>
+                      <p className="text-xs mb-2" style={{ color: 'var(--text-muted)' }}>Or pick from popular movies:</p>
+                    </div>
+                  </>
+                )}
+                
+                {/* Show curated movies */}
                 {movies.map((movie) => {
                   const id = String(movie.tmdb_id)
                   const poster = tmdbPoster(movie.poster_path, 'w185')

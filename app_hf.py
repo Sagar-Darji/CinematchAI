@@ -6,6 +6,7 @@ optimized for HF Spaces deployment.
 """
 
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -37,6 +38,19 @@ api_process = subprocess.Popen(
     stdout=subprocess.PIPE,
     stderr=subprocess.PIPE,
 )
+
+# Ensure api_process is killed when this script exits (Ctrl+C, crash, etc.)
+def _shutdown(signum=None, frame=None):
+    if api_process.poll() is None:
+        api_process.terminate()
+        try:
+            api_process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            api_process.kill()
+    sys.exit(0)
+
+signal.signal(signal.SIGINT, _shutdown)
+signal.signal(signal.SIGTERM, _shutdown)
 
 # Wait for API to start
 print("⏳ Waiting for API to start...")

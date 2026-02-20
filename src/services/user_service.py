@@ -166,6 +166,15 @@ class UserService:
 
         now = datetime.utcnow().isoformat()
 
+        # Ensure the user row exists so the user is visible in CLI/admin tools
+        cursor.execute(
+            """
+            INSERT OR IGNORE INTO users (user_id, created_at, updated_at, profile_json)
+            VALUES (?, ?, ?, '{}')
+        """,
+            (user_id, now, now),
+        )
+
         cursor.execute(
             """
             INSERT OR REPLACE INTO ratings (user_id, movie_id, rating, watched, timestamp)

@@ -59,9 +59,12 @@ def retrieve_candidates_hybrid(
 
     # 2. Vector DB path (only if we have an embedding and allocation > 0)
     if has_embedding and db_k > 0:
-        db_candidates = _vector_db_search(
-            user_profile.profile_embedding, db_k, context, context_factors
+        # Build a context-boosted query so ChromaDB returns mood/companion-
+        # appropriate movies, not just historically-liked ones.
+        query_embedding = _build_context_query_embedding(
+            user_profile.profile_embedding, context, context_factors
         )
+        db_candidates = _vector_db_search(query_embedding, db_k, context, context_factors)
         logger.info(f"Vector DB: {len(db_candidates)} candidates")
 
     # 3. Smart TMDB path
@@ -98,6 +101,10 @@ def retrieve_candidates_hybrid(
     merged = _merge_candidates(db_candidates, tmdb_candidates, k, cf_candidates or None)
     logger.info(f"Merged: {len(merged)} unique candidates")
 
+    # 4b. Re-sort by context genre affinity so mood/companion-appropriate movies
+    # are at the top of the list before content intelligence reranks.
+    merged = _apply_context_boost(merged, context, context_factors)
+
     # 5. Exclude movies the user has already rated — showing them again
     # makes recommendations feel broken regardless of algorithm quality.
     user_id = state.get("user_id", "")
@@ -109,7 +116,7 @@ def retrieve_candidates_hybrid(
             if rated_ids:
                 filtered = [m for m in merged if str(m.metadata.tmdb_id) not in rated_ids]
                 # Only apply filter if we still have enough candidates
-                if len(filtered) >= max(5, k // 3):
+                if len(filtered) >= max(5, k // 10):
                     logger.info(
                         f"Already-seen filter: {len(merged) - len(filtered)} removed, "
                         f"{len(filtered)} remain"
@@ -163,8 +170,8 @@ def _dynamic_split(
         if prefs:
             exploration_rate = getattr(prefs, "exploration_rate", 0.3)
 
-    # Base: start at 60% DB, 40% TMDB
-    db_ratio = 0.60
+    # Base: start at 80% DB, 20% TMDB (108K enriched corpus → local dominates)
+    db_ratio = 0.80
 
     # Adjust by rating count (more ratings -> trust DB more)
     if total_ratings >= 100:
@@ -188,6 +195,97 @@ def _dynamic_split(
     db_k = int(round(k * db_ratio))
     tmdb_k = k - db_k
     return (db_k, tmdb_k)
+
+
+# ---------------------------------------------------------------------------
+# Context-boosted query embedding
+# ---------------------------------------------------------------------------
+
+# Descriptive phrases for each mood, phrased like movie overviews so the
+# resulting embedding lives in the same space as ChromaDB movie vectors.
+_MOOD_DESCRIPTIONS = {
+    "happy":       "fun lighthearted uplifting comedy feel-good adventure",
+    "sad":         "emotional heartfelt melancholic drama touching story",
+    "stressed":    "relaxing escapist gentle comedy easy-watching comfort",
+    "bored":       "exciting surprising twists action-packed thriller spectacle",
+    "thoughtful":  "intellectual cerebral deep meaningful drama philosophical",
+    "energetic":   "high-energy action-packed fast-paced adventure adrenaline",
+    "nostalgic":   "classic timeless warm comforting familiar beloved story",
+    "adventurous": "exploration discovery exotic journey fantasy epic adventure",
+    "romantic":    "romantic love story intimate emotional drama relationship",
+    "anxious":     "comforting lighthearted easy fun animation gentle comedy",
+    "excited":     "thrilling epic action adventure blockbuster spectacle",
+    "lonely":      "heartwarming connection friendship bond drama warmth",
+    "inspired":    "inspiring true story achievement biography uplifting triumph",
+    "curious":     "fascinating documentary mystery science discovery knowledge",
+    "relaxed":     "gentle calm beautiful slow-paced drama peaceful scenic",
+    "melancholic": "bittersweet poetic melancholic quiet contemplative reflection",
+}
+
+_COMPANION_DESCRIPTIONS = {
+    "family":  "family-friendly suitable for all ages wholesome adventure",
+    "kids":    "animated children family fun colorful adventure",
+    "partner": "romantic couple intimate emotional love story",
+    "friends": "entertaining fun social comedy group action",
+}
+
+
+def _build_context_query_embedding(
+    profile_embedding: List[float],
+    context: Dict,
+    context_factors: Dict,
+) -> List[float]:
+    """Return a context-boosted query embedding for vector DB search.
+
+    Blends user profile taste (65%) with current mood/companion signal (35%)
+    so ChromaDB surfaces context-appropriate movies, not just historically-liked
+    ones. Falls back to pure profile if no context or embedding fails.
+    """
+    mood = context_factors.get("mood") or context.get("mood")
+    companion = context_factors.get("companion") or context.get("companion")
+    occasion = context_factors.get("occasion") or context.get("occasion")
+    nl_context = (
+        context_factors.get("natural_language_context")
+        or context.get("natural_language_context")
+    )
+
+    parts = []
+    if mood:
+        parts.append(_MOOD_DESCRIPTIONS.get(mood.lower(), mood))
+    if companion and companion.lower() not in ("alone", "solo", ""):
+        desc = _COMPANION_DESCRIPTIONS.get(companion.lower(), "")
+        if desc:
+            parts.append(desc)
+    if occasion:
+        parts.append(occasion)
+    if nl_context:
+        parts.append(nl_context)
+
+    if not parts:
+        return profile_embedding  # no context signal → pure profile query
+
+    context_text = " ".join(parts)
+    try:
+        from src.core.embeddings.text_embedder import get_text_embedder
+        context_emb_raw = get_text_embedder().embed_text(context_text)
+        if not context_emb_raw:
+            return profile_embedding
+
+        context_arr = np.array(context_emb_raw[0], dtype=np.float32)
+        profile_arr = np.array(profile_embedding, dtype=np.float32)
+
+        # 65% historical taste + 35% current context
+        blended = 0.65 * profile_arr + 0.35 * context_arr
+        norm = np.linalg.norm(blended)
+        if norm > 0:
+            blended = blended / norm
+
+        logger.info(f"Context-boosted query embedding: mood={mood}, companion={companion}")
+        return blended.tolist()
+
+    except Exception as e:
+        logger.warning(f"Context embedding failed, using profile only: {e}")
+        return profile_embedding
 
 
 # ---------------------------------------------------------------------------
@@ -459,6 +557,66 @@ def _merge_candidates(
     normalised = [((s - min_s) / rng, m) for s, m in raw]
     normalised.sort(key=lambda x: x[0], reverse=True)
     return [movie for _, movie in normalised[:k]]
+
+
+# ---------------------------------------------------------------------------
+# Context genre boost (post-merge reranking)
+# ---------------------------------------------------------------------------
+
+# Genres to penalise when certain companions are present
+_COMPANION_AVOID_GENRES: Dict[str, set] = {
+    "family": {"Horror", "Thriller", "Crime", "War"},
+    "kids":   {"Horror", "Thriller", "Crime", "War", "Drama"},
+}
+
+
+def _apply_context_boost(
+    candidates: List[Movie],
+    context: Dict,
+    context_factors: Dict,
+) -> List[Movie]:
+    """Reorder merged candidates by context genre affinity.
+
+    Nudges mood/companion-matching movies to the top before content
+    intelligence reranks. Boost is intentionally gentle so embedding
+    similarity still dominates; context just breaks ties.
+    """
+    mood = context_factors.get("mood") or context.get("mood")
+    companion = context_factors.get("companion") or context.get("companion")
+
+    if not mood and not companion:
+        return candidates
+
+    try:
+        from src.services.smart_query import MOOD_GENRE_MAP, GENRE_ID_TO_NAME
+
+        preferred_genres: set = set()
+        if mood and mood.lower() in MOOD_GENRE_MAP:
+            preferred_genres = {
+                GENRE_ID_TO_NAME[gid]
+                for gid in MOOD_GENRE_MAP[mood.lower()]
+                if gid in GENRE_ID_TO_NAME
+            }
+
+        avoid_genres = _COMPANION_AVOID_GENRES.get((companion or "").lower(), set())
+
+        def _boost(movie: Movie) -> float:
+            genres = set(movie.metadata.genres or [])
+            score = 0.0
+            if preferred_genres and genres & preferred_genres:
+                score += 0.3
+            if avoid_genres and genres & avoid_genres:
+                score -= 0.5
+            return score
+
+        # Stable sort: highest boost first; original rank preserved within same tier
+        indexed = [(_boost(m), i, m) for i, m in enumerate(candidates)]
+        indexed.sort(key=lambda x: (-x[0], x[1]))
+        return [m for _, _, m in indexed]
+
+    except Exception as e:
+        logger.warning(f"Context boost failed (non-critical): {e}")
+        return candidates
 
 
 # ---------------------------------------------------------------------------
