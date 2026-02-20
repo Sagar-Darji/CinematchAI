@@ -8,14 +8,14 @@ export default function Login() {
   const navigate = useNavigate()
   const { setUserId, setEmail, setToken, setOnboarded, setRatingCount } = useUserStore()
 
-  const [email, setEmailInput] = useState('')
+  const [identifier, setIdentifier] = useState('')
   const [password, setPassword] = useState('')
   const [showPw, setShowPw] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
   const handleLogin = async () => {
-    const trimEmail = email.trim()
+    const trimEmail = identifier.trim()
     if (!trimEmail || !password) return
     setLoading(true)
     setError('')
@@ -53,11 +53,11 @@ export default function Login() {
 
         <div className="flex flex-col gap-3">
           <input
-            type="email"
+            type="text"
             autoFocus
-            placeholder="Email"
-            value={email}
-            onChange={(e) => setEmailInput(e.target.value)}
+            placeholder="Email or Username"
+            value={identifier}
+            onChange={(e) => setIdentifier(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && handleLogin()}
             className="w-full px-5 py-4 rounded-xl text-base outline-none"
             style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', color: 'var(--text-primary)' }}
@@ -89,7 +89,7 @@ export default function Login() {
 
           <button
             onClick={handleLogin}
-            disabled={loading || !email.trim() || !password}
+            disabled={loading || !identifier.trim() || !password}
             className="flex items-center justify-center gap-2 py-4 rounded-xl font-bold text-base disabled:opacity-40 transition-opacity"
             style={{ background: 'var(--accent-gold)', color: '#0a0a0f', border: 'none', cursor: 'pointer' }}
           >

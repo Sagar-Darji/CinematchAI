@@ -45,7 +45,7 @@ class RegisterRequest(BaseModel):
 
 
 class LoginRequest(BaseModel):
-    email: str
+    identifier: str  # email or username
     password: str
 
 
@@ -133,16 +133,21 @@ async def register(req: RegisterRequest):
 
 @router.post("/login", response_model=AuthResponse)
 async def login(req: LoginRequest):
-    """Sign in with email + password."""
+    """Sign in with email or username + password."""
     svc = get_user_service()
-    record = svc.get_user_by_email(req.email)
+    identifier = req.identifier.strip()
+
+    # Try email first, then fall back to username lookup
+    record = svc.get_user_by_email(identifier)
+    if not record:
+        record = svc.get_user_by_username(identifier)
 
     if not record:
-        raise HTTPException(status_code=401, detail="Invalid email or password")
+        raise HTTPException(status_code=401, detail="Invalid email/username or password")
     if record["auth_provider"] == "google":
         raise HTTPException(status_code=400, detail="This account uses Google sign-in. Please use 'Continue with Google'.")
     if not record["password_hash"] or not verify_password(req.password, record["password_hash"]):
-        raise HTTPException(status_code=401, detail="Invalid email or password")
+        raise HTTPException(status_code=401, detail="Invalid email/username or password")
 
     token = create_access_token(record["user_id"], record["email"])
     return AuthResponse(token=token, user_id=record["user_id"], email=record["email"], is_new_user=False)

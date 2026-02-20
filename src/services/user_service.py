@@ -132,6 +132,21 @@ class UserService:
                     "auth_provider": row[3], "google_id": row[4]}
         return None
 
+    def get_user_by_username(self, username: str) -> Optional[dict]:
+        """Look up a user by username (user_id)."""
+        conn = sqlite3.connect(str(self.db_path))
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT user_id, email, password_hash, auth_provider, google_id "
+            "FROM users WHERE user_id = ?", (username.strip(),)
+        )
+        row = cursor.fetchone()
+        conn.close()
+        if row:
+            return {"user_id": row[0], "email": row[1], "password_hash": row[2],
+                    "auth_provider": row[3], "google_id": row[4]}
+        return None
+
     def get_user_by_google_id(self, google_id: str) -> Optional[dict]:
         """Look up a user by Google sub ID."""
         conn = sqlite3.connect(str(self.db_path))

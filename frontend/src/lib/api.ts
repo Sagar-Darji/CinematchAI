@@ -21,11 +21,11 @@ export async function registerUser(username: string, email: string, password: st
   return res.json()
 }
 
-export async function loginWithPassword(email: string, password: string): Promise<AuthResponse> {
+export async function loginWithPassword(identifier: string, password: string): Promise<AuthResponse> {
   const res = await fetch(`${AUTH_BASE}/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, password }),
+    body: JSON.stringify({ identifier, password }),
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: 'Login failed' }))
