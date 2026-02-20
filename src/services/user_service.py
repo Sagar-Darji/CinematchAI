@@ -52,10 +52,10 @@ class UserService:
         for col, definition in [
             ("embedding_json",          "TEXT"),
             ("embedding_rating_count",  "INTEGER DEFAULT 0"),
-            ("email",                   "TEXT UNIQUE"),
+            ("email",                   "TEXT"),
             ("password_hash",           "TEXT"),
             ("auth_provider",           "TEXT DEFAULT 'password'"),
-            ("google_id",               "TEXT UNIQUE"),
+            ("google_id",               "TEXT"),
         ]:
             try:
                 cursor.execute(f"ALTER TABLE users ADD COLUMN {col} {definition}")
