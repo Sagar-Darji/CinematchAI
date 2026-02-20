@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
-import { Clapperboard, Sparkles, Search, User, Home, LogOut, Rss, CalendarDays } from 'lucide-react'
+import { Clapperboard, Sparkles, Search, User, Home, LogOut, Rss, CalendarDays, Network } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { getSystemStats } from '@/lib/api'
 import { useUserStore } from '@/store/useUserStore'
@@ -11,6 +11,7 @@ const NAV = [
   { to: '/recommendations', icon: Sparkles, label: 'For You' },
   { to: '/browse',   icon: Search,       label: 'Browse'    },
   { to: '/calendar', icon: CalendarDays, label: 'Calendar'  },
+  { to: '/web',      icon: Network,      label: 'CineWeb'   },
   { to: '/digest',   icon: Rss,          label: 'CineDigest'},
   { to: '/profile',  icon: User,         label: 'Profile'   },
 ]
@@ -45,12 +46,12 @@ export function Sidebar() {
       className="fixed top-0 left-0 h-full w-16 md:w-56 flex flex-col z-30"
     >
       {/* Logo */}
-      <div className="flex items-center gap-3 px-4 py-5 border-b" style={{ borderColor: 'var(--border)' }}>
+      <NavLink to="/" className="flex items-center gap-3 px-4 py-5 border-b" style={{ borderColor: 'var(--border)' }}>
         <Clapperboard size={22} style={{ color: 'var(--accent-gold)' }} />
         <span className="hidden md:block font-bold text-sm tracking-wide" style={{ color: 'var(--accent-gold)' }}>
           CineMatch AI
         </span>
-      </div>
+      </NavLink>
 
       {/* User card */}
       {isOnboarded && userId && (

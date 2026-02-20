@@ -9,6 +9,7 @@ import Browse from '@/pages/Browse'
 import Profile from '@/pages/Profile'
 import Digest from '@/pages/Digest'
 import ReleaseCalendar from '@/pages/ReleaseCalendar'
+import MovieWeb from '@/pages/MovieWeb'
 import { useUserStore } from '@/store/useUserStore'
 
 export default function App() {
@@ -50,6 +51,7 @@ export default function App() {
           />
           <Route path="/digest" element={<Digest />} />
           <Route path="/calendar" element={<ReleaseCalendar />} />
+          <Route path="/web" element={<MovieWeb />} />
         </Route>
       </Routes>
     </BrowserRouter>

@@ -48,3 +48,7 @@ build/
 
 # Evaluation results
 evaluation/results/
+
+# Claude AI settings (may contain tokens)
+.claude/
+hf_upload/*.zip
