@@ -20,9 +20,6 @@ uvicorn[standard]==0.34.0
 pydantic==2.10.4
 pydantic-settings==2.7.0
 
-# Frontend
-streamlit==1.41.1
-
 # Data Processing (lightweight)
 pandas==2.2.3
 numpy<2.0
@@ -42,8 +39,15 @@ diskcache==5.6.3
 # Logging
 loguru==0.7.3
 
+# Observability / Metrics (required by src/api/main.py)
+prometheus-fastapi-instrumentator==7.1.0
+python-json-logger==3.3.0
+
 # Rate Limiting
 slowapi==0.1.9
+
+# HF Hub (vectordb download on startup)
+huggingface_hub>=0.26.0
 
 # TMDB API (optional)
 tmdbv3api==1.9.0

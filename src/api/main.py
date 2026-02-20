@@ -1,13 +1,14 @@
 """FastAPI Application - CineMatch AI Recommendation API."""
 
+import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from prometheus_fastapi_instrumentator import Instrumentator
-from pathlib import Path
 import time
 import uuid
 
@@ -34,6 +35,30 @@ async def lifespan(app: FastAPI):
         logger.info(f"Pre-loaded {len(agents)} agents")
     except Exception as e:
         logger.warning(f"Failed to pre-load agents: {e}")
+
+    # On HF Spaces: download vectordb from HF Datasets Hub if local copy is empty
+    if os.environ.get("HF_SPACES") == "1":
+        hf_dataset = os.environ.get("HF_VECTORDB_DATASET", "")
+        vectordb_path = Path("data/vectordb")
+        chroma_db_file = vectordb_path / "chroma.sqlite3"
+        if hf_dataset and not chroma_db_file.exists():
+            logger.info(f"HF Spaces: downloading vectordb from {hf_dataset}...")
+            try:
+                from huggingface_hub import hf_hub_download
+                import zipfile
+                zip_path = hf_hub_download(
+                    repo_id=hf_dataset,
+                    filename="data_vectordb.zip",
+                    repo_type="dataset",
+                )
+                vectordb_path.mkdir(parents=True, exist_ok=True)
+                with zipfile.ZipFile(zip_path, "r") as zf:
+                    zf.extractall(".")
+                logger.info("HF Spaces: vectordb downloaded and extracted successfully")
+            except Exception as e:
+                logger.warning(f"HF Spaces: vectordb download failed — starting with empty DB: {e}")
+        elif not hf_dataset:
+            logger.warning("HF Spaces: HF_VECTORDB_DATASET secret not set — starting with empty vectordb")
 
     # Pre-connect to vector DB (optional)
     try:

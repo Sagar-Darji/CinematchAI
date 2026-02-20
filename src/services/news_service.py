@@ -135,7 +135,7 @@ def _fetch_xml(url: str) -> Optional[ET.Element]:
         with urlopen(req, timeout=FETCH_TIMEOUT) as resp:
             return ET.fromstring(resp.read())
     except Exception as exc:
-        logger.warning("Failed to fetch %s: %s", url, exc)
+        logger.warning(f"Failed to fetch {url}: {exc}")
         return None
 
 
@@ -244,10 +244,10 @@ def refresh_news(summarizer: Optional[NewsSummarizer] = None) -> int:
         for source in SOURCES:
             try:
                 n = _fetch_source(source, summarizer, conn)
-                logger.info("CineDigest: %s → %d new items", source["name"], n)
+                logger.info(f"CineDigest: {source['name']} → {n} new items")
                 total += n
             except Exception as exc:
-                logger.error("CineDigest source error [%s]: %s", source["name"], exc)
+                logger.error(f"CineDigest source error [{source['name']}]: {exc}")
     return total
 
 
@@ -309,9 +309,9 @@ def _refresh_loop(interval_seconds: int = REFRESH_HOURS * 3600) -> None:
         try:
             n = refresh_news(summarizer)
             _mark_refresh()
-            logger.info("CineDigest refresh complete: %d new items", n)
+            logger.info(f"CineDigest refresh complete: {n} new items")
         except Exception as exc:
-            logger.error("CineDigest refresh loop error: %s", exc)
+            logger.error(f"CineDigest refresh loop error: {exc}")
         time.sleep(interval_seconds)
 
 
@@ -325,4 +325,4 @@ def start_background_refresh() -> None:
         return
     _refresh_thread = threading.Thread(target=_refresh_loop, daemon=True, name="cinedigest-refresh")
     _refresh_thread.start()
-    logger.info("CineDigest background refresh started (every %dh)", REFRESH_HOURS)
+    logger.info(f"CineDigest background refresh started (every {REFRESH_HOURS}h)")

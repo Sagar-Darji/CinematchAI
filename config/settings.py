@@ -42,7 +42,7 @@ class Settings(BaseSettings):
     # Groq API (Primary cloud LLM)
     groq_api_key: Optional[str] = Field(default=None, description="Groq API key")
     groq_model_main: str = Field(
-        default="llama-3.1-70b-versatile",
+        default="llama-3.3-70b-versatile",
         description="Main Groq model for complex tasks",
     )
     groq_model_fast: str = Field(

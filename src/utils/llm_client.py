@@ -48,7 +48,7 @@ class LLMClient:
             self.model = (
                 self.settings.ollama_model_main
                 if provider == LLMProvider.OLLAMA
-                else "llama-3.1-70b-versatile"
+                else "llama-3.3-70b-versatile"
             )
 
         # Initialize Groq client if using Groq

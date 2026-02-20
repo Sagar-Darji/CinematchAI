@@ -60,5 +60,5 @@ class NewsSummarizer:
             if match:
                 return json.loads(match.group())
         except Exception as exc:
-            logger.warning("Summarization failed for '%s': %s", title[:60], exc)
+            logger.warning(f"Summarization failed for '{title[:60]}': {exc}")
         return None
