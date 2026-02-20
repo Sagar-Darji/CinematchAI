@@ -440,7 +440,9 @@ export default function MovieWebGraph({ data, accentColor, onNodeClick, onNodeHo
     })
     ctx.globalAlpha = 1
 
-    // ── 5b. Active edges — curved arcs revealed on hover ────────────────────
+    // ── 5b. Active edges — hover reveals the ghost line's true colour ──────────
+    // Same aesthetic as ghost lines (thin, ethereal) — just lit up with
+    // the edge's colour. No thick glow, no dashes. Gossamer but visible.
     if (hovId !== null) {
       data.edges.forEach((e) => {
         const src = byId.get(e.source); const tgt = byId.get(e.target)
@@ -451,37 +453,38 @@ export default function MovieWebGraph({ data, accentColor, onNodeClick, onNodeHo
         const tx  = tgt.x + tgt.floatX, ty = tgt.y + tgt.floatY
         const col = EDGE_COLORS[e.type] ?? '#94A3B8'
 
-        // Bezier control point — gently curves the arc perpendicular to the line
+        // Bezier control point — same gentle curve as before
         const edgeLen = Math.hypot(tx - sx, ty - sy) || 1
         const curve   = Math.min(edgeLen * 0.22, 38)
         const cpx     = (sx + tx) / 2 - ((ty - sy) / edgeLen) * curve
         const cpy     = (sy + ty) / 2 + ((tx - sx) / edgeLen) * curve
 
-        const drawArc = () => {
+        const tracePath = () => {
           ctx.beginPath()
           ctx.moveTo(sx, sy)
           ctx.quadraticCurveTo(cpx, cpy, tx, ty)
-          ctx.stroke()
         }
 
-        // Very faint glow underneath — just enough depth, not blinding
         ctx.setLineDash([])
-        ctx.strokeStyle = col; ctx.lineWidth = 4
-        ctx.globalAlpha = 0.04; ctx.shadowBlur = 5; ctx.shadowColor = col
-        drawArc(); ctx.shadowBlur = 0
+        ctx.lineCap = 'round'
 
-        // Crisp arc — type differentiated by dash pattern only, no gradient
-        ctx.setLineDash(EDGE_DASH[e.type] ?? [])
-        ctx.strokeStyle = col; ctx.lineWidth = 1.0
-        ctx.lineCap = 'round'; ctx.globalAlpha = 0.60
-        drawArc()
+        // Faint colour whisper underneath — barely there, just warms the line
+        tracePath()
+        ctx.strokeStyle = col; ctx.lineWidth = 5; ctx.globalAlpha = 0.07
+        ctx.stroke()
 
-        // Small accent dot at the non-seed end
+        // The line itself — thin like the ghost but coloured and visible
+        tracePath()
+        ctx.strokeStyle = col; ctx.lineWidth = 0.75; ctx.globalAlpha = 0.78
+        ctx.stroke()
+
+        ctx.lineCap = 'butt'
+
+        // Tiny dot at target end — same restraint, just a colour pip
         const dotX = src.id === hovId ? tx : sx
         const dotY = src.id === hovId ? ty : sy
-        ctx.setLineDash([]); ctx.lineCap = 'butt'
-        ctx.beginPath(); ctx.arc(dotX, dotY, 2.5, 0, Math.PI * 2)
-        ctx.fillStyle = col; ctx.globalAlpha = 0.80; ctx.fill()
+        ctx.beginPath(); ctx.arc(dotX, dotY, 1.8, 0, Math.PI * 2)
+        ctx.fillStyle = col; ctx.globalAlpha = 0.85; ctx.fill()
 
         ctx.globalAlpha = 1
       })
