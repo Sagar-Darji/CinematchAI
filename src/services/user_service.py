@@ -25,11 +25,19 @@ class UserService:
         self.db_path = Path(settings.data_dir) / "users.db"
         self._init_database()
 
+    def _connect(self) -> sqlite3.Connection:
+        """Return a DB connection with WAL mode for concurrent CLI access."""
+        conn = sqlite3.connect(str(self.db_path), timeout=15)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=15000")
+        return conn
+
     def _init_database(self):
         """Initialize SQLite database."""
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
 
-        conn = sqlite3.connect(str(self.db_path))
+        conn = self._connect()
         cursor = conn.cursor()
 
         # Users table
@@ -93,7 +101,7 @@ class UserService:
 
     def get_user_profile(self, user_id: str) -> Optional[dict]:
         """Get user profile by ID."""
-        conn = sqlite3.connect(str(self.db_path))
+        conn = self._connect()
         cursor = conn.cursor()
         cursor.execute("SELECT profile_json FROM users WHERE user_id = ?", (user_id,))
         row = cursor.fetchone()
@@ -104,7 +112,7 @@ class UserService:
 
     def get_auth_record(self, user_id: str) -> Optional[dict]:
         """Return auth fields (email, password_hash, auth_provider, google_id) for a user."""
-        conn = sqlite3.connect(str(self.db_path))
+        conn = self._connect()
         cursor = conn.cursor()
         cursor.execute(
             "SELECT user_id, email, password_hash, auth_provider, google_id "
@@ -119,7 +127,7 @@ class UserService:
 
     def get_user_by_email(self, email: str) -> Optional[dict]:
         """Look up a user by email address."""
-        conn = sqlite3.connect(str(self.db_path))
+        conn = self._connect()
         cursor = conn.cursor()
         cursor.execute(
             "SELECT user_id, email, password_hash, auth_provider, google_id "
@@ -134,7 +142,7 @@ class UserService:
 
     def get_user_by_username(self, username: str) -> Optional[dict]:
         """Look up a user by username (user_id)."""
-        conn = sqlite3.connect(str(self.db_path))
+        conn = self._connect()
         cursor = conn.cursor()
         cursor.execute(
             "SELECT user_id, email, password_hash, auth_provider, google_id "
@@ -149,7 +157,7 @@ class UserService:
 
     def get_user_by_google_id(self, google_id: str) -> Optional[dict]:
         """Look up a user by Google sub ID."""
-        conn = sqlite3.connect(str(self.db_path))
+        conn = self._connect()
         cursor = conn.cursor()
         cursor.execute(
             "SELECT user_id, email, password_hash, auth_provider, google_id "
@@ -167,7 +175,7 @@ class UserService:
                               auth_provider: str,
                               google_id: Optional[str] = None) -> None:
         """Write / overwrite auth columns for an existing user row."""
-        conn = sqlite3.connect(str(self.db_path))
+        conn = self._connect()
         cursor = conn.cursor()
         cursor.execute(
             "UPDATE users SET email=?, password_hash=?, auth_provider=?, google_id=?, updated_at=? "
@@ -187,7 +195,7 @@ class UserService:
             user_id: User ID.
             profile: UserProfile object.
         """
-        conn = sqlite3.connect(str(self.db_path))
+        conn = self._connect()
         cursor = conn.cursor()
 
         now = datetime.utcnow().isoformat()
@@ -230,7 +238,7 @@ class UserService:
             rating: Rating value (0.5-5.0).
             watched: Whether the user watched the movie.
         """
-        conn = sqlite3.connect(str(self.db_path))
+        conn = self._connect()
         cursor = conn.cursor()
 
         now = datetime.utcnow().isoformat()
@@ -282,7 +290,7 @@ class UserService:
             return
 
         implicit = IMPLICIT_RATING[action]
-        conn = sqlite3.connect(str(self.db_path))
+        conn = self._connect()
         cursor = conn.cursor()
 
         # Only insert if no explicit rating exists (explicit > implicit)
@@ -322,7 +330,7 @@ class UserService:
         Returns:
             List of rating dictionaries.
         """
-        conn = sqlite3.connect(str(self.db_path))
+        conn = self._connect()
         cursor = conn.cursor()
 
         cursor.execute(
@@ -359,7 +367,7 @@ class UserService:
             user_id: User ID.
             context: Context dictionary.
         """
-        conn = sqlite3.connect(str(self.db_path))
+        conn = self._connect()
         cursor = conn.cursor()
 
         now = datetime.utcnow().isoformat()
@@ -388,7 +396,7 @@ class UserService:
         Returns:
             Context dictionary.
         """
-        conn = sqlite3.connect(str(self.db_path))
+        conn = self._connect()
         cursor = conn.cursor()
 
         cursor.execute(
@@ -404,7 +412,7 @@ class UserService:
 
     def get_cached_embedding(self, user_id: str) -> Optional[Dict]:
         """Get cached profile embedding if it exists and is current."""
-        conn = sqlite3.connect(str(self.db_path))
+        conn = self._connect()
         cursor = conn.cursor()
         cursor.execute(
             "SELECT embedding_json, embedding_rating_count FROM users WHERE user_id = ?",
@@ -422,7 +430,7 @@ class UserService:
 
     def save_embedding(self, user_id: str, embedding: list, rating_count: int):
         """Cache profile embedding with the rating count it was built from."""
-        conn = sqlite3.connect(str(self.db_path))
+        conn = self._connect()
         cursor = conn.cursor()
         now = datetime.utcnow().isoformat()
         cursor.execute(
@@ -438,7 +446,7 @@ class UserService:
 
     def count_users(self) -> int:
         """Count total registered users."""
-        conn = sqlite3.connect(str(self.db_path))
+        conn = self._connect()
         cursor = conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM users")
         count = cursor.fetchone()[0]
@@ -447,7 +455,7 @@ class UserService:
 
     def count_ratings(self) -> int:
         """Count total ratings across all users."""
-        conn = sqlite3.connect(str(self.db_path))
+        conn = self._connect()
         cursor = conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM ratings")
         count = cursor.fetchone()[0]
@@ -470,7 +478,7 @@ class UserService:
         if cache and (now - cache.get("loaded_at", 0)) < self._CF_CACHE_TTL:
             return cache["matrix"]
 
-        conn = sqlite3.connect(str(self.db_path))
+        conn = self._connect()
         cursor = conn.cursor()
         cursor.execute("SELECT user_id, movie_id, rating FROM ratings")
         rows = cursor.fetchall()

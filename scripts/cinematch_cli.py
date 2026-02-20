@@ -42,6 +42,16 @@ def _pause():
     Prompt.ask("[dim]  Press Enter to return to menu[/]", default="")
 
 
+def _db_connect(db_path):
+    """Connect to users.db with WAL mode + 15s timeout for Docker lock."""
+    import sqlite3
+    conn = sqlite3.connect(str(db_path), timeout=15)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=15000")
+    return conn
+
+
 def _banner():
     console.clear()
     console.print(Panel(
@@ -485,18 +495,19 @@ def action_users():
     tbl.add_column(style="dim")
     
     for key, label, hint in [
-        ("1", "📋  List Users", "view all users with stats"),
-        ("2", "👤  View User Details", "full profile, ratings, context"),
-        ("3", "❌  Delete User", "permanently remove user and all data"),
-        ("4", "🧹  Clear User Data", "reset user (keep ID, clear ratings)"),
-        ("5", "✏️   Rename User", "change user ID"),
-        ("6", "📊  System Stats", "overview of all users"),
-        ("0", "⬅️   Back to Main Menu", ""),
+        ("1", "📋  List Users",          "view all users with stats"),
+        ("2", "👤  View User Details",   "full profile, ratings, context"),
+        ("3", "❌  Delete User",          "permanently remove one user and all data"),
+        ("4", "🧹  Clear User Data",     "reset user (keep ID, clear ratings)"),
+        ("5", "✏️   Rename User",          "change user ID"),
+        ("6", "📊  System Stats",         "overview of all users"),
+        ("7", "💣  Delete ALL Users",     "wipe entire user database (fresh start)"),
+        ("0", "⬅️   Back to Main Menu",   ""),
     ]:
         tbl.add_row(f"[{key}]", label, hint)
     
     console.print(Panel(tbl, border_style="bright_black"))
-    choice = Prompt.ask("  Choose", choices=[str(i) for i in range(7)], default="0")
+    choice = Prompt.ask("  Choose", choices=[str(i) for i in range(8)], default="0")
     
     if choice == "0":
         return
@@ -516,6 +527,8 @@ def action_users():
             _user_rename()
         elif choice == "6":
             _user_stats()
+        elif choice == "7":
+            _user_delete_all()
     except Exception as e:
         console.print(f"[red]Error: {e}[/]")
     
@@ -532,8 +545,7 @@ def _user_list():
     db_path = Path(settings.data_dir) / "users.db"
     
     with console.status("[bold green]Loading users…"):
-        conn = sqlite3.connect(str(db_path))
-        conn.row_factory = sqlite3.Row
+        conn = _db_connect(db_path)
         cursor = conn.cursor()
         
         cursor.execute("""
@@ -591,8 +603,7 @@ def _user_view():
     db_path = Path(settings.data_dir) / "users.db"
     
     with console.status(f"[bold green]Loading {user_id}…"):
-        conn = sqlite3.connect(str(db_path))
-        conn.row_factory = sqlite3.Row
+        conn = _db_connect(db_path)
         cursor = conn.cursor()
         
         # User info
@@ -675,7 +686,7 @@ def _user_delete():
     db_path = Path(settings.data_dir) / "users.db"
     
     with console.status(f"[bold red]Deleting {user_id}…"):
-        conn = sqlite3.connect(str(db_path))
+        conn = _db_connect(db_path)
         cursor = conn.cursor()
         
         try:
@@ -688,6 +699,45 @@ def _user_delete():
         except Exception as e:
             conn.rollback()
             console.print(f"[red]Failed to delete user: {e}[/]")
+        finally:
+            conn.close()
+
+
+def _user_delete_all():
+    """Wipe all users and their data — fresh start."""
+    console.print("\n  [bold red]⚠  This will permanently delete ALL users, ratings, and profile data.[/]")
+    
+    confirm1 = Prompt.ask("  Type [bold]DELETE ALL[/] to confirm").strip()
+    if confirm1 != "DELETE ALL":
+        console.print("[dim]Cancelled.[/]")
+        return
+    
+    from config.settings import get_settings
+    from pathlib import Path
+    
+    settings = get_settings()
+    db_path = Path(settings.data_dir) / "users.db"
+    
+    with console.status("[bold red]Wiping all user data…"):
+        conn = _db_connect(db_path)
+        cursor = conn.cursor()
+        
+        try:
+            cursor.execute("SELECT COUNT(*) as n FROM users")
+            user_count = cursor.fetchone()["n"]
+            cursor.execute("SELECT COUNT(*) as n FROM ratings")
+            rating_count = cursor.fetchone()["n"]
+            
+            cursor.execute("DELETE FROM ratings")
+            cursor.execute("DELETE FROM contexts")
+            cursor.execute("DELETE FROM users")
+            conn.commit()
+            
+            console.print(f"[green]✓ Deleted {user_count} users and {rating_count} ratings.[/]")
+            console.print("[dim]  Database is ready for fresh onboarding.[/]")
+        except Exception as e:
+            conn.rollback()
+            console.print(f"[red]Failed: {e}[/]")
         finally:
             conn.close()
 
@@ -711,7 +761,7 @@ def _user_clear():
     db_path = Path(settings.data_dir) / "users.db"
     
     with console.status(f"[bold yellow]Clearing {user_id}…"):
-        conn = sqlite3.connect(str(db_path))
+        conn = _db_connect(db_path)
         cursor = conn.cursor()
         
         try:
@@ -760,7 +810,7 @@ def _user_rename():
     db_path = Path(settings.data_dir) / "users.db"
     
     with console.status(f"[bold yellow]Renaming user…"):
-        conn = sqlite3.connect(str(db_path))
+        conn = _db_connect(db_path)
         cursor = conn.cursor()
         
         try:
@@ -803,8 +853,7 @@ def _user_stats():
     db_path = Path(settings.data_dir) / "users.db"
     
     with console.status("[bold green]Calculating stats…"):
-        conn = sqlite3.connect(str(db_path))
-        conn.row_factory = sqlite3.Row
+        conn = _db_connect(db_path)
         cursor = conn.cursor()
         
         # Total users
