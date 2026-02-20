@@ -106,7 +106,7 @@ export default function Browse() {
         {/* Title + search row */}
         <div className="flex items-center gap-3 px-4 md:px-6 pt-4 pb-2">
           <div className="flex-1 min-w-0">
-            <p className="text-[10px] font-bold tracking-[0.3em] uppercase mb-0.5" style={{ color: 'var(--accent-gold)' }}>Browse</p>
+            <p className="text-[10px] font-bold tracking-[0.3em] uppercase mb-0.5" style={{ color: 'var(--accent-gold)' }}>Discover</p>
             <h1 className="text-lg font-black text-white leading-none truncate">{heading}</h1>
           </div>
 

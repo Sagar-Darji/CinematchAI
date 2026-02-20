@@ -7,13 +7,13 @@ import { useUserStore } from '@/store/useUserStore'
 import { useRecommendationStore } from '@/store/useRecommendationStore'
 
 const NAV = [
-  { to: '/',         icon: Home,         label: 'Home'      },
-  { to: '/recommendations', icon: Sparkles, label: 'For You' },
-  { to: '/browse',   icon: Search,       label: 'Browse'    },
-  { to: '/calendar', icon: CalendarDays, label: 'Calendar'  },
-  { to: '/web',      icon: Network,      label: 'CineWeb'   },
-  { to: '/digest',   icon: Rss,          label: 'CineDigest'},
-  { to: '/profile',  icon: User,         label: 'Profile'   },
+  { to: '/',               icon: Home,         label: 'Home'       },
+  { to: '/recommendations',icon: Sparkles,     label: 'For You'    },
+  { to: '/web',            icon: Network,      label: 'CineWeb'    },
+  { to: '/browse',         icon: Search,       label: 'Discover'   },
+  { to: '/digest',         icon: Rss,          label: 'CineDigest' },
+  { to: '/calendar',       icon: CalendarDays, label: 'Releases'   },
+  { to: '/profile',        icon: User,         label: 'Profile'    },
 ]
 
 export function Sidebar() {
