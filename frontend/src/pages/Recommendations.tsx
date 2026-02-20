@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react'
-import { SlidersHorizontal, RefreshCw } from 'lucide-react'
+import { useState, useEffect, useRef } from 'react'
+import { SlidersHorizontal, RefreshCw, X } from 'lucide-react'
 import { submitRecommendationJob, pollJobStatus } from '@/lib/api'
 import { useUserStore } from '@/store/useUserStore'
 import { useRecommendationStore } from '@/store/useRecommendationStore'
@@ -39,7 +39,8 @@ export default function Recommendations() {
   const [yearMin, setYearMin] = useState('')
   const [yearMax, setYearMax] = useState('')
   const [sidebarOpen, setSidebarOpen] = useState(false)
-  const [traceCollapsed, setTraceCollapsed] = useState(false)
+  const [overlayOpen, setOverlayOpen] = useState(false)
+  const overlayFadeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const isRunning = isPolling || jobStatus === 'running' || jobStatus === 'pending'
   const isDone = jobStatus === 'complete'
@@ -60,7 +61,8 @@ export default function Recommendations() {
   const startJob = async () => {
     if (!userId) return
     reset()
-    setTraceCollapsed(false)
+    setOverlayOpen(true)
+    if (overlayFadeTimer.current) clearTimeout(overlayFadeTimer.current)
     setIsPolling(true)
     setJobStatus('pending')
 
@@ -79,7 +81,8 @@ export default function Recommendations() {
           setRecommendations(data.result!.recommendations)
           setContextFactors(data.result!.context_factors ?? {})
           setIsPolling(false)
-          setTimeout(() => setTraceCollapsed(true), 1800)
+          // Auto-close overlay after a short celebration moment
+          overlayFadeTimer.current = setTimeout(() => setOverlayOpen(false), 1800)
           return
         }
         if (data.status === 'failed') {
@@ -129,19 +132,19 @@ export default function Recommendations() {
           </div>
 
           <div className="flex items-center gap-2">
-            {/* Pipeline trace toggle — only shown when done */}
+            {/* Pipeline overlay toggle — only shown when done */}
             {isDone && steps.length > 0 && !isRunning && (
               <button
-                onClick={() => setTraceCollapsed((v) => !v)}
+                onClick={() => setOverlayOpen(true)}
                 className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold"
                 style={{
-                  background: traceCollapsed ? 'var(--bg-card)' : 'var(--bg-overlay)',
-                  border: `1px solid ${traceCollapsed ? 'var(--border)' : 'rgba(245,197,24,0.35)'}`,
-                  color: traceCollapsed ? 'var(--text-muted)' : 'var(--accent-gold)',
+                  background: 'var(--bg-card)',
+                  border: '1px solid var(--border)',
+                  color: 'var(--text-muted)',
                   cursor: 'pointer',
                 }}
               >
-                🎬 {traceCollapsed ? 'Pipeline' : 'Hide'}
+                🎬 Pipeline
               </button>
             )}
 
@@ -176,13 +179,6 @@ export default function Recommendations() {
         </div>
 
         <div className="px-4 md:px-8 py-6 pb-16">
-          {/* Running trace — shown above while pipeline is active (no films yet) */}
-          {isRunning && (
-            <div className="mb-10 max-w-2xl mx-auto">
-              <TraceDisplay steps={steps} runningStep={currentRunningStep} isComplete={false} />
-            </div>
-          )}
-
           {/* Error */}
           {jobStatus === 'failed' && (
             <div className="rounded-xl p-4 mb-6 text-sm max-w-lg mx-auto"
@@ -191,16 +187,9 @@ export default function Recommendations() {
             </div>
           )}
 
-          {/* Film stack — always first when done so no scrolling needed */}
+          {/* Film stack — shown when done */}
           {recommendations.length > 0 && !isRunning && (
             <FilmStack recs={recommendations} />
-          )}
-
-          {/* Completed trace — below films, toggle via header button */}
-          {isDone && steps.length > 0 && !isRunning && !traceCollapsed && (
-            <div className="mt-10 max-w-2xl mx-auto">
-              <TraceDisplay steps={steps} runningStep={null} isComplete={true} />
-            </div>
           )}
 
           {!isRunning && recommendations.length === 0 && jobStatus !== 'failed' && (
@@ -238,8 +227,8 @@ export default function Recommendations() {
 
       {/* Filters sidebar */}
       {sidebarOpen && (
-        <aside className="w-72 flex-shrink-0 border-l p-5 space-y-4 overflow-y-auto"
-          style={{ background: 'var(--bg-card)', borderColor: 'var(--border)' }}>
+        <aside className="fixed md:relative inset-x-0 bottom-0 md:inset-auto md:w-72 md:flex-shrink-0 border-t md:border-t-0 md:border-l p-5 space-y-4 overflow-y-auto z-40 rounded-t-2xl md:rounded-none"
+          style={{ background: 'var(--bg-card)', borderColor: 'var(--border)', maxHeight: '80vh' }}>
           <div className="flex items-center justify-between">
             <h2 className="font-black text-xs uppercase tracking-widest" style={{ color: 'var(--accent-gold)' }}>Customize</h2>
             {activeFilters > 0 && (
@@ -355,6 +344,75 @@ export default function Recommendations() {
             Apply & Refresh
           </button>
         </aside>
+      )}
+
+      {/* ── Premium Pipeline Overlay ──────────────────────────────────────── */}
+      {overlayOpen && (
+        <div
+          className="fixed inset-0 z-50 flex flex-col items-center justify-center"
+          style={{
+            backdropFilter: 'blur(22px)',
+            WebkitBackdropFilter: 'blur(22px)',
+            background: 'rgba(5,4,18,0.82)',
+          }}
+        >
+          {/* Decorative ambient rings */}
+          <div className="absolute inset-0 pointer-events-none overflow-hidden">
+            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] rounded-full"
+              style={{ background: 'radial-gradient(circle, rgba(245,197,24,0.04) 0%, transparent 70%)' }} />
+            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[300px] h-[300px] rounded-full"
+              style={{ background: 'radial-gradient(circle, rgba(245,197,24,0.06) 0%, transparent 60%)' }} />
+          </div>
+
+          {/* Header */}
+          <div className="relative z-10 flex flex-col items-center mb-6">
+            <p className="text-[10px] font-bold tracking-[0.35em] uppercase mb-1"
+              style={{ color: 'rgba(245,197,24,0.55)' }}>
+              {isRunning ? 'AI Pipeline · Live' : 'AI Pipeline · Complete'}
+            </p>
+            {isRunning && (
+              <div className="flex items-center gap-2 mt-1">
+                <span className="relative flex h-2 w-2">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full opacity-75"
+                    style={{ background: 'var(--accent-gold)' }} />
+                  <span className="relative inline-flex rounded-full h-2 w-2"
+                    style={{ background: 'var(--accent-gold)' }} />
+                </span>
+                <span className="text-xs font-medium" style={{ color: 'rgba(255,255,255,0.5)' }}>
+                  {currentRunningStep ? `Running ${currentRunningStep}…` : 'Initialising…'}
+                </span>
+              </div>
+            )}
+          </div>
+
+          {/* Trace panel */}
+          <div
+            className="relative z-10 w-full max-w-2xl mx-auto px-4 overflow-y-auto"
+            style={{ maxHeight: 'calc(100vh - 160px)' }}
+          >
+            <TraceDisplay
+              steps={steps}
+              runningStep={isRunning ? currentRunningStep : null}
+              isComplete={isDone}
+            />
+          </div>
+
+          {/* Close button — only when done */}
+          {!isRunning && (
+            <button
+              onClick={() => setOverlayOpen(false)}
+              className="relative z-10 mt-6 flex items-center gap-2 px-5 py-2.5 rounded-full text-sm font-bold transition-all hover:scale-105"
+              style={{
+                background: 'rgba(255,255,255,0.08)',
+                border: '1px solid rgba(255,255,255,0.15)',
+                color: 'rgba(255,255,255,0.7)',
+                cursor: 'pointer',
+              }}
+            >
+              <X size={14} /> Hide Pipeline
+            </button>
+          )}
+        </div>
       )}
     </div>
   )

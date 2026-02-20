@@ -17,16 +17,11 @@ function getCardStyle(offset: number): CSSProperties {
   if (abs > 3) return { display: 'none' }
 
   const sign = offset === 0 ? 0 : offset / abs
-  // translateX: spread cards sideways
-  const tx = offset * 42  // % of container
-  // rotateY: near cards show their spine
-  const ry = -offset * 36  // degrees
-  // scale: far cards shrink
+  const tx = offset * 38
+  const ry = -offset * 32
   const scale = 1 - abs * 0.165
-  // opacity: far cards fade
   const opacity = abs === 0 ? 1 : abs === 1 ? 0.68 : abs === 2 ? 0.38 : 0.16
-  // z-depth: far cards recede
-  const tz = -abs * 60
+  const tz = -abs * 55
 
   return {
     position: 'absolute' as const,
@@ -59,11 +54,11 @@ function PosterCard({
       <div
         className="relative overflow-hidden rounded-xl"
         style={{
-          width: '200px',
-          height: '300px',
+          width: '150px',
+          height: '225px',
           boxShadow: offset === 0
-            ? '0 32px 80px rgba(0,0,0,0.85), 0 0 0 1px rgba(245,197,24,0.15)'
-            : '0 16px 40px rgba(0,0,0,0.6)',
+            ? '0 28px 70px rgba(0,0,0,0.85), 0 0 0 1px rgba(245,197,24,0.15)'
+            : '0 14px 36px rgba(0,0,0,0.6)',
         }}
       >
         {poster
@@ -105,7 +100,6 @@ function PosterCard({
 
 function abs(n: number) { return Math.abs(n) }
 
-// ── Info panel ────────────────────────────────────────────────────────────────
 function FilmInfo({
   rec, onRate, rated,
 }: {
@@ -117,23 +111,28 @@ function FilmInfo({
   const barColor = scoreColor(rec.score)
   const pct = Math.round(rec.score * 100)
   const [showPlayer, setShowPlayer] = useState(false)
+  const [expanded, setExpanded] = useState(false)
   const tmdbId = movie.tmdb_id || movie.id
 
   const titleWords = movie.title.split(' ')
+  const TRUNCATE = 130
+  const shortExplanation = explanation && explanation.length > TRUNCATE
+    ? explanation.slice(0, TRUNCATE).trimEnd() + '…'
+    : explanation
 
   return (
-    <div className="animate-film-info text-center max-w-lg mx-auto px-4 mt-8">
+    <div className="animate-film-info text-center max-w-lg mx-auto px-4 mt-4">
       {/* Pipeline trace line */}
-      <div className="flex items-center justify-center gap-2 mb-4">
-        <div className="h-px flex-1 max-w-[80px] animate-trace-line" style={{ background: 'linear-gradient(to right, transparent, var(--accent-gold))', animationDelay: '0.1s' }} />
+      <div className="flex items-center justify-center gap-2 mb-3">
+        <div className="h-px flex-1 max-w-[60px] animate-trace-line" style={{ background: 'linear-gradient(to right, transparent, var(--accent-gold))', animationDelay: '0.1s' }} />
         <span className="text-[9px] font-bold uppercase tracking-[0.25em] animate-fade-in" style={{ color: 'var(--accent-gold)', animationDelay: '0.3s' }}>
           #{rec.rank} Pick
         </span>
-        <div className="h-px flex-1 max-w-[80px] animate-trace-line" style={{ background: 'linear-gradient(to left, transparent, var(--accent-gold))', animationDelay: '0.1s' }} />
+        <div className="h-px flex-1 max-w-[60px] animate-trace-line" style={{ background: 'linear-gradient(to left, transparent, var(--accent-gold))', animationDelay: '0.1s' }} />
       </div>
 
       {/* Genre / discovery pill */}
-      <div className="flex items-center justify-center gap-2 mb-3">
+      <div className="flex items-center justify-center gap-2 mb-2">
         {is_exploration && (
           <span className="text-[10px] font-black uppercase px-2.5 py-0.5 rounded-full text-white"
             style={{ background: 'var(--accent-red)' }}>Discovery</span>
@@ -143,8 +142,8 @@ function FilmInfo({
         ))}
       </div>
 
-      {/* Title — cascade word reveal */}
-      <h2 className="text-2xl md:text-3xl font-black text-white leading-tight mb-1.5 tracking-tight" style={{ perspective: '600px' }}>
+      {/* Title */}
+      <h2 className="text-xl md:text-2xl font-black text-white leading-tight mb-1 tracking-tight" style={{ perspective: '600px' }}>
         {titleWords.map((word, i) => (
           <span key={i} className="animate-title-word" style={{ animationDelay: `${0.15 + i * 0.08}s` }}>
             {word}{i < titleWords.length - 1 ? '\u00A0' : ''}
@@ -153,7 +152,7 @@ function FilmInfo({
       </h2>
 
       {/* Meta row */}
-      <div className="flex items-center justify-center gap-3 text-xs mb-3 animate-fade-in" style={{ color: 'var(--text-muted)', animationDelay: '0.4s' }}>
+      <div className="flex items-center justify-center gap-3 text-xs mb-2 animate-fade-in" style={{ color: 'var(--text-muted)', animationDelay: '0.4s' }}>
         {movie.year && (
           <span className="flex items-center gap-1"><Calendar size={11} />{movie.year}</span>
         )}
@@ -166,11 +165,22 @@ function FilmInfo({
         <span className="font-bold" style={{ color: barColor }}>{pct}% match</span>
       </div>
 
-      {/* Explanation */}
+      {/* Explanation — truncated with Read more */}
       {explanation && (
-        <p className="text-sm mb-5 leading-relaxed mx-auto max-w-sm animate-fade-in" style={{ color: 'var(--text-muted)', animationDelay: '0.5s' }}>
-          {explanation}
-        </p>
+        <div className="mb-4 animate-fade-in" style={{ animationDelay: '0.5s' }}>
+          <p className="text-sm leading-relaxed mx-auto max-w-sm" style={{ color: 'var(--text-muted)' }}>
+            {expanded ? explanation : shortExplanation}
+          </p>
+          {explanation.length > TRUNCATE && (
+            <button
+              onClick={() => setExpanded((v) => !v)}
+              className="text-xs font-semibold mt-1 transition-opacity hover:opacity-80"
+              style={{ color: 'var(--accent-gold)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+            >
+              {expanded ? 'Show less' : 'Read more'}
+            </button>
+          )}
+        </div>
       )}
 
       {/* Actions */}
@@ -258,8 +268,8 @@ export function FilmStack({ recs }: FilmStackProps) {
         style={{
           perspective: '1200px',
           perspectiveOrigin: '50% 40%',
-          height: '320px',
-          maxWidth: '860px',
+          height: '245px',
+          maxWidth: '800px',
         }}
       >
         {recs.map((rec, i) => (

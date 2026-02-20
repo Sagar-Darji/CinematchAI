@@ -278,8 +278,9 @@ function BottomSheet({ node, accent, onClose, onExplore }: {
         borderTop: `1px solid ${color}44`,
         backdropFilter: 'blur(28px)',
         boxShadow: `0 -6px 48px rgba(0,0,0,0.7), 0 -1px 0 ${color}22`,
-        maxHeight: '72vh',
+        maxHeight: '80vh',
         overflowY: 'auto',
+        borderRadius: '20px 20px 0 0',
       }}
     >
       {/* Drag handle */}
@@ -576,7 +577,7 @@ export default function MovieWeb() {
       {/* ── Seed title badge (when loaded) ───────────────────────────────── */}
       {webData && !loading && (
         <div
-          className="absolute left-1/2 z-10 flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium"
+          className="absolute left-1/2 z-10 flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium hidden sm:flex"
           style={{
             top: 78,
             transform: 'translateX(-50%)',
@@ -592,10 +593,10 @@ export default function MovieWeb() {
         </div>
       )}
 
-      {/* ── Legend ───────────────────────────────────────────────────────── */}
+      {/* ── Legend — hidden on mobile ─────────────────────────────────────── */}
       {webData && !loading && (
         <div
-          className="absolute bottom-5 left-4 z-10 rounded-2xl px-3 py-2.5 space-y-1.5"
+          className="absolute bottom-5 left-4 z-10 rounded-2xl px-3 py-2.5 space-y-1.5 hidden sm:block"
           style={{
             background: 'rgba(4,3,14,0.78)',
             border: '1px solid rgba(255,255,255,0.07)',
@@ -611,10 +612,10 @@ export default function MovieWeb() {
         </div>
       )}
 
-      {/* ── Stats + hints ─────────────────────────────────────────────────── */}
+      {/* ── Stats + hints — hidden on mobile ─────────────────────────────── */}
       {webData && !loading && (
         <div
-          className="absolute bottom-5 right-4 z-10 text-right space-y-1"
+          className="absolute bottom-5 right-4 z-10 text-right space-y-1 hidden sm:block"
           style={{ color: 'rgba(255,255,255,0.25)' }}
         >
           <div className="flex items-center justify-end gap-1.5 text-[10px]">
@@ -630,16 +631,18 @@ export default function MovieWeb() {
         </div>
       )}
 
-      {/* ── Suggestion chips (below graph) ───────────────────────────────── */}
+      {/* ── Suggestion chips — hide when node selected (bottom sheet visible) */}
       {webData && !loading && !selectedNode && (
-        <div className="absolute bottom-5 left-1/2 -translate-x-1/2 z-10">
+        <div className="absolute bottom-5 left-1/2 -translate-x-1/2 z-10 hidden sm:flex">
           <Chips onExplore={explore} compact accent={activeAccent} />
         </div>
       )}
 
-      {/* ── Hover tooltip ─────────────────────────────────────────────────── */}
+      {/* ── Hover tooltip — desktop only (no hover on touch) ───────────────── */}
       {hoveredNode && !selectedNode && (
-        <Tooltip node={hoveredNode} accent={activeAccent} />
+        <div className="hidden md:block">
+          <Tooltip node={hoveredNode} accent={activeAccent} />
+        </div>
       )}
 
       {/* ── Bottom sheet ─────────────────────────────────────────────────── */}
