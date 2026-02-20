@@ -1,8 +1,9 @@
 import { useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { ArrowRight, Loader2, Eye, EyeOff } from 'lucide-react'
+import { useGoogleLogin } from '@react-oauth/google'
 import { useUserStore } from '@/store/useUserStore'
-import { loginWithPassword, getUserProfile } from '@/lib/api'
+import { loginWithPassword, googleAuth, getUserProfile } from '@/lib/api'
 
 export default function Login() {
   const navigate = useNavigate()
@@ -12,28 +13,45 @@ export default function Login() {
   const [password, setPassword] = useState('')
   const [showPw, setShowPw] = useState(false)
   const [loading, setLoading] = useState(false)
+  const [googleLoading, setGoogleLoading] = useState(false)
   const [error, setError] = useState('')
 
+  const _onSuccess = async (auth: Awaited<ReturnType<typeof loginWithPassword>>) => {
+    setUserId(auth.user_id)
+    setEmail(auth.email)
+    setToken(auth.token)
+    const profile = await getUserProfile(auth.user_id)
+    setRatingCount(profile?.total_ratings ?? 0)
+    setOnboarded(true)
+    navigate(auth.is_new_user ? '/onboarding' : '/')
+  }
+
   const handleLogin = async () => {
-    const trimEmail = identifier.trim()
-    if (!trimEmail || !password) return
-    setLoading(true)
-    setError('')
+    if (!identifier.trim() || !password) return
+    setLoading(true); setError('')
     try {
-      const auth = await loginWithPassword(trimEmail, password)
-      setUserId(auth.user_id)
-      setEmail(auth.email)
-      setToken(auth.token)
-      const profile = await getUserProfile(auth.user_id)
-      setRatingCount(profile?.total_ratings ?? 0)
-      setOnboarded(true)
-      navigate('/')
+      await _onSuccess(await loginWithPassword(identifier.trim(), password))
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Something went wrong. Please try again.')
-    } finally {
-      setLoading(false)
-    }
+    } finally { setLoading(false) }
   }
+
+  const handleGoogleLogin = useGoogleLogin({
+    onSuccess: async (tokenResponse) => {
+      setGoogleLoading(true); setError('')
+      try {
+        // Exchange access token for user info, then send id_token to backend
+        const userInfoRes = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+          headers: { Authorization: `Bearer ${tokenResponse.access_token}` },
+        })
+        const userInfo = await userInfoRes.json()
+        await _onSuccess(await googleAuth(tokenResponse.access_token, userInfo.sub))
+      } catch (err: unknown) {
+        setError(err instanceof Error ? err.message : 'Google sign-in failed.')
+      } finally { setGoogleLoading(false) }
+    },
+    onError: () => setError('Google sign-in was cancelled or failed.'),
+  })
 
   return (
     <div
@@ -52,6 +70,32 @@ export default function Login() {
         </div>
 
         <div className="flex flex-col gap-3">
+          {/* Google Sign-In */}
+          <button
+            onClick={() => handleGoogleLogin()}
+            disabled={googleLoading || loading}
+            className="flex items-center justify-center gap-3 py-4 rounded-xl font-semibold text-base disabled:opacity-40 transition-opacity"
+            style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', color: 'var(--text-primary)', cursor: 'pointer' }}
+          >
+            {googleLoading ? (
+              <Loader2 size={18} className="animate-spin" />
+            ) : (
+              <svg width="18" height="18" viewBox="0 0 48 48" fill="none">
+                <path fill="#FFC107" d="M43.6 20.1H42V20H24v8h11.3C33.6 32.7 29.3 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.1 7.9 3l5.7-5.7C34 6.4 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.6-.4-3.9z"/>
+                <path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.5 16 19 12 24 12c3.1 0 5.8 1.1 7.9 3l5.7-5.7C34 6.4 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/>
+                <path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.3 35.2 26.8 36 24 36c-5.3 0-9.6-3.3-11.3-8H6.3C9.6 35.5 16.3 44 24 44z"/>
+                <path fill="#1976D2" d="M43.6 20.1H42V20H24v8h11.3c-.8 2.3-2.3 4.3-4.2 5.6l6.2 5.2C43 35 44 30 44 24c0-1.3-.1-2.6-.4-3.9z"/>
+              </svg>
+            )}
+            Continue with Google
+          </button>
+
+          <div className="flex items-center gap-3 my-1">
+            <div className="flex-1 h-px" style={{ background: 'var(--border)' }} />
+            <span className="text-xs" style={{ color: 'var(--text-muted)' }}>or</span>
+            <div className="flex-1 h-px" style={{ background: 'var(--border)' }} />
+          </div>
+
           <input
             type="text"
             autoFocus
@@ -97,12 +141,17 @@ export default function Login() {
             Sign In
           </button>
 
-          <p className="text-center text-sm mt-2" style={{ color: 'var(--text-muted)' }}>
-            New here?{' '}
-            <Link to="/register" className="font-medium hover:underline" style={{ color: 'var(--accent-gold)' }}>
-              Create an account
+          <div className="flex justify-between items-center mt-1">
+            <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
+              New here?{' '}
+              <Link to="/register" className="font-medium hover:underline" style={{ color: 'var(--accent-gold)' }}>
+                Create an account
+              </Link>
+            </p>
+            <Link to="/forgot-password" className="text-sm hover:underline" style={{ color: 'var(--text-muted)' }}>
+              Forgot password?
             </Link>
-          </p>
+          </div>
         </div>
       </div>
     </div>

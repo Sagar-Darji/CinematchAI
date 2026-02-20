@@ -34,6 +34,20 @@ export async function loginWithPassword(identifier: string, password: string): P
   return res.json()
 }
 
+export async function googleAuth(idToken: string, username?: string): Promise<AuthResponse> {
+  const res = await fetch(`${AUTH_BASE}/google`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id_token: idToken, username }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Google sign-in failed' }))
+    throw new Error(err.detail || 'Google sign-in failed')
+  }
+  return res.json()
+}
+
+
 export interface Movie {
   tmdb_id: number
   id?: number

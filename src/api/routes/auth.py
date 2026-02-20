@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, status
-from pydantic import BaseModel, EmailStr, field_validator
+from pydantic import BaseModel, field_validator
 
 from config.settings import get_settings
 from src.core.auth.jwt import create_access_token
@@ -104,19 +104,7 @@ async def register(req: RegisterRequest):
         raise HTTPException(status_code=409, detail="Username already taken")
 
     # Create a stub profile row so the user_id exists in the DB
-    now = datetime.now(timezone.utc).isoformat()
-    import sqlite3, json
-    from pathlib import Path
-    from config.settings import get_settings as _gs
-    db_path = Path(_gs().data_dir) / "users.db"
-    stub_profile = json.dumps({"user_id": req.username, "total_ratings": 0, "is_cold_start": True})
-    conn = sqlite3.connect(str(db_path))
-    conn.execute(
-        "INSERT OR IGNORE INTO users (user_id, created_at, updated_at, profile_json) VALUES (?,?,?,?)",
-        (req.username, now, now, stub_profile)
-    )
-    conn.commit()
-    conn.close()
+    svc.create_user_stub(req.username)
 
     # Write auth credentials
     svc.set_auth_credentials(
@@ -197,19 +185,8 @@ async def google_login(req: GoogleLoginRequest):
     if svc.get_user_profile(username):
         raise HTTPException(status_code=409, detail="Username already taken. Please choose another.")
 
-    now = datetime.now(timezone.utc).isoformat()
-    import sqlite3, json
-    from pathlib import Path
-    from config.settings import get_settings as _gs
-    db_path = Path(_gs().data_dir) / "users.db"
-    stub_profile = json.dumps({"user_id": username, "total_ratings": 0, "is_cold_start": True})
-    conn = sqlite3.connect(str(db_path))
-    conn.execute(
-        "INSERT OR IGNORE INTO users (user_id, created_at, updated_at, profile_json) VALUES (?,?,?,?)",
-        (username, now, now, stub_profile)
-    )
-    conn.commit()
-    conn.close()
+    # Create stub profile row
+    svc.create_user_stub(username)
 
     svc.set_auth_credentials(
         user_id=username,
@@ -240,3 +217,114 @@ async def me(token: str):
         "email": record["email"],
         "auth_provider": record["auth_provider"],
     }
+
+
+# ── Password Reset ─────────────────────────────────────────────────────────────
+
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str
+
+    @field_validator("new_password")
+    @classmethod
+    def password_strength(cls, v: str) -> str:
+        if len(v) < 8:
+            raise ValueError("Password must be at least 8 characters")
+        return v
+
+
+def _send_reset_email(to_email: str, reset_link: str) -> bool:
+    """Send reset email via SMTP. Returns True on success, False if SMTP not configured."""
+    import smtplib
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+    settings = get_settings()
+    if not all([settings.smtp_host, settings.smtp_user, settings.smtp_password]):
+        return False
+
+    from_addr = settings.smtp_from or settings.smtp_user
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = "Reset your CineMatch AI password"
+    msg["From"] = from_addr
+    msg["To"] = to_email
+
+    text = f"Reset your password:\n\n{reset_link}\n\nThis link expires in 1 hour."
+    html = f"""
+    <div style="font-family:sans-serif;max-width:480px;margin:auto;padding:32px">
+      <h2 style="color:#c9a84c">CineMatch AI</h2>
+      <p>You requested a password reset. Click the button below to set a new password.</p>
+      <a href="{reset_link}" style="display:inline-block;background:#c9a84c;color:#0a0a0f;padding:14px 28px;border-radius:10px;font-weight:bold;text-decoration:none;margin:16px 0">
+        Reset Password
+      </a>
+      <p style="color:#888;font-size:13px">This link expires in 1 hour. If you didn't request a reset, ignore this email.</p>
+    </div>"""
+    msg.attach(MIMEText(text, "plain"))
+    msg.attach(MIMEText(html, "html"))
+
+    try:
+        if settings.smtp_port == 465:
+            with smtplib.SMTP_SSL(settings.smtp_host, settings.smtp_port) as smtp:
+                smtp.login(settings.smtp_user, settings.smtp_password)
+                smtp.sendmail(from_addr, to_email, msg.as_string())
+        else:
+            with smtplib.SMTP(settings.smtp_host, settings.smtp_port) as smtp:
+                smtp.starttls()
+                smtp.login(settings.smtp_user, settings.smtp_password)
+                smtp.sendmail(from_addr, to_email, msg.as_string())
+        return True
+    except Exception as exc:
+        logger.error(f"SMTP send failed: {exc}")
+        return False
+
+
+@router.post("/forgot-password", status_code=200)
+async def forgot_password(req: ForgotPasswordRequest):
+    """
+    Request a password reset link.
+    Always returns 200 (never reveals whether the email exists).
+    """
+    import secrets
+    from datetime import datetime, timezone, timedelta
+
+    svc = get_user_service()
+    email = req.email.lower().strip()
+    user = svc.get_user_by_email(email)
+
+    if user:
+        if user.get("auth_provider") == "google" and not user.get("password_hash"):
+            # Google-only account — still return 200, just don't send a reset
+            logger.info(f"Forgot-password: {email} is Google-only, skipping reset email")
+            return {"message": "If that email is registered, a reset link has been sent."}
+
+        token = secrets.token_urlsafe(32)
+        expires_at = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+        svc.set_reset_token(user["user_id"], token, expires_at)
+
+        settings = get_settings()
+        app_url = getattr(settings, "app_url", None) or "http://localhost:3000"
+        reset_link = f"{app_url}/reset-password?token={token}"
+
+        sent = _send_reset_email(email, reset_link)
+        if not sent:
+            # Dev fallback: log the link so it can be used without email config
+            logger.warning(f"[DEV] Password reset link for {email}: {reset_link}")
+
+    return {"message": "If that email is registered, a reset link has been sent."}
+
+
+@router.post("/reset-password", status_code=200)
+async def reset_password(req: ResetPasswordRequest):
+    """Consume a reset token and set a new password."""
+    svc = get_user_service()
+    user_id = svc.consume_reset_token(req.token.strip())
+    if not user_id:
+        raise HTTPException(status_code=400, detail="Reset link is invalid or has expired.")
+
+    svc.update_password(user_id, hash_password(req.new_password))
+    logger.info(f"Password reset for user: {user_id}")
+    return {"message": "Password updated successfully. You can now sign in."}
+

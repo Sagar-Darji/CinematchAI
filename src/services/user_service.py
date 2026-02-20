@@ -10,6 +10,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 
 from config.settings import get_settings
+from src.core.db import get_db
 from src.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -25,20 +26,21 @@ class UserService:
         self.db_path = Path(settings.data_dir) / "users.db"
         self._init_database()
 
-    def _connect(self) -> sqlite3.Connection:
-        """Return a DB connection with WAL mode for concurrent CLI access."""
-        conn = sqlite3.connect(str(self.db_path), timeout=15)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA busy_timeout=15000")
-        return conn
+    def _connect(self):
+        """Return an open DB connection (SQLite or PostgreSQL via adapter)."""
+        return get_db().connect()
 
     def _init_database(self):
-        """Initialize SQLite database."""
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        """Initialize database schema (SQLite or PostgreSQL)."""
+        db = get_db()
+        if not db.is_postgres:
+            self.db_path.parent.mkdir(parents=True, exist_ok=True)
 
         conn = self._connect()
         cursor = conn.cursor()
+
+        # Postgres uses SERIAL; SQLite uses INTEGER PRIMARY KEY AUTOINCREMENT
+        _serial = "SERIAL" if db.is_postgres else "INTEGER"
 
         # Users table
         cursor.execute("""
@@ -56,7 +58,8 @@ class UserService:
             )
         """)
 
-        # Add columns if upgrading from older schema
+        # Add columns when upgrading from older schema
+        # (adapter normalises ALTER TABLE … ADD COLUMN → ADD COLUMN IF NOT EXISTS for Postgres)
         for col, definition in [
             ("embedding_json",          "TEXT"),
             ("embedding_rating_count",  "INTEGER DEFAULT 0"),
@@ -64,27 +67,29 @@ class UserService:
             ("password_hash",           "TEXT"),
             ("auth_provider",           "TEXT DEFAULT 'password'"),
             ("google_id",               "TEXT"),
+            ("reset_token",             "TEXT"),
+            ("reset_token_expires",     "TEXT"),
         ]:
             try:
                 cursor.execute(f"ALTER TABLE users ADD COLUMN {col} {definition}")
-            except sqlite3.OperationalError:
+            except Exception:
                 pass  # Column already exists
 
         # Ratings table
-        cursor.execute("""
+        cursor.execute(f"""
             CREATE TABLE IF NOT EXISTS ratings (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id {_serial} PRIMARY KEY {"AUTOINCREMENT" if not db.is_postgres else ""},
                 user_id TEXT NOT NULL,
                 movie_id TEXT NOT NULL,
                 rating REAL NOT NULL,
-                watched BOOLEAN DEFAULT 1,
+                watched BOOLEAN DEFAULT TRUE,
                 timestamp TEXT NOT NULL,
                 FOREIGN KEY (user_id) REFERENCES users(user_id),
                 UNIQUE(user_id, movie_id)
             )
         """)
 
-        # Contexts table (session context)
+        # Contexts table
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS contexts (
                 user_id TEXT PRIMARY KEY,
@@ -97,7 +102,21 @@ class UserService:
         conn.commit()
         conn.close()
 
-        logger.info(f"Database initialized at {self.db_path}")
+        logger.info(f"Database initialised ({'PostgreSQL' if db.is_postgres else self.db_path})")
+
+    def create_user_stub(self, user_id: str, email: Optional[str] = None) -> None:
+        """Insert a minimal user row so foreign-key constraints are satisfied."""
+        now = datetime.now(timezone.utc).isoformat()
+        stub = json.dumps({"user_id": user_id, "total_ratings": 0, "is_cold_start": True})
+        conn = self._connect()
+        try:
+            conn.execute(
+                "INSERT OR IGNORE INTO users (user_id, created_at, updated_at, profile_json) VALUES (?,?,?,?)",
+                (user_id, now, now, stub),
+            )
+            conn.commit()
+        finally:
+            conn.close()
 
     def get_user_profile(self, user_id: str) -> Optional[dict]:
         """Get user profile by ID."""
@@ -107,8 +126,17 @@ class UserService:
         row = cursor.fetchone()
         conn.close()
         if row:
-            return json.loads(row[0])
+            return json.loads(row["profile_json"] if isinstance(row, dict) else row[0])
         return None
+
+    def _row_to_auth(self, row) -> dict:
+        """Normalise a DB row (sqlite3.Row or dict) to an auth dict."""
+        if isinstance(row, dict):
+            return row
+        return {
+            "user_id": row[0], "email": row[1], "password_hash": row[2],
+            "auth_provider": row[3], "google_id": row[4],
+        }
 
     def get_auth_record(self, user_id: str) -> Optional[dict]:
         """Return auth fields (email, password_hash, auth_provider, google_id) for a user."""
@@ -120,10 +148,7 @@ class UserService:
         )
         row = cursor.fetchone()
         conn.close()
-        if row:
-            return {"user_id": row[0], "email": row[1], "password_hash": row[2],
-                    "auth_provider": row[3], "google_id": row[4]}
-        return None
+        return self._row_to_auth(row) if row else None
 
     def get_user_by_email(self, email: str) -> Optional[dict]:
         """Look up a user by email address."""
@@ -135,10 +160,7 @@ class UserService:
         )
         row = cursor.fetchone()
         conn.close()
-        if row:
-            return {"user_id": row[0], "email": row[1], "password_hash": row[2],
-                    "auth_provider": row[3], "google_id": row[4]}
-        return None
+        return self._row_to_auth(row) if row else None
 
     def get_user_by_username(self, username: str) -> Optional[dict]:
         """Look up a user by username (user_id)."""
@@ -150,10 +172,7 @@ class UserService:
         )
         row = cursor.fetchone()
         conn.close()
-        if row:
-            return {"user_id": row[0], "email": row[1], "password_hash": row[2],
-                    "auth_provider": row[3], "google_id": row[4]}
-        return None
+        return self._row_to_auth(row) if row else None
 
     def get_user_by_google_id(self, google_id: str) -> Optional[dict]:
         """Look up a user by Google sub ID."""
@@ -165,10 +184,58 @@ class UserService:
         )
         row = cursor.fetchone()
         conn.close()
-        if row:
-            return {"user_id": row[0], "email": row[1], "password_hash": row[2],
-                    "auth_provider": row[3], "google_id": row[4]}
-        return None
+        return self._row_to_auth(row) if row else None
+
+    def set_reset_token(self, user_id: str, token: str, expires_at: str) -> None:
+        """Store a password-reset token for the user."""
+        conn = self._connect()
+        conn.execute(
+            "UPDATE users SET reset_token=?, reset_token_expires=? WHERE user_id=?",
+            (token, expires_at, user_id),
+        )
+        conn.commit()
+        conn.close()
+
+    def consume_reset_token(self, token: str) -> Optional[str]:
+        """
+        Validate and consume a reset token.
+        Returns the user_id if the token is valid and unexpired, else None.
+        The token is cleared on success.
+        """
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat()
+        conn = self._connect()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT user_id, reset_token_expires FROM users WHERE reset_token = ?", (token,)
+        )
+        row = cursor.fetchone()
+        if not row:
+            conn.close()
+            return None
+        user_id = row["user_id"] if isinstance(row, dict) else row[0]
+        expires_at = row["reset_token_expires"] if isinstance(row, dict) else row[1]
+        if not expires_at or expires_at < now:
+            conn.close()
+            return None
+        # Clear the token so it can only be used once
+        conn.execute(
+            "UPDATE users SET reset_token=NULL, reset_token_expires=NULL WHERE user_id=?",
+            (user_id,),
+        )
+        conn.commit()
+        conn.close()
+        return user_id
+
+    def update_password(self, user_id: str, password_hash: str) -> None:
+        """Set a new password hash for the user."""
+        conn = self._connect()
+        conn.execute(
+            "UPDATE users SET password_hash=?, auth_provider='password', updated_at=? WHERE user_id=?",
+            (password_hash, datetime.now(timezone.utc).isoformat(), user_id),
+        )
+        conn.commit()
+        conn.close()
 
     def set_auth_credentials(self, user_id: str, email: str,
                               password_hash: Optional[str],

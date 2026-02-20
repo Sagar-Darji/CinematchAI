@@ -103,6 +103,21 @@ class Settings(BaseSettings):
         description="JWT signing secret — set JWT_SECRET env var in production",
     )
     google_client_id: Optional[str] = Field(default=None, description="Google OAuth client ID")
+    database_url: Optional[str] = Field(
+        default=None,
+        description="PostgreSQL connection string (e.g. Supabase). If set, overrides local SQLite.",
+    )
+
+    # Email / SMTP (for password-reset emails)
+    smtp_host: Optional[str] = Field(default=None, description="SMTP server host (e.g. smtp.gmail.com)")
+    smtp_port: int = Field(default=587, description="SMTP server port (587=STARTTLS, 465=SSL)")
+    smtp_user: Optional[str] = Field(default=None, description="SMTP login username")
+    smtp_password: Optional[str] = Field(default=None, description="SMTP login password / app-password")
+    smtp_from: Optional[str] = Field(default=None, description="From address for outgoing email")
+    app_url: str = Field(
+        default="http://localhost:3000",
+        description="Public URL of the app — used in password-reset email links",
+    )
 
     # Streamlit Settings
     streamlit_server_port: int = Field(default=8501, description="Streamlit server port")

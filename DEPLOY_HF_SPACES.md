@@ -47,6 +47,12 @@ Go to your Space settings:
 Add these secrets:
 - **GROQ_API_KEY**: Your Groq API key (required)
 - **TMDB_API_KEY**: Your TMDB API key (optional)
+- **DATABASE_URL**: Supabase PostgreSQL URI (required for persistent users — see [Supabase Setup](#-persistent-users--supabase-setup))
+- **JWT_SECRET**: Random secret for auth tokens — run `openssl rand -hex 32`
+- **GOOGLE_CLIENT_ID**: Google OAuth Client ID (required for Google Sign-In — see [Google Sign-In Setup](#-google-sign-in-setup))
+
+Add these **Variables** (public, not secret):
+- **VITE_GOOGLE_CLIENT_ID**: Same value as GOOGLE_CLIENT_ID (needed by the frontend at build time)
 
 ### Step 3: Wait for Build
 
@@ -59,6 +65,64 @@ Add these secrets:
 - Click "App" tab
 - Complete onboarding (rate 5 movies)
 - Get recommendations!
+
+---
+
+## 🗄️ Persistent Users — Supabase Setup
+
+Without this, all user accounts and ratings are wiped every time the Space restarts.
+
+### 1. Create a free Supabase project
+
+1. Go to https://supabase.com and sign up (free)
+2. Click **New project**, give it any name (e.g. `cinematch`)
+3. Choose a region close to your HF Space region
+4. Save the database password (you'll need it once)
+
+### 2. Get the connection string
+
+1. In Supabase dashboard → **Settings** → **Database**
+2. Scroll to **Connection string** → select **URI** tab
+3. Copy the string — it looks like:
+   ```
+   postgresql://postgres:[YOUR-PASSWORD]@db.xxxx.supabase.co:5432/postgres
+   ```
+4. Replace `[YOUR-PASSWORD]` with your actual database password
+
+### 3. Add to HF Spaces
+
+Space settings → **Secrets** → add:
+- **Name**: `DATABASE_URL`  **Value**: the full URI from step 2
+
+That's it. The app automatically uses PostgreSQL when `DATABASE_URL` is set, and SQLite locally.
+
+---
+
+## 🔐 Google Sign-In Setup
+
+Lets users sign in with one click — no password to remember. Their account persists in Supabase.
+
+### 1. Create Google OAuth credentials
+
+1. Go to https://console.cloud.google.com → create or select a project
+2. **APIs & Services** → **Credentials** → **Create Credentials** → **OAuth 2.0 Client ID**
+3. Application type: **Web application**
+4. Under **Authorised JavaScript origins** add:
+   ```
+   https://YOUR-USERNAME-cinematch-ai.hf.space
+   ```
+   (replace with your actual HF Space URL — find it in Space settings)
+5. Click **Create** → copy the **Client ID**
+
+### 2. Add to HF Spaces
+
+Space settings → **Secrets**:
+- **GOOGLE_CLIENT_ID** = your Client ID
+
+Space settings → **Variables** (public):
+- **VITE_GOOGLE_CLIENT_ID** = same Client ID
+
+> ⚠️ `VITE_GOOGLE_CLIENT_ID` must be a **Variable** (not a Secret) because Vite embeds it at build time. After adding it, push a commit or factory-reset the Space to trigger a rebuild.
 
 ---
 
