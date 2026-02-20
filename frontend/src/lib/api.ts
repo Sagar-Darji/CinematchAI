@@ -1,4 +1,38 @@
 const BASE = '/api/v1'
+const AUTH_BASE = '/api/v1/auth'
+
+export interface AuthResponse {
+  token: string
+  user_id: string
+  email: string
+  is_new_user: boolean
+}
+
+export async function registerUser(username: string, email: string, password: string): Promise<AuthResponse> {
+  const res = await fetch(`${AUTH_BASE}/register`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, email, password }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Registration failed' }))
+    throw new Error(err.detail || 'Registration failed')
+  }
+  return res.json()
+}
+
+export async function loginWithPassword(email: string, password: string): Promise<AuthResponse> {
+  const res = await fetch(`${AUTH_BASE}/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Login failed' }))
+    throw new Error(err.detail || 'Login failed')
+  }
+  return res.json()
+}
 
 export interface Movie {
   tmdb_id: number

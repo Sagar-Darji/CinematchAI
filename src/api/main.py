@@ -12,7 +12,7 @@ from prometheus_fastapi_instrumentator import Instrumentator
 import time
 import uuid
 
-from src.api.routes import admin, groups, health, movie_web, movies, news, recommendations, users
+from src.api.routes import admin, auth, groups, health, movie_web, movies, news, recommendations, users
 from src.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -187,6 +187,7 @@ async def internal_error_handler(request: Request, exc):
 
 
 # Include routers
+app.include_router(auth.router)
 app.include_router(health.router, prefix="/api/v1")
 app.include_router(recommendations.router, prefix="/api/v1")
 app.include_router(groups.router, prefix="/api/v1")

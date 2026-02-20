@@ -11,10 +11,11 @@ const STARS = [1, 2, 3, 4, 5]
 
 export default function Onboarding() {
   const navigate = useNavigate()
-  const { setUserId, setOnboarded, setRatingCount } = useUserStore()
+  const { userId: existingUserId, setUserId, setOnboarded, setRatingCount } = useUserStore()
 
-  const [step, setStep] = useState<Step>('username')
-  const [username, setUsername] = useState('')
+  // If user already registered (came from /register), skip the username step
+  const [step, setStep] = useState<Step>(existingUserId ? 'method' : 'username')
+  const [username, setUsername] = useState(existingUserId || '')
   const [movies, setMovies] = useState<OnboardingMovie[]>([])
   const [ratings, setRatings] = useState<Record<string, number>>({})
   const [loadingMovies, setLoadingMovies] = useState(false)

@@ -3,6 +3,7 @@ import { Layout } from '@/components/layout/Layout'
 import { ProtectedRoute } from '@/components/auth/ProtectedRoute'
 import Home from '@/pages/Home'
 import Login from '@/pages/Login'
+import Register from '@/pages/Register'
 import Onboarding from '@/pages/Onboarding'
 import Recommendations from '@/pages/Recommendations'
 import Browse from '@/pages/Browse'
@@ -20,6 +21,7 @@ export default function App() {
       <Routes>
         {/* Public routes */}
         <Route path="/login" element={userId && isOnboarded ? <Navigate to="/" replace /> : <Login />} />
+        <Route path="/register" element={userId && isOnboarded ? <Navigate to="/" replace /> : <Register />} />
         <Route path="/onboarding" element={<Onboarding />} />
 
         {/* Protected routes */}

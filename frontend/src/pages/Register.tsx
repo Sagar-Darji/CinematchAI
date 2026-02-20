@@ -2,32 +2,31 @@ import { useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { ArrowRight, Loader2, Eye, EyeOff } from 'lucide-react'
 import { useUserStore } from '@/store/useUserStore'
-import { loginWithPassword, getUserProfile } from '@/lib/api'
+import { registerUser } from '@/lib/api'
 
-export default function Login() {
+export default function Register() {
   const navigate = useNavigate()
-  const { setUserId, setEmail, setToken, setOnboarded, setRatingCount } = useUserStore()
+  const { setUserId, setEmail, setToken, setOnboarded } = useUserStore()
 
+  const [username, setUsername] = useState('')
   const [email, setEmailInput] = useState('')
   const [password, setPassword] = useState('')
   const [showPw, setShowPw] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
-  const handleLogin = async () => {
-    const trimEmail = email.trim()
-    if (!trimEmail || !password) return
+  const handleRegister = async () => {
+    if (!username.trim() || !email.trim() || !password) return
     setLoading(true)
     setError('')
     try {
-      const auth = await loginWithPassword(trimEmail, password)
+      const auth = await registerUser(username.trim(), email.trim(), password)
       setUserId(auth.user_id)
       setEmail(auth.email)
       setToken(auth.token)
-      const profile = await getUserProfile(auth.user_id)
-      setRatingCount(profile?.total_ratings ?? 0)
-      setOnboarded(true)
-      navigate('/')
+      setOnboarded(false)
+      // Send to onboarding to rate some movies and build profile
+      navigate('/onboarding')
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Something went wrong. Please try again.')
     } finally {
@@ -45,20 +44,28 @@ export default function Login() {
           <p className="text-xs font-bold tracking-[0.3em] uppercase mb-3" style={{ color: 'var(--accent-gold)' }}>
             CineMatch AI
           </p>
-          <h1 className="text-4xl font-black tracking-tight text-white">Welcome back</h1>
+          <h1 className="text-4xl font-black tracking-tight text-white">Create account</h1>
           <p className="mt-3 text-sm" style={{ color: 'var(--text-muted)' }}>
-            Sign in to access your taste profile and recommendations.
+            Build your taste profile and get personalised recommendations.
           </p>
         </div>
 
         <div className="flex flex-col gap-3">
           <input
-            type="email"
+            type="text"
             autoFocus
+            placeholder="Username (3–32 chars, letters/numbers/_/-)"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            className="w-full px-5 py-4 rounded-xl text-base outline-none"
+            style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', color: 'var(--text-primary)' }}
+          />
+
+          <input
+            type="email"
             placeholder="Email"
             value={email}
             onChange={(e) => setEmailInput(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && handleLogin()}
             className="w-full px-5 py-4 rounded-xl text-base outline-none"
             style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', color: 'var(--text-primary)' }}
           />
@@ -66,10 +73,10 @@ export default function Login() {
           <div className="relative">
             <input
               type={showPw ? 'text' : 'password'}
-              placeholder="Password"
+              placeholder="Password (min 8 characters)"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleLogin()}
+              onKeyDown={(e) => e.key === 'Enter' && handleRegister()}
               className="w-full px-5 py-4 rounded-xl text-base outline-none pr-12"
               style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', color: 'var(--text-primary)' }}
             />
@@ -88,19 +95,19 @@ export default function Login() {
           )}
 
           <button
-            onClick={handleLogin}
-            disabled={loading || !email.trim() || !password}
+            onClick={handleRegister}
+            disabled={loading || !username.trim() || !email.trim() || !password}
             className="flex items-center justify-center gap-2 py-4 rounded-xl font-bold text-base disabled:opacity-40 transition-opacity"
             style={{ background: 'var(--accent-gold)', color: '#0a0a0f', border: 'none', cursor: 'pointer' }}
           >
             {loading ? <Loader2 size={18} className="animate-spin" /> : <ArrowRight size={18} />}
-            Sign In
+            Create Account
           </button>
 
           <p className="text-center text-sm mt-2" style={{ color: 'var(--text-muted)' }}>
-            New here?{' '}
-            <Link to="/register" className="font-medium hover:underline" style={{ color: 'var(--accent-gold)' }}>
-              Create an account
+            Already have an account?{' '}
+            <Link to="/login" className="font-medium hover:underline" style={{ color: 'var(--accent-gold)' }}>
+              Sign in
             </Link>
           </p>
         </div>
@@ -108,4 +115,3 @@ export default function Login() {
     </div>
   )
 }
-

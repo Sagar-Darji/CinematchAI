@@ -40,19 +40,27 @@ class UserService:
                 updated_at TEXT NOT NULL,
                 profile_json TEXT NOT NULL,
                 embedding_json TEXT,
-                embedding_rating_count INTEGER DEFAULT 0
+                embedding_rating_count INTEGER DEFAULT 0,
+                email TEXT UNIQUE,
+                password_hash TEXT,
+                auth_provider TEXT DEFAULT 'password',
+                google_id TEXT UNIQUE
             )
         """)
 
         # Add columns if upgrading from older schema
-        try:
-            cursor.execute("ALTER TABLE users ADD COLUMN embedding_json TEXT")
-        except sqlite3.OperationalError:
-            pass  # Column already exists
-        try:
-            cursor.execute("ALTER TABLE users ADD COLUMN embedding_rating_count INTEGER DEFAULT 0")
-        except sqlite3.OperationalError:
-            pass
+        for col, definition in [
+            ("embedding_json",          "TEXT"),
+            ("embedding_rating_count",  "INTEGER DEFAULT 0"),
+            ("email",                   "TEXT UNIQUE"),
+            ("password_hash",           "TEXT"),
+            ("auth_provider",           "TEXT DEFAULT 'password'"),
+            ("google_id",               "TEXT UNIQUE"),
+        ]:
+            try:
+                cursor.execute(f"ALTER TABLE users ADD COLUMN {col} {definition}")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
 
         # Ratings table
         cursor.execute("""
@@ -84,31 +92,77 @@ class UserService:
         logger.info(f"Database initialized at {self.db_path}")
 
     def get_user_profile(self, user_id: str) -> Optional[dict]:
-        """
-        Get user profile by ID.
-
-        Args:
-            user_id: User ID.
-
-        Returns:
-            UserProfile or None if not found.
-        """
+        """Get user profile by ID."""
         conn = sqlite3.connect(str(self.db_path))
         cursor = conn.cursor()
+        cursor.execute("SELECT profile_json FROM users WHERE user_id = ?", (user_id,))
+        row = cursor.fetchone()
+        conn.close()
+        if row:
+            return json.loads(row[0])
+        return None
 
+    def get_auth_record(self, user_id: str) -> Optional[dict]:
+        """Return auth fields (email, password_hash, auth_provider, google_id) for a user."""
+        conn = sqlite3.connect(str(self.db_path))
+        cursor = conn.cursor()
         cursor.execute(
-            "SELECT profile_json FROM users WHERE user_id = ?", (user_id,)
+            "SELECT user_id, email, password_hash, auth_provider, google_id "
+            "FROM users WHERE user_id = ?", (user_id,)
         )
         row = cursor.fetchone()
         conn.close()
-
         if row:
-            profile_data = json.loads(row[0])
-            # Reconstruct UserProfile
-            # (Simplified - in production, you'd deserialize properly)
-            return profile_data
-        else:
-            return None
+            return {"user_id": row[0], "email": row[1], "password_hash": row[2],
+                    "auth_provider": row[3], "google_id": row[4]}
+        return None
+
+    def get_user_by_email(self, email: str) -> Optional[dict]:
+        """Look up a user by email address."""
+        conn = sqlite3.connect(str(self.db_path))
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT user_id, email, password_hash, auth_provider, google_id "
+            "FROM users WHERE email = ?", (email.lower().strip(),)
+        )
+        row = cursor.fetchone()
+        conn.close()
+        if row:
+            return {"user_id": row[0], "email": row[1], "password_hash": row[2],
+                    "auth_provider": row[3], "google_id": row[4]}
+        return None
+
+    def get_user_by_google_id(self, google_id: str) -> Optional[dict]:
+        """Look up a user by Google sub ID."""
+        conn = sqlite3.connect(str(self.db_path))
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT user_id, email, password_hash, auth_provider, google_id "
+            "FROM users WHERE google_id = ?", (google_id,)
+        )
+        row = cursor.fetchone()
+        conn.close()
+        if row:
+            return {"user_id": row[0], "email": row[1], "password_hash": row[2],
+                    "auth_provider": row[3], "google_id": row[4]}
+        return None
+
+    def set_auth_credentials(self, user_id: str, email: str,
+                              password_hash: Optional[str],
+                              auth_provider: str,
+                              google_id: Optional[str] = None) -> None:
+        """Write / overwrite auth columns for an existing user row."""
+        conn = sqlite3.connect(str(self.db_path))
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE users SET email=?, password_hash=?, auth_provider=?, google_id=?, updated_at=? "
+            "WHERE user_id=?",
+            (email.lower().strip(), password_hash, auth_provider, google_id,
+             datetime.utcnow().isoformat(), user_id)
+        )
+        conn.commit()
+        conn.close()
+
 
     def save_user_profile(self, user_id: str, profile):
         """

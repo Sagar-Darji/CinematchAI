@@ -97,6 +97,13 @@ class Settings(BaseSettings):
     api_port: int = Field(default=8000, description="API port")
     api_workers: int = Field(default=4, description="Number of API workers")
 
+    # Auth
+    jwt_secret: str = Field(
+        default="cinematch-dev-secret-change-in-prod",
+        description="JWT signing secret — set JWT_SECRET env var in production",
+    )
+    google_client_id: Optional[str] = Field(default=None, description="Google OAuth client ID")
+
     # Streamlit Settings
     streamlit_server_port: int = Field(default=8501, description="Streamlit server port")
     streamlit_server_address: str = Field(
