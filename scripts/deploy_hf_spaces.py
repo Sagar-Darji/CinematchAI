@@ -61,20 +61,12 @@ def prepare_deployment():
         print("❌ README_HF.md not found")
         return False
 
-    # Ensure .streamlit config exists
-    streamlit_dir = PROJECT_ROOT / ".streamlit"
-    if not streamlit_dir.exists():
-        print("❌ .streamlit/config.toml not found")
+    # Check Dockerfile.spaces exists (used as the Docker build file for HF)
+    if not (PROJECT_ROOT / "Dockerfile.spaces").exists():
+        print("❌ Dockerfile.spaces not found")
         return False
 
-    print("✅ .streamlit/config.toml ready")
-
-    # Check if app_hf.py exists
-    if not (PROJECT_ROOT / "app_hf.py").exists():
-        print("❌ app_hf.py not found")
-        return False
-
-    print("✅ app_hf.py ready")
+    print("✅ Dockerfile.spaces ready")
 
     return True
 
@@ -147,6 +139,8 @@ def deploy_to_space(username: str, space_name: str):
         "hf_upload/*",
         "tests/*",
         "*.db",
+        ".streamlit/*",         # not needed for Docker SDK
+        "app_hf.py",            # legacy Streamlit entry point, not used
         "Dockerfile",           # local docker-compose Dockerfile, not for HF
         "docker-compose.yml",   # local only
         "Makefile",             # local only
