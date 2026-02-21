@@ -17,6 +17,16 @@ import re
 import sqlite3
 from typing import Any, Optional
 
+
+class _DualAccessRow(dict):
+    """Dict subclass that also supports integer index access like sqlite3.Row.
+    Allows code like row[0] or row['column_name'] to work interchangeably."""
+
+    def __getitem__(self, key):
+        if isinstance(key, int):
+            return list(self.values())[key]
+        return super().__getitem__(key)
+
 _adapter: Optional["DBAdapter"] = None
 
 
@@ -73,11 +83,11 @@ class _PgCursor:
 
     def fetchone(self):
         row = self._cur.fetchone()
-        return dict(row) if row else None
+        return _DualAccessRow(row) if row else None
 
     def fetchall(self):
         rows = self._cur.fetchall()
-        return [dict(r) for r in rows]
+        return [_DualAccessRow(r) for r in rows]
 
     @property
     def lastrowid(self):
