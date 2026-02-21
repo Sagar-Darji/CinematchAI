@@ -36,12 +36,14 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Failed to pre-load agents: {e}")
 
-    # On HF Spaces: download vectordb from HF Datasets Hub if local copy is empty
+    # On HF Spaces: download vectordb from HF Datasets Hub if local copy is empty/small
     if os.environ.get("HF_SPACES") == "1":
         hf_dataset = os.environ.get("HF_VECTORDB_DATASET", "")
         vectordb_path = Path("data/vectordb")
         chroma_db_file = vectordb_path / "chroma.sqlite3"
-        if hf_dataset and not chroma_db_file.exists():
+        # Download if file doesn't exist or is < 10 MB (empty/stub DB)
+        db_too_small = chroma_db_file.exists() and chroma_db_file.stat().st_size < 10 * 1024 * 1024
+        if hf_dataset and (not chroma_db_file.exists() or db_too_small):
             logger.info(f"HF Spaces: downloading vectordb from {hf_dataset}...")
             try:
                 from huggingface_hub import hf_hub_download

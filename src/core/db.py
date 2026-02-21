@@ -42,8 +42,14 @@ def get_db() -> "DBAdapter":
 
 _RE_PLACEHOLDER = re.compile(r"\?")
 _RE_INSERT_OR_IGNORE = re.compile(r"INSERT\s+OR\s+IGNORE\s+INTO", re.IGNORECASE)
+_RE_INSERT_OR_REPLACE = re.compile(r"INSERT\s+OR\s+REPLACE\s+INTO", re.IGNORECASE)
 _RE_ALTER_ADD = re.compile(
     r"ALTER\s+TABLE\s+(\w+)\s+ADD\s+COLUMN\s+(?!IF\s+NOT\s+EXISTS\s+)(\w+\s+.+)",
+    re.IGNORECASE,
+)
+# Matches: INSERT INTO table (col1, col2, ...) VALUES ...
+_RE_INSERT_COLS = re.compile(
+    r"INSERT\s+INTO\s+\w+\s*\(([^)]+)\)\s*VALUES",
     re.IGNORECASE,
 )
 
@@ -52,10 +58,35 @@ def _to_pg(sql: str) -> str:
     """Convert SQLite-flavoured SQL to PostgreSQL-compatible SQL."""
     sql = _RE_PLACEHOLDER.sub("%s", sql)
     sql = _RE_INSERT_OR_IGNORE.sub("INSERT INTO", sql)
-    # Ensure ON CONFLICT DO NOTHING is appended to converted INSERT stmts
-    # (handled in _PgCursor.execute via flag)
+    sql = _RE_INSERT_OR_REPLACE.sub("INSERT INTO", sql)
     sql = _RE_ALTER_ADD.sub(r"ALTER TABLE \1 ADD COLUMN IF NOT EXISTS \2", sql)
     return sql
+
+
+def _is_replace(sql: str) -> bool:
+    """Return True if original SQL was INSERT OR REPLACE (upsert, not ignore)."""
+    return bool(_RE_INSERT_OR_REPLACE.search(sql))
+
+
+def _build_upsert_suffix(sql: str, original_sql: str = "") -> str:
+    """For INSERT OR REPLACE, build ON CONFLICT DO UPDATE SET clause."""
+    m = _RE_INSERT_COLS.search(sql)
+    if not m:
+        return " ON CONFLICT DO NOTHING"
+    cols = [c.strip() for c in m.group(1).split(",")]
+    if len(cols) < 2:
+        return " ON CONFLICT DO NOTHING"
+    # ratings table uses composite unique key (user_id, movie_id)
+    if len(cols) >= 2 and cols[0] == "user_id" and cols[1] == "movie_id":
+        conflict_target = "(user_id, movie_id)"
+        update_cols = cols[2:]
+    else:
+        conflict_target = f"({cols[0]})"
+        update_cols = cols[1:]
+    if not update_cols:
+        return f" ON CONFLICT {conflict_target} DO NOTHING"
+    updates = ", ".join(f"{c}=EXCLUDED.{c}" for c in update_cols)
+    return f" ON CONFLICT {conflict_target} DO UPDATE SET {updates}"
 
 
 # ── PostgreSQL wrapper ─────────────────────────────────────────────────────────
@@ -67,17 +98,19 @@ class _PgCursor:
         self._cur = cursor
 
     def execute(self, sql: str, params: tuple = ()):
+        is_replace = _is_replace(sql)
         sql = _to_pg(sql)
         if sql.strip().upper().startswith("PRAGMA"):
             return self
-        # Append ON CONFLICT DO NOTHING if this was an INSERT OR IGNORE
-        if re.search(r"INSERT INTO", sql, re.IGNORECASE) and not re.search(
+        # Append ON CONFLICT clause for INSERT statements
+        if re.search(r"\bINSERT\s+INTO\b", sql, re.IGNORECASE) and not re.search(
             r"ON CONFLICT", sql, re.IGNORECASE
         ):
-            # Only add for statements that came from INSERT OR IGNORE
-            # We detect this by checking if VALUES is present (not INSERT INTO … SELECT)
             if re.search(r"\bVALUES\b", sql, re.IGNORECASE):
-                sql = sql.rstrip().rstrip(";") + " ON CONFLICT DO NOTHING"
+                if is_replace:
+                    sql = sql.rstrip().rstrip(";") + _build_upsert_suffix(sql)
+                else:
+                    sql = sql.rstrip().rstrip(";") + " ON CONFLICT DO NOTHING"
         self._cur.execute(sql, params or None)
         return self
 
