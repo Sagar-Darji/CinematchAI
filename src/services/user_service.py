@@ -59,7 +59,8 @@ class UserService:
         """)
 
         # Add columns when upgrading from older schema
-        # (adapter normalises ALTER TABLE … ADD COLUMN → ADD COLUMN IF NOT EXISTS for Postgres)
+        # Each ALTER runs in its own savepoint so a "column already exists" error
+        # doesn't abort the whole transaction (PostgreSQL requires explicit rollback).
         for col, definition in [
             ("embedding_json",          "TEXT"),
             ("embedding_rating_count",  "INTEGER DEFAULT 0"),
@@ -71,9 +72,15 @@ class UserService:
             ("reset_token_expires",     "TEXT"),
         ]:
             try:
+                if db.is_postgres:
+                    cursor.execute("SAVEPOINT alter_col")
                 cursor.execute(f"ALTER TABLE users ADD COLUMN {col} {definition}")
+                if db.is_postgres:
+                    cursor.execute("RELEASE SAVEPOINT alter_col")
             except Exception:
-                pass  # Column already exists
+                if db.is_postgres:
+                    cursor.execute("ROLLBACK TO SAVEPOINT alter_col")
+                    cursor.execute("RELEASE SAVEPOINT alter_col")
 
         # Ratings table
         cursor.execute(f"""
