@@ -55,7 +55,8 @@ async def lifespan(app: FastAPI):
                 )
                 vectordb_path.mkdir(parents=True, exist_ok=True)
                 with zipfile.ZipFile(zip_path, "r") as zf:
-                    zf.extractall(".")
+                    # Zip stores paths relative to data/ (e.g. vectordb/chroma.sqlite3)
+                    zf.extractall("data/")
                 logger.info("HF Spaces: vectordb downloaded and extracted successfully")
             except Exception as e:
                 logger.warning(f"HF Spaces: vectordb download failed — starting with empty DB: {e}")

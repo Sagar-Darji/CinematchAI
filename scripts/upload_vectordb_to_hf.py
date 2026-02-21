@@ -44,7 +44,7 @@ def upload_vectordb(username: str, repo_name: str = "cinematch-vectordb"):
         UPLOAD_DIR.mkdir(exist_ok=True)
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED, compresslevel=1) as zf:
             for file in VECTORDB_DIR.rglob("*"):
-                if file.is_file():
+                if file.is_file() and not file.suffix == ".bak":
                     zf.write(file, file.relative_to(VECTORDB_DIR.parent))
         print(f"   ✅ Zipped → {zip_path} ({zip_path.stat().st_size / 1e9:.1f} GB)")
     else:

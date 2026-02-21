@@ -36,7 +36,7 @@ echo ""
 echo "🗄️  VectorDB is 63 GB — zipping (this will take 10–30 min)..."
 echo "   (Press Ctrl+C to skip and upload to HF Datasets instead)"
 echo ""
-zip -r -q "$UPLOAD_DIR/data_vectordb.zip" "$DATA_DIR/vectordb/" && \
+zip -r -q "$UPLOAD_DIR/data_vectordb.zip" "$DATA_DIR/vectordb/" --exclude '*.bak' && \
   echo "   ✅ data_vectordb.zip → $(du -sh "$UPLOAD_DIR/data_vectordb.zip" | cut -f1)"
 
 echo ""
