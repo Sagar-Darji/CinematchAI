@@ -54,3 +54,6 @@ evaluation/results/
 hf_upload/
 docs/
 .streamlit/
+data/users.db-shm
+.gitignore
+data/users.db-wal
