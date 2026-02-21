@@ -47,6 +47,19 @@ export async function googleAuth(idToken: string, username?: string): Promise<Au
   return res.json()
 }
 
+export async function renameUser(oldUserId: string, newUsername: string, token: string): Promise<AuthResponse> {
+  const res = await fetch(`${AUTH_BASE}/rename-user`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ old_user_id: oldUserId, new_username: newUsername, token }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Rename failed' }))
+    throw new Error(err.detail || 'Rename failed')
+  }
+  return res.json()
+}
+
 
 export interface Movie {
   tmdb_id: number

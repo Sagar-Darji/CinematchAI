@@ -237,6 +237,31 @@ class UserService:
         conn.commit()
         conn.close()
 
+    def rename_user(self, old_user_id: str, new_user_id: str) -> bool:
+        """Rename a user's user_id (username). Returns True on success."""
+        conn = self._connect()
+        try:
+            # Update the stub profile_json that contains user_id
+            conn.execute(
+                "UPDATE users SET user_id=?, updated_at=? WHERE user_id=?",
+                (new_user_id, datetime.now(timezone.utc).isoformat(), old_user_id),
+            )
+            # Update any ratings rows
+            try:
+                conn.execute(
+                    "UPDATE ratings SET user_id=? WHERE user_id=?",
+                    (new_user_id, old_user_id),
+                )
+            except Exception:
+                pass  # ratings table may not exist yet
+            conn.commit()
+            return True
+        except Exception:
+            conn.rollback()
+            return False
+        finally:
+            conn.close()
+
     def set_auth_credentials(self, user_id: str, email: str,
                               password_hash: Optional[str],
                               auth_provider: str,

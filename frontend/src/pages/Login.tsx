@@ -64,10 +64,18 @@ export default function Login() {
 
   const _onSuccess = async (auth: Awaited<ReturnType<typeof loginWithPassword>>) => {
     setUserId(auth.user_id); setEmail(auth.email); setToken(auth.token)
-    const profile = await getUserProfile(auth.user_id)
-    setRatingCount(profile?.total_ratings ?? 0)
-    setOnboarded(true)
-    navigate(auth.is_new_user ? '/onboarding' : '/')
+    if (!auth.is_new_user) {
+      // Existing user — fetch profile and go home
+      try {
+        const profile = await getUserProfile(auth.user_id)
+        setRatingCount(profile?.total_ratings ?? 0)
+      } catch { /* ignore profile fetch errors */ }
+      setOnboarded(true)
+      navigate('/')
+    } else {
+      // New user — send to onboarding; let it call setOnboarded when done
+      navigate('/onboarding')
+    }
   }
 
   const handleLogin = async () => {

@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { Upload, Star, ArrowRight, Loader2, Check, Search, X } from 'lucide-react'
 import { useUserStore } from '@/store/useUserStore'
-import { getOnboardingMovies, onboardUser, importLetterboxd, pollImportJob, searchMovies, type OnboardingMovie } from '@/lib/api'
+import { getOnboardingMovies, onboardUser, importLetterboxd, pollImportJob, searchMovies, renameUser, type OnboardingMovie } from '@/lib/api'
 import { tmdbPoster, cn } from '@/lib/utils'
 
 type Step = 'username' | 'method' | 'rate' | 'letterboxd' | 'importing' | 'done'
@@ -11,10 +11,14 @@ const STARS = [1, 2, 3, 4, 5]
 
 export default function Onboarding() {
   const navigate = useNavigate()
-  const { userId: existingUserId, setUserId, setOnboarded, setRatingCount } = useUserStore()
+  const [searchParams] = useSearchParams()
+  const { userId: existingUserId, token: existingToken, setUserId, setToken, setOnboarded, setRatingCount } = useUserStore()
 
-  // If user already registered (came from /register), skip the username step
-  const [step, setStep] = useState<Step>(existingUserId ? 'method' : 'username')
+  // ?registered=1 → came from password Register (username already chosen, skip username step)
+  // Google new users and anonymous users always see the username step
+  const alreadyRegistered = searchParams.get('registered') === '1'
+  const isGoogleUser = !!existingUserId && !alreadyRegistered
+  const [step, setStep] = useState<Step>(alreadyRegistered ? 'method' : 'username')
   const [username, setUsername] = useState(existingUserId || '')
   const [movies, setMovies] = useState<OnboardingMovie[]>([])
   const [ratings, setRatings] = useState<Record<string, number>>({})
@@ -83,8 +87,26 @@ export default function Onboarding() {
     return () => clearInterval(interval)
   }, [step, importJob, username, navigate, setUserId, setOnboarded, setRatingCount])
 
-  const handleUsername = () => {
+  const handleUsername = async () => {
     if (!username.trim()) return
+    // If this is a Google user who changed their auto-generated username, rename in DB
+    if (existingUserId && username.trim() !== existingUserId && existingToken) {
+      setSubmitting(true)
+      setError('')
+      try {
+        const auth = await renameUser(existingUserId, username.trim(), existingToken)
+        setUserId(auth.user_id)
+        setToken(auth.token)
+      } catch (e: unknown) {
+        setError(e instanceof Error ? e.message : 'Could not set username. Please try another.')
+        setSubmitting(false)
+        return
+      } finally {
+        setSubmitting(false)
+      }
+    } else if (!existingUserId) {
+      setUserId(username.trim())
+    }
     setStep('method')
   }
 
@@ -164,20 +186,27 @@ export default function Onboarding() {
               className="w-full px-5 py-4 rounded-xl text-lg outline-none"
               style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', color: 'var(--text-primary)' }}
             />
+            {isGoogleUser && username === existingUserId && (
+              <p className="text-xs px-1" style={{ color: 'var(--text-muted)' }}>
+                Auto-generated from your Google account. Feel free to change it.
+              </p>
+            )}
+            {error && <p className="text-sm px-1" style={{ color: 'var(--accent-red)' }}>{error}</p>}
             <button
               onClick={handleUsername}
-              disabled={!username.trim()}
+              disabled={submitting || !username.trim()}
               className="flex items-center justify-center gap-2 py-4 rounded-xl font-bold text-base disabled:opacity-40 transition-opacity"
               style={{ background: 'var(--accent-gold)', color: '#0a0a0f', border: 'none', cursor: 'pointer' }}
             >
-              Continue <ArrowRight size={18} />
+              {submitting ? <Loader2 size={18} className="animate-spin" /> : <ArrowRight size={18} />}
+              Continue
             </button>
-            
+
             {/* Login link */}
             <p className="text-center text-sm mt-2" style={{ color: 'var(--text-muted)' }}>
               Already have an account?{' '}
-              <a 
-                href="/login" 
+              <a
+                href="/login"
                 className="font-medium hover:underline"
                 style={{ color: 'var(--accent-gold)' }}
               >
@@ -498,7 +527,7 @@ export default function Onboarding() {
         {/* Back link */}
         {(step === 'method' || step === 'letterboxd') && (
           <button
-            onClick={() => { setStep(step === 'letterboxd' ? 'method' : 'username'); setError('') }}
+            onClick={() => { setStep(step === 'letterboxd' ? 'method' : alreadyRegistered ? 'method' : 'username'); setError('') }}
             className="mt-4 text-sm w-full text-center"
             style={{ color: 'var(--text-muted)', background: 'none', border: 'none', cursor: 'pointer' }}
           >

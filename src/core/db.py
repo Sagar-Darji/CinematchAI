@@ -173,7 +173,9 @@ class DBAdapter:
     def __init__(self):
         from config.settings import get_settings
         s = get_settings()
-        self.database_url: Optional[str] = s.database_url
+        # Prefer AUTH_DATABASE_URL; fall back to DATABASE_URL only if it looks like postgres
+        raw = s.auth_database_url or s.database_url or ""
+        self.database_url: Optional[str] = raw if raw.startswith(("postgres://", "postgresql://")) else None
         self.db_path = None
         if not self.database_url:
             from pathlib import Path

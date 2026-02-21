@@ -103,6 +103,12 @@ class Settings(BaseSettings):
         description="JWT signing secret — set JWT_SECRET env var in production",
     )
     google_client_id: Optional[str] = Field(default=None, description="Google OAuth client ID")
+    auth_database_url: Optional[str] = Field(
+        default=None,
+        description="PostgreSQL URI for the users/auth DB (e.g. Supabase). "
+                    "Use AUTH_DATABASE_URL env var to avoid conflict with the movie DB.",
+    )
+    # Legacy alias: if AUTH_DATABASE_URL not set, fall back to DATABASE_URL when it looks like postgres
     database_url: Optional[str] = Field(
         default=None,
         description="PostgreSQL connection string (e.g. Supabase). If set, overrides local SQLite.",

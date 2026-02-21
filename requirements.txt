@@ -13,8 +13,6 @@ torch==2.5.1
 
 # Vector Database
 chromadb==0.6.3
-pymilvus>=2.4.0
-qdrant-client>=1.7.0
 
 # API & Backend
 fastapi==0.115.6
@@ -27,10 +25,6 @@ python-jose[cryptography]==3.3.0
 bcrypt>=4.0.0
 google-auth==2.28.0
 psycopg2-binary>=2.9.0
-protobuf>=4.21.0,<6.0.0  # pin to avoid streamlit conflict with protobuf 6.x
-
-# Frontend
-streamlit==1.41.1
 
 # Data Processing (lightweight)
 pandas==2.2.3
@@ -51,19 +45,15 @@ diskcache==5.6.3
 # Logging
 loguru==0.7.3
 
-# Observability / Metrics
+# Observability / Metrics (required by src/api/main.py)
 prometheus-fastapi-instrumentator==7.1.0
 python-json-logger==3.3.0
 
-# CLI
-rich>=13.7.0
-click>=8.1.0
-typer>=0.12.0
-rich-click>=1.8.0
-InquirerPy>=0.3.4
-
 # Rate Limiting
 slowapi==0.1.9
+
+# HF Hub (vectordb download on startup)
+huggingface_hub>=0.26.0
 
 # TMDB API (optional)
 tmdbv3api==1.9.0

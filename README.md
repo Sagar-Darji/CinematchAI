@@ -6,6 +6,8 @@ colorTo: blue
 sdk: docker
 pinned: false
 license: mit
+header: mini
+fullWidth: true
 ---
 
 # 🎬 CineMatch AI
@@ -125,38 +127,6 @@ Personalized Recommendations + Explanations
 - **Architecture**: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - **API Reference**: [docs/API_REFERENCE.md](docs/API_REFERENCE.md)
 - **Deployment**: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)
-- **CLI Usage**: [docs/CLI_USAGE_GUIDE.md](docs/CLI_USAGE_GUIDE.md) ✨ NEW
-- **CLI Improvements**: [docs/CLI_IMPROVEMENT_ANALYSIS.md](docs/CLI_IMPROVEMENT_ANALYSIS.md)
-- **UI/UX Analysis**: [docs/UI_UX_ANALYSIS_2026.md](docs/UI_UX_ANALYSIS_2026.md)
-
-## 🖥️ Modern CLI (v2.0)
-
-CinematchAI now includes a powerful command-line interface for administration and automation:
-
-```bash
-# Install CLI
-pip install -e .
-
-# Quick commands
-cinematch stats                                    # View corpus statistics
-cinematch users list                               # List all users
-cinematch enrichment start --lang hi --pages 100   # Start enrichment
-cinematch search "inception"                       # Search movies
-cinematch test recommendation test_user            # Test recommendations
-
-# Full interactive mode (legacy)
-cinematch interactive
-```
-
-**Features:**
-- ✅ Direct commands with flags (no menu navigation)
-- ✅ JSON output for scripting and automation
-- ✅ Tab completion (bash/zsh/fish)
-- ✅ Pipeable commands for shell workflows
-- ✅ Beautiful Rich-rendered tables
-- ✅ Backward compatible with legacy TUI
-
-See [docs/CLI_USAGE_GUIDE.md](docs/CLI_USAGE_GUIDE.md) for full reference.
 
 ## 🏆 Project Stats
 

@@ -31,6 +31,7 @@ services:
       LOG_FORMAT: json
       CHROMA_PERSIST_DIR: /app/data/vectordb
       DATABASE_URL: sqlite:////app/data/cinematch.db
+      AUTH_DATABASE_URL: "${AUTH_DATABASE_URL:-}"
       CACHE_DIR: /app/cache
       APP_URL: "${APP_URL:-http://localhost:3000}"
     volumes:

@@ -64,22 +64,29 @@ class AuthResponse(BaseModel):
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
-def _verify_google_token(id_token: str) -> dict:
-    """Verify Google ID token and return its payload."""
-    from google.oauth2 import id_token as google_id_token
-    from google.auth.transport import requests as google_requests
+def _verify_google_token(access_token: str) -> dict:
+    """Verify Google access token via userinfo endpoint and return user payload."""
+    import requests as http_requests
     settings = get_settings()
-    client_id = settings.google_client_id
-    if not client_id:
+    if not settings.google_client_id:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Google OAuth is not configured on this server",
         )
     try:
-        payload = google_id_token.verify_oauth2_token(
-            id_token, google_requests.Request(), client_id
+        resp = http_requests.get(
+            "https://www.googleapis.com/oauth2/v3/userinfo",
+            headers={"Authorization": f"Bearer {access_token}"},
+            timeout=10,
         )
+        if resp.status_code != 200:
+            raise ValueError(f"Userinfo returned {resp.status_code}: {resp.text}")
+        payload = resp.json()
+        if not payload.get("sub") or not payload.get("email"):
+            raise ValueError("Missing sub or email in Google userinfo response")
         return payload
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.warning(f"Google token verification failed: {exc}")
         raise HTTPException(
@@ -201,7 +208,48 @@ async def google_login(req: GoogleLoginRequest):
     return AuthResponse(token=token, user_id=username, email=email, is_new_user=True)
 
 
-@router.get("/me")
+class RenameUserRequest(BaseModel):
+    old_user_id: str
+    new_username: str
+    token: str  # current JWT — used to verify ownership
+
+    @field_validator("new_username")
+    @classmethod
+    def username_valid(cls, v: str) -> str:
+        v = v.strip()
+        if not re.match(r"^[a-zA-Z0-9_\-]{3,32}$", v):
+            raise ValueError("Username must be 3–32 characters: letters, numbers, _ or -")
+        return v
+
+
+@router.post("/rename-user", response_model=AuthResponse)
+async def rename_user(req: RenameUserRequest):
+    """Rename a user (change username). Used during Google onboarding."""
+    from src.core.auth.jwt import decode_access_token
+
+    payload = decode_access_token(req.token)
+    if not payload or payload.get("sub") != req.old_user_id:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+    svc = get_user_service()
+
+    # Ensure new username is not taken
+    if svc.get_user_profile(req.new_username) or svc.get_user_by_username(req.new_username):
+        raise HTTPException(status_code=409, detail="Username already taken. Please choose another.")
+
+    # Get current auth record before rename
+    record = svc.get_auth_record(req.old_user_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    success = svc.rename_user(req.old_user_id, req.new_username)
+    if not success:
+        raise HTTPException(status_code=500, detail="Could not rename user. Please try again.")
+
+    email = record["email"] or ""
+    new_token = create_access_token(req.new_username, email)
+    logger.info(f"User renamed: {req.old_user_id} → {req.new_username}")
+    return AuthResponse(token=new_token, user_id=req.new_username, email=email, is_new_user=True)
 async def me(token: str):
     """Validate a token and return current user info."""
     from src.core.auth.jwt import decode_access_token

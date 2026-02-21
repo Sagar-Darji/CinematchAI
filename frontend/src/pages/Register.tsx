@@ -60,7 +60,7 @@ export default function Register() {
   const _onSuccess = (auth: Awaited<ReturnType<typeof registerUser>>) => {
     setUserId(auth.user_id); setEmail(auth.email); setToken(auth.token)
     setOnboarded(!auth.is_new_user)
-    navigate(auth.is_new_user ? '/onboarding' : '/')
+    navigate(auth.is_new_user ? '/onboarding?registered=1' : '/')
   }
 
   const handleRegister = async () => {

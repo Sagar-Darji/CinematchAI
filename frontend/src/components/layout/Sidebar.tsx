@@ -46,7 +46,7 @@ export function Sidebar() {
       className="fixed top-0 left-0 h-full w-16 md:w-56 flex flex-col z-30"
     >
       {/* Logo */}
-      <NavLink to="/" className="flex items-center gap-3 px-4 py-5 border-b" style={{ borderColor: 'var(--border)' }}>
+      <NavLink to="/" id="tour-logo" className="flex items-center gap-3 px-4 py-5 border-b" style={{ borderColor: 'var(--border)' }}>
         <Clapperboard size={22} style={{ color: 'var(--accent-gold)' }} />
         <span className="hidden md:block font-bold text-sm tracking-wide" style={{ color: 'var(--accent-gold)' }}>
           CineMatch AI
@@ -74,6 +74,7 @@ export function Sidebar() {
       <nav className="flex-1 py-2 space-y-0.5 px-2 overflow-y-auto">
         {NAV.map(({ to, icon: Icon, label }) => (
           <NavLink key={to} to={to} end={to === '/'}
+            id={`tour-nav-${label.toLowerCase().replace(/\s+/g, '-')}`}
             className={({ isActive }) =>
               cn('flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors',
                 isActive ? 'text-white' : 'hover:text-white')

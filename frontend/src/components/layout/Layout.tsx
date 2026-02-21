@@ -1,5 +1,6 @@
 import { Outlet } from 'react-router-dom'
 import { Sidebar } from './Sidebar'
+import { UserTour } from '@/components/tour/UserTour'
 
 export function Layout() {
   return (
@@ -8,6 +9,7 @@ export function Layout() {
       <main className="flex-1 ml-16 md:ml-56 min-h-screen">
         <Outlet />
       </main>
+      <UserTour />
     </div>
   )
 }

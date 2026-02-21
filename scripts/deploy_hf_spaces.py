@@ -86,13 +86,13 @@ def deploy_to_space(username: str, space_name: str):
 
     api = HfApi()
 
-    # Step 1: Create the Space repo (README frontmatter defines sdk: streamlit)
+    # Step 1: Create the Space repo (README frontmatter defines sdk: docker)
     print(f"\n🚀 Creating/verifying HF Space: {repo_id}...")
     try:
         api.create_repo(
             repo_id=repo_id,
             repo_type="space",
-            space_sdk="streamlit",
+            space_sdk="docker",
             exist_ok=True,
         )
         print(f"✅ Space ready: {space_url}")
@@ -143,6 +143,17 @@ def deploy_to_space(username: str, space_name: str):
         "*.npy",
         "venv/*",
         "ENV/*",
+        "docs/*",
+        "hf_upload/*",
+        "tests/*",
+        "*.db",
+        "Dockerfile",           # local docker-compose Dockerfile, not for HF
+        "docker-compose.yml",   # local only
+        "Makefile",             # local only
+        "run_script.sh",        # local only
+        "api.log",
+        "ui.log",
+        "README_HF.md",         # already copied to README.md by prepare_deployment()
     ]
 
     try:
