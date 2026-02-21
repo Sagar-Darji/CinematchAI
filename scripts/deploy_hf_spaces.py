@@ -139,7 +139,8 @@ def deploy_to_space(username: str, space_name: str):
         "hf_upload/*",
         "tests/*",
         "*.db",
-        "frontend/node_modules/*",  # built in Dockerfile, not needed
+        "frontend/node_modules",    # built inside Docker, not needed
+        "frontend/node_modules/**", # exclude all nested contents
         ".streamlit/*",         # not needed for Docker SDK
         "app_hf.py",            # legacy Streamlit entry point, not used
         "Dockerfile",           # local docker-compose Dockerfile (uploaded explicitly as Dockerfile below)
