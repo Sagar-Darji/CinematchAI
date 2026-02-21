@@ -141,7 +141,8 @@ def deploy_to_space(username: str, space_name: str):
         "*.db",
         ".streamlit/*",         # not needed for Docker SDK
         "app_hf.py",            # legacy Streamlit entry point, not used
-        "Dockerfile",           # local docker-compose Dockerfile, not for HF
+        "Dockerfile",           # local docker-compose Dockerfile (uploaded explicitly as Dockerfile below)
+        "Dockerfile.spaces",    # uploaded explicitly as Dockerfile below
         "docker-compose.yml",   # local only
         "Makefile",             # local only
         "run_script.sh",        # local only
@@ -158,6 +159,16 @@ def deploy_to_space(username: str, space_name: str):
             ignore_patterns=ignore_patterns,
         )
         print(f"✅ Files uploaded to: {space_url}")
+
+        # Upload Dockerfile.spaces as "Dockerfile" so HF uses port 7860
+        print("📤 Uploading Dockerfile.spaces as Dockerfile (port 7860)...")
+        api.upload_file(
+            path_or_fileobj=str(PROJECT_ROOT / "Dockerfile.spaces"),
+            path_in_repo="Dockerfile",
+            repo_id=repo_id,
+            repo_type="space",
+        )
+        print("✅ Dockerfile (port 7860) uploaded")
         return space_url
 
     except Exception as e:
