@@ -62,6 +62,7 @@ def main():
     parser.add_argument("--model", type=str, default="voyage-3", help="Voyage AI model")
     parser.add_argument("--chroma-db", type=str, default="data/vectordb/chroma.sqlite3", help="Path to ChromaDB SQLite")
     parser.add_argument("--resume-from", type=int, default=0, help="Skip first N movies (resume interrupted run)")
+    parser.add_argument("--recreate", action="store_true", help="Delete and recreate the Qdrant collection before indexing")
     args = parser.parse_args()
 
     voyage_key = os.environ.get("VOYAGE_API_KEY")
@@ -89,8 +90,12 @@ def main():
     vo = voyageai.Client(api_key=voyage_key)
     qdrant = QdrantClient(url=qdrant_url, api_key=qdrant_key, timeout=60)
 
-    # Ensure collection exists with 1024-dim (voyage-3)
+    # Ensure collection exists with 1024-dim (voyage-3); recreate if --recreate passed
     collections = [c.name for c in qdrant.get_collections().collections]
+    if args.collection in collections and args.recreate:
+        qdrant.delete_collection(args.collection)
+        print(f"Deleted existing Qdrant collection '{args.collection}'")
+        collections = []
     if args.collection not in collections:
         qdrant.create_collection(
             collection_name=args.collection,
@@ -105,7 +110,7 @@ def main():
 
     # Embed + upsert in lockstep batches to avoid storing all 108K embeddings in RAM
     print(f"Embedding & upserting {len(texts):,} movies (batch={args.batch_size}) ...")
-    total_upserted = args.resume_from
+    point_id = args.resume_from  # global, ever-incrementing — never resets
     points = []
 
     import time
@@ -126,7 +131,8 @@ def main():
                 else:
                     raise
 
-        for j, (row, emb) in enumerate(zip(chunk_rows, result.embeddings)):
+        for row, emb in zip(chunk_rows, result.embeddings):
+            point_id += 1  # unique ID for every movie
             row_id, doc, title, overview, genres, director, cast, poster_path, lang, release_date, movie_id, vote_avg, vote_cnt = row
             year = 0
             if release_date and len(str(release_date)) >= 4:
@@ -146,16 +152,14 @@ def main():
                 "poster_path":       str(poster_path or ""),
                 "movie_id":          str(movie_id or row_id),
             }
-            points.append(PointStruct(id=total_upserted + j + 1, vector=emb, payload=payload))
+            points.append(PointStruct(id=point_id, vector=emb, payload=payload))
 
         if len(points) >= args.upsert_batch:
             qdrant.upsert(collection_name=args.collection, points=points)
-            total_upserted += len(points)
             points = []
 
     if points:
         qdrant.upsert(collection_name=args.collection, points=points)
-        total_upserted += len(points)
 
     count = qdrant.count(collection_name=args.collection).count
     print(f"\n✅ Done! {count:,} points in Qdrant collection '{args.collection}'")
