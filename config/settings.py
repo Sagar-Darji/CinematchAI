@@ -125,12 +125,6 @@ class Settings(BaseSettings):
         description="Public URL of the app — used in password-reset email links",
     )
 
-    # Streamlit Settings
-    streamlit_server_port: int = Field(default=8501, description="Streamlit server port")
-    streamlit_server_address: str = Field(
-        default="0.0.0.0", description="Streamlit server address"
-    )
-
     # Recommendation Settings
     default_num_recommendations: int = Field(
         default=10, description="Default number of recommendations"

@@ -1,8 +1,8 @@
 """
 Hugging Face Spaces Entry Point for CineMatch AI.
 
-This file launches both the FastAPI backend and Streamlit frontend
-optimized for HF Spaces deployment.
+This file launches the FastAPI backend on HF Spaces (port 7860).
+Frontend is served as static React build from /app/static.
 """
 
 import os
@@ -14,15 +14,13 @@ from pathlib import Path
 
 # Set environment for HF Spaces
 os.environ["PYTHONPATH"] = str(Path(__file__).parent)
-os.environ["HF_SPACES"] = "1"  # Flag to indicate running on HF Spaces
-
-# Use Groq API instead of Ollama (not available on HF Spaces)
+os.environ["HF_SPACES"] = "1"
 os.environ["USE_GROQ"] = "1"
 
 print("🎬 Starting CineMatch AI on Hugging Face Spaces...")
 print("=" * 60)
 
-# Start FastAPI backend in background
+# Start FastAPI backend (serves React build from /app/static at /)
 print("🚀 Starting FastAPI backend...")
 api_process = subprocess.Popen(
     [
@@ -33,13 +31,12 @@ api_process = subprocess.Popen(
         "--host",
         "0.0.0.0",
         "--port",
-        "7860",  # HF Spaces default port
+        "7860",
     ],
     stdout=subprocess.PIPE,
     stderr=subprocess.PIPE,
 )
 
-# Ensure api_process is killed when this script exits (Ctrl+C, crash, etc.)
 def _shutdown(signum=None, frame=None):
     if api_process.poll() is None:
         api_process.terminate()
@@ -52,11 +49,9 @@ def _shutdown(signum=None, frame=None):
 signal.signal(signal.SIGINT, _shutdown)
 signal.signal(signal.SIGTERM, _shutdown)
 
-# Wait for API to start
 print("⏳ Waiting for API to start...")
 time.sleep(5)
 
-# Check if API is running
 try:
     import requests
     response = requests.get("http://localhost:7860/api/v1/health", timeout=5)
@@ -67,24 +62,9 @@ try:
 except Exception as e:
     print(f"⚠️  Could not verify API status: {e}")
 
-# Start Streamlit frontend
-print("🎨 Starting Streamlit frontend...")
 print("=" * 60)
+print("🎬 CineMatch AI running at http://localhost:7860")
 
-subprocess.run(
-    [
-        "streamlit",
-        "run",
-        "src/ui/app.py",
-        "--server.port",
-        "7860",
-        "--server.address",
-        "0.0.0.0",
-        "--server.headless",
-        "true",
-        "--server.enableCORS",
-        "false",
-        "--server.enableXsrfProtection",
-        "false",
-    ]
-)
+# Keep alive
+api_process.wait()
+

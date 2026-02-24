@@ -244,7 +244,7 @@ def main():
 
         print("\n🚀 Next Steps:")
         print("  1. Test API endpoints: python scripts/test_scalability_apis.py")
-        print("  2. Launch Streamlit UI: streamlit run src/ui/app.py")
+
         print("  3. See trending movies on homepage!")
         print("  4. Read INTEGRATION_COMPLETE.md for details")
 
