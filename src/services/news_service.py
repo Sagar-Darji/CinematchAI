@@ -8,7 +8,6 @@ fetch. A background thread refreshes the feed every REFRESH_HOURS.
 import hashlib
 import json
 import re
-import sqlite3
 import threading
 import time
 import xml.etree.ElementTree as ET
@@ -57,46 +56,46 @@ CATEGORY_KEYWORDS: dict[str, list[str]] = {
 }
 
 import os
-DB_PATH = "/tmp/news.db" if os.environ.get("LAMBDA_TASK_ROOT") else "data/news.db"
 REFRESH_HOURS = 2
 MAX_ITEMS_PER_SOURCE = 15
 FETCH_TIMEOUT = 10
 
 # ── DB helpers ────────────────────────────────────────────────────────────────
 
-def _init_db(conn: sqlite3.Connection) -> None:
-    conn.executescript("""
-        CREATE TABLE IF NOT EXISTS news_items (
-            id           TEXT PRIMARY KEY,
-            source_name  TEXT NOT NULL,
-            source_url   TEXT NOT NULL UNIQUE,
-            title        TEXT NOT NULL,
-            description  TEXT,
-            image_url    TEXT,
-            published_at TEXT,
-            category     TEXT DEFAULT 'general',
-            lang         TEXT DEFAULT 'english',
-            bullet_summary TEXT,
-            headline     TEXT,
-            fetched_at   TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS news_meta (
-            key   TEXT PRIMARY KEY,
-            value TEXT
-        );
-    """)
-    conn.commit()
+def _init_db() -> None:
+    """Create news tables if they don't exist."""
+    from src.core.db import get_db
+    with get_db().connect() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS news_items (
+                id           TEXT PRIMARY KEY,
+                source_name  TEXT NOT NULL,
+                source_url   TEXT NOT NULL,
+                title        TEXT NOT NULL,
+                description  TEXT,
+                image_url    TEXT,
+                published_at TEXT,
+                category     TEXT DEFAULT 'general',
+                lang         TEXT DEFAULT 'english',
+                bullet_summary TEXT,
+                headline     TEXT,
+                fetched_at   TEXT NOT NULL
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS news_meta (
+                key   TEXT PRIMARY KEY,
+                value TEXT
+            )
+        """)
 
 
 @contextmanager
 def _db():
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    _init_db(conn)
-    try:
+    from src.core.db import get_db
+    _init_db()
+    with get_db().connect() as conn:
         yield conn
-    finally:
-        conn.close()
 
 
 # ── Category detection ────────────────────────────────────────────────────────
@@ -188,7 +187,7 @@ def _item_id(url: str) -> str:
     return hashlib.sha256(url.encode()).hexdigest()[:16]
 
 
-def _fetch_source(source: dict, summarizer: NewsSummarizer, conn: sqlite3.Connection) -> int:
+def _fetch_source(source: dict, summarizer: NewsSummarizer, conn) -> int:
     root = _fetch_xml(source["url"])
     if root is None:
         return 0

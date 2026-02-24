@@ -17,8 +17,10 @@ import { FullScreenPlayer } from '@/components/ui/MovieCard'
 
 // ── API ───────────────────────────────────────────────────────────────────────
 
+const API_URL = import.meta.env.VITE_API_URL || ''
+
 async function fetchMovieWeb(name: string, maxNodes = 35): Promise<WebData> {
-  const res = await fetch(`/api/v1/movie-web/${encodeURIComponent(name)}?max_nodes=${maxNodes}`)
+  const res = await fetch(`${API_URL}/api/v1/movie-web/${encodeURIComponent(name)}?max_nodes=${maxNodes}`)
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
     throw new Error(err.detail ?? `HTTP ${res.status}`)
