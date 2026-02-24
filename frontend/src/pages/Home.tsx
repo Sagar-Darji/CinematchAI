@@ -1,9 +1,20 @@
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Sparkles, Search, UserPlus } from 'lucide-react'
 import { useUserStore } from '@/store/useUserStore'
 
+const API_URL = import.meta.env.VITE_API_URL || ''
+
 export default function Home() {
   const { userId, isOnboarded } = useUserStore()
+  const [movieCount, setMovieCount] = useState<number | null>(null)
+
+  useEffect(() => {
+    fetch(`${API_URL}/api/v1/health`)
+      .then(r => r.json())
+      .then(d => { if (d?.details?.movie_count) setMovieCount(d.details.movie_count) })
+      .catch(() => {})
+  }, [])
 
   return (
     <div className="min-h-screen flex flex-col" style={{ background: 'var(--bg-primary)' }}>
@@ -22,10 +33,19 @@ export default function Home() {
           <span style={{ color: 'var(--accent-gold)' }}>Next Film</span>
         </h1>
 
-        <p className="text-lg max-w-lg mb-12" style={{ color: 'var(--text-muted)', lineHeight: 1.7 }}>
+        <p className="text-lg max-w-lg mb-8" style={{ color: 'var(--text-muted)', lineHeight: 1.7 }}>
           A multi-agent AI pipeline analyzes your taste, mood, and context to surface
           exactly the right movie — across 20+ languages.
         </p>
+
+        {/* Movie count badge */}
+        {movieCount && (
+          <div className="flex items-center gap-2 mb-10 px-4 py-2 rounded-full text-xs font-semibold"
+            style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', color: 'var(--text-muted)' }}>
+            <span style={{ color: 'var(--accent-gold)' }}>🎬</span>
+            <span><span style={{ color: 'var(--text-primary)', fontWeight: 700 }}>{movieCount.toLocaleString()}</span> movies indexed</span>
+          </div>
+        )}
 
         {isOnboarded && userId ? (
           <div className="flex flex-wrap justify-center gap-4">

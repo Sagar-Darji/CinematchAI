@@ -32,6 +32,7 @@ async def health_check():
 
         # Check vector DB connection (Qdrant on Lambda, ChromaDB locally)
         vectordb_connected = False
+        movie_count = None
         try:
             import os
             if os.environ.get("LAMBDA_TASK_ROOT") or os.environ.get("QDRANT_URL"):
@@ -40,7 +41,7 @@ async def health_check():
                     url=os.environ["QDRANT_URL"],
                     api_key=os.environ.get("QDRANT_API_KEY"),
                 )
-                qc.get_collections()
+                movie_count = qc.count(collection_name="cinematch_movies").count
                 vectordb_connected = True
             else:
                 from src.core.vectordb.chroma_client import get_chroma_client
@@ -65,7 +66,8 @@ async def health_check():
             vectordb_connected=vectordb_connected,
             details={
                 "agents_count": len(agents) if agents_loaded else 0,
-                "vectordb_type": "ChromaDB" if vectordb_connected else None,
+                "vectordb_type": "Qdrant" if os.environ.get("QDRANT_URL") else "ChromaDB",
+                "movie_count": movie_count if vectordb_connected and os.environ.get("QDRANT_URL") else None,
             },
         )
 
