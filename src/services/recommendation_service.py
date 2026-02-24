@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import os
 import threading
 import time
 import uuid
@@ -18,7 +19,7 @@ from src.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-# In-memory store for async jobs: job_id → {status, steps, result, error}
+# In-memory store for async jobs (local dev only): job_id → {status, steps, result, error}
 _async_jobs: Dict[str, Dict[str, Any]] = {}
 _async_jobs_lock = threading.Lock()
 
@@ -27,6 +28,134 @@ _async_jobs_lock = threading.Lock()
 _REC_CACHE_TTL = 300  # seconds
 _rec_cache: Dict[str, tuple] = {}  # key → (stored_at, RecommendationResponse)
 _rec_cache_lock = threading.Lock()
+
+_IS_LAMBDA = bool(os.environ.get("LAMBDA_TASK_ROOT"))
+
+
+# ─────────────────────────────────────────────────────────────────
+# Lambda-compatible job storage (Supabase via src/core/db.py)
+# ─────────────────────────────────────────────────────────────────
+
+def _ensure_rec_jobs_table():
+    from src.core.db import get_db
+    with get_db().connect() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS rec_jobs (
+                job_id TEXT PRIMARY KEY,
+                status TEXT NOT NULL DEFAULT 'pending',
+                steps_json TEXT DEFAULT '[]',
+                result_json TEXT,
+                error TEXT
+            )
+        """)
+
+
+def _db_create_job(job_id: str):
+    from src.core.db import get_db
+    _ensure_rec_jobs_table()
+    with get_db().connect() as conn:
+        conn.execute(
+            "INSERT INTO rec_jobs (job_id, status, steps_json) VALUES (?, ?, ?)",
+            (job_id, "pending", "[]"),
+        )
+
+
+def _db_update_job(job_id: str, status: str, steps=None, result_json: str = None, error: str = None):
+    from src.core.db import get_db
+    updates, params = ["status = ?"], [status]
+    if steps is not None:
+        updates.append("steps_json = ?")
+        params.append(json.dumps(steps))
+    if result_json is not None:
+        updates.append("result_json = ?")
+        params.append(result_json)
+    if error is not None:
+        updates.append("error = ?")
+        params.append(error)
+    params.append(job_id)
+    with get_db().connect() as conn:
+        conn.execute(f"UPDATE rec_jobs SET {', '.join(updates)} WHERE job_id = ?", params)
+
+
+def _db_get_job(job_id: str) -> Optional[Dict[str, Any]]:
+    from src.core.db import get_db
+    _ensure_rec_jobs_table()
+    with get_db().connect() as conn:
+        row = conn.execute(
+            "SELECT job_id, status, steps_json, result_json, error FROM rec_jobs WHERE job_id = ?",
+            (job_id,),
+        ).fetchone()
+    if not row:
+        return None
+    result = None
+    if row[3]:
+        result_data = json.loads(row[3])
+        try:
+            result = RecommendationResponse(**result_data)
+        except Exception:
+            result = result_data
+    return {
+        "status": row[1],
+        "steps": json.loads(row[2]) if row[2] else [],
+        "result": result,
+        "error": row[4],
+    }
+
+
+def _invoke_lambda_worker(job_id: str, user_id: str, context: Optional[Dict], k: int):
+    """Invoke this Lambda function asynchronously to run the recommendation workflow."""
+    import boto3
+    lambda_name = os.environ.get("AWS_LAMBDA_FUNCTION_NAME", "cinematch-api")
+    payload = {
+        "source": "recommendation-worker",
+        "job_id": job_id,
+        "user_id": user_id,
+        "context": context,
+        "k": k,
+    }
+    client = boto3.client("lambda", region_name=os.environ.get("AWS_DEFAULT_REGION", "us-east-1"))
+    client.invoke(
+        FunctionName=lambda_name,
+        InvocationType="Event",  # async — fire and forget
+        Payload=json.dumps(payload).encode(),
+    )
+    logger.info(f"Dispatched background Lambda for job {job_id}")
+
+
+def execute_recommendation_job(job_id: str, user_id: str, context: Optional[Dict], k: int):
+    """Run recommendation workflow and persist results. Called from background Lambda invocation."""
+    steps = []
+
+    def _progress(step_name: str, detail: str):
+        steps.append({"step": step_name, "detail": detail, "timestamp": time.time()})
+        _db_update_job(job_id, "running", steps=steps)
+
+    try:
+        _db_update_job(job_id, "running")
+        final_state = run_recommendation_workflow(
+            user_id=user_id,
+            context=context,
+            is_cold_start=False,
+            k=k,
+            progress_callback=_progress,
+        )
+        service = RecommendationService()
+        recommendations = service._convert_recommendations(
+            final_state.get("final_recommendations", [])
+        )[:k]
+        result = RecommendationResponse(
+            user_id=user_id,
+            recommendations=recommendations,
+            workflow_type=final_state.get("workflow_type", "single_user"),
+            processing_steps=final_state.get("processing_steps", []),
+            context_factors=final_state.get("context_factors"),
+            trace_id=final_state.get("_trace_id"),
+        )
+        _db_update_job(job_id, "complete", steps=steps, result_json=result.json())
+        logger.info(f"Background job {job_id} completed with {len(recommendations)} recommendations")
+    except Exception as exc:
+        logger.error(f"Background job {job_id} failed: {exc}", exc_info=True)
+        _db_update_job(job_id, "failed", steps=steps, error=str(exc))
 
 
 def _rec_cache_key(user_id: str, context: Optional[Dict], k: int) -> str:
@@ -234,10 +363,20 @@ class RecommendationService:
     ) -> str:
         """Submit a recommendation job asynchronously.
 
+        On Lambda: stores job in Supabase, invokes self asynchronously.
+        Locally: uses in-memory dict + background thread.
+
         Returns:
             job_id (UUID string) — poll with get_job_result(job_id).
         """
         job_id = str(uuid.uuid4())
+
+        if _IS_LAMBDA:
+            _db_create_job(job_id)
+            _invoke_lambda_worker(job_id, user_id, context, k)
+            return job_id
+
+        # Local dev: in-memory + background thread
         with _async_jobs_lock:
             _async_jobs[job_id] = {
                 "status": "pending",
@@ -298,6 +437,9 @@ class RecommendationService:
             dict with keys: status, steps, result (RecommendationResponse), error
             or None if job_id is unknown.
         """
+        if _IS_LAMBDA:
+            return _db_get_job(job_id)
+
         with _async_jobs_lock:
             job = _async_jobs.get(job_id)
             if job is None:
