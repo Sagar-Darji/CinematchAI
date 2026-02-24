@@ -4,7 +4,7 @@ frontend:
     preBuild:
       commands:
         - cd frontend
-        - npm ci
+        - npm ci --legacy-peer-deps
     build:
       commands:
         - npm run build
