@@ -1,6 +1,7 @@
 """Content Intelligence Agent - Deep movie content analysis."""
 
 import hashlib
+import os
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -13,8 +14,9 @@ from src.utils.logging import get_logger
 logger = get_logger(__name__)
 
 # Persistent cache for LLM-analyzed content features (themes, micro-genres)
+_cache_path = "/tmp/content_features" if os.environ.get("LAMBDA_TASK_ROOT") else str(Path(get_settings().data_dir) / "cache" / "content_features")
 _content_cache = diskcache.Cache(
-    str(Path(get_settings().data_dir) / "cache" / "content_features"),
+    _cache_path,
     size_limit=100 * 1024 * 1024,  # 100MB
 )
 

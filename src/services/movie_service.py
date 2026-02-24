@@ -13,11 +13,14 @@ from config.settings import get_settings
 from src.core.models import Movie, MovieMetadata
 from src.utils.logging import get_logger
 
+import os
+
 logger = get_logger(__name__)
 settings = get_settings()
 
-# Cache for TMDB API responses (24 hours)
-cache = Cache("./data/cache/tmdb")
+# On Lambda, /tmp is the only writable directory
+_cache_dir = "/tmp/tmdb" if os.environ.get("LAMBDA_TASK_ROOT") else "./data/cache/tmdb"
+cache = Cache(_cache_dir)
 
 
 class MovieService:

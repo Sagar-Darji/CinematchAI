@@ -11,11 +11,14 @@ from requests.adapters import HTTPAdapter
 from config.settings import get_settings
 from src.utils.logging import get_logger
 
+import os
+
 logger = get_logger(__name__)
 settings = get_settings()
 
-# Separate cache namespace for movie web (24h web results, 7d fingerprints)
-_web_cache = Cache("./data/cache/movie_web")
+# On Lambda, /tmp is the only writable directory
+_cache_dir = "/tmp/movie_web" if os.environ.get("LAMBDA_TASK_ROOT") else "./data/cache/movie_web"
+_web_cache = Cache(_cache_dir)
 
 TMDB_BASE = "https://api.themoviedb.org/3"
 POSTER_BASE = "https://image.tmdb.org/t/p/w185"

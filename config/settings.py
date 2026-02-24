@@ -137,6 +137,14 @@ class Settings(BaseSettings):
     # Cache Settings
     cache_dir: Path = Field(default=Path("./cache"), description="Cache directory")
     cache_ttl_hours: int = Field(default=1, description="Default cache TTL in hours")
+
+    @field_validator("cache_dir", mode="before")
+    @classmethod
+    def _lambda_cache_dir(cls, v: object) -> object:
+        import os
+        if os.environ.get("LAMBDA_TASK_ROOT"):
+            return Path("/tmp/cache")
+        return v
     profile_cache_ttl_minutes: int = Field(
         default=60, description="User profile cache TTL in minutes"
     )
@@ -227,6 +235,11 @@ class Settings(BaseSettings):
 
     def create_directories(self) -> None:
         """Create necessary directories if they don't exist."""
+        import os
+        if os.environ.get("LAMBDA_TASK_ROOT"):
+            # Lambda: only /tmp is writable
+            Path("/tmp/cache").mkdir(parents=True, exist_ok=True)
+            return
         directories = [
             self.data_dir,
             self.raw_data_dir,
