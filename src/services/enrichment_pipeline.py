@@ -119,7 +119,13 @@ class _IndexedTracker:
     """SQLite tracker for already-indexed movie IDs to avoid re-processing."""
 
     def __init__(self, db_path: Optional[Path] = None):
-        self.db_path = db_path or Path(settings.data_dir) / "enrichment_log.db"
+        import os
+        if db_path:
+            self.db_path = db_path
+        elif os.environ.get("LAMBDA_TASK_ROOT"):
+            self.db_path = Path("/tmp/enrichment_log.db")
+        else:
+            self.db_path = Path(settings.data_dir) / "enrichment_log.db"
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 

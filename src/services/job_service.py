@@ -36,7 +36,11 @@ class JobService:
 
     def __init__(self):
         """Initialize job service."""
-        self.db_path = Path(settings.data_dir) / "jobs.db"
+        import os
+        if os.environ.get("LAMBDA_TASK_ROOT"):
+            self.db_path = Path("/tmp/jobs.db")
+        else:
+            self.db_path = Path(settings.data_dir) / "jobs.db"
         self._init_database()
 
     def _init_database(self):

@@ -56,7 +56,8 @@ CATEGORY_KEYWORDS: dict[str, list[str]] = {
                  "universal", "warner", "disney", "paramount", "sony pictures"],
 }
 
-DB_PATH = "data/news.db"
+import os
+DB_PATH = "/tmp/news.db" if os.environ.get("LAMBDA_TASK_ROOT") else "data/news.db"
 REFRESH_HOURS = 2
 MAX_ITEMS_PER_SOURCE = 15
 FETCH_TIMEOUT = 10
