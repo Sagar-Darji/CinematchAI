@@ -9,8 +9,6 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 
 from src.core.models import Movie
-from src.core.vectordb.chroma_client import get_chroma_client
-from src.services.movie_service import get_movie_service
 from src.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -342,6 +340,7 @@ def _chroma_fallback_search(
     """Direct ChromaDB fallback when cloud_vectordb module fails entirely."""
     try:
         from config.settings import get_settings
+        from src.core.vectordb.chroma_client import get_chroma_client
         settings = get_settings()
 
         chroma_client = get_chroma_client(collection_name=settings.chroma_collection_movies)
@@ -394,6 +393,7 @@ def _smart_tmdb_search(
     """Use SmartQueryStrategy to build discover queries, fetch, and score results."""
     try:
         from src.services.smart_query import get_smart_query
+        from src.services.movie_service import get_movie_service
         movie_service = get_movie_service()
 
         strategy = get_smart_query()
@@ -792,6 +792,7 @@ def retrieve_similar_to_movie(
 
     try:
         from config.settings import get_settings
+        from src.core.vectordb.chroma_client import get_chroma_client
         settings = get_settings()
 
         if use_hybrid:
@@ -883,6 +884,7 @@ def _enrich_movie_from_tmdb(movie: Movie, force_refresh: bool = False) -> Movie:
         if has_complete_data:
             return movie
 
+        from src.services.movie_service import get_movie_service
         movie_service = get_movie_service()
         tmdb_id = int(movie.metadata.tmdb_id) if movie.metadata.tmdb_id else None
 
@@ -957,8 +959,8 @@ def retrieve_on_demand_movies(
     logger.info(f"On-demand retrieval: language={language}, region={region}, k={k}")
 
     try:
+        from src.services.movie_service import get_movie_service
         movie_service = get_movie_service()
-        candidate_movies = []
 
         if include_trending:
             trending = movie_service.get_trending_movies(
