@@ -158,7 +158,7 @@ class Settings(BaseSettings):
     # Embedding Settings
     text_embedding_model: str = Field(
         default="sentence-transformers/all-mpnet-base-v2",
-        description="Text embedding model",
+        description="Text embedding model (used when embedding_provider=local)",
     )
     image_embedding_model: str = Field(
         default="openai/clip-vit-base-patch32", description="Image embedding model"
@@ -177,11 +177,23 @@ class Settings(BaseSettings):
         ),
     )
 
+    # Voyage AI (AWS deployment — replaces local sentence-transformers)
+    voyage_api_key: Optional[str] = Field(default=None, description="Voyage AI API key")
+    embedding_provider: str = Field(
+        default="local",
+        description="Embedding backend: 'local' (sentence-transformers) or 'voyage' (Voyage AI API)",
+    )
+    embedding_dim: int = Field(
+        default=768,
+        description="Embedding vector dimension. 768 for local all-mpnet-base-v2, 1024 for Voyage voyage-3.",
+    )
+
     # Deployment
     deployment_env: str = Field(
         default="development", description="Deployment environment (development, staging, production)"
     )
     hf_space: bool = Field(default=False, description="Running on Hugging Face Spaces")
+    lambda_deployment: bool = Field(default=False, description="Running on AWS Lambda")
 
     # Data Paths
     data_dir: Path = Field(default=Path("./data"), description="Data directory")

@@ -19,10 +19,12 @@ settings = get_settings()
 class CloudVectorDB:
     """Multi-backend cloud vector store with automatic failover.
 
-    Fallback chain: Zilliz Cloud -> Qdrant Cloud -> Local ChromaDB
+    Default fallback chain: Zilliz Cloud -> Qdrant Cloud -> Local ChromaDB
+    AWS deployment: set only QDRANT_URL/QDRANT_API_KEY — Zilliz is skipped automatically.
+    Embedding dim is read from settings (768 for local sentence-transformers, 1024 for Voyage AI).
     """
 
-    EMBEDDING_DIM = 768
+    EMBEDDING_DIM: int = settings.embedding_dim
     COLLECTION_NAME = settings.cloud_vectordb_collection
 
     def __init__(self):
