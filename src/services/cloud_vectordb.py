@@ -126,7 +126,9 @@ class CloudVectorDB:
             return None
 
     def _init_chroma(self):
-        """Get local ChromaDB client (always available)."""
+        """Get local ChromaDB client — skipped on Lambda (no persistent disk)."""
+        if settings.lambda_deployment:
+            return None
         try:
             from src.core.vectordb.chroma_client import get_chroma_client
 

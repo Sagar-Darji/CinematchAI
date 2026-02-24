@@ -10,9 +10,9 @@ langgraph==0.2.60
 # Embeddings — Voyage AI API (replaces sentence-transformers)
 voyageai>=0.2.3
 
-# Vector Database (Qdrant primary, ChromaDB as local fallback)
+# Vector Database (Qdrant primary — ChromaDB not used on Lambda, no persistent disk)
 qdrant-client>=1.9.0
-chromadb==0.6.3
+huggingface_hub<0.28.0  # pin to avoid hf-xet Rust build dep on Lambda
 
 # API & Backend
 fastapi==0.115.6
