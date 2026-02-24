@@ -1,5 +1,6 @@
-const BASE = '/api/v1'
-const AUTH_BASE = '/api/v1/auth'
+const API_URL = import.meta.env.VITE_API_URL || ''
+const BASE = `${API_URL}/api/v1`
+const AUTH_BASE = `${API_URL}/api/v1/auth`
 
 export interface AuthResponse {
   token: string
