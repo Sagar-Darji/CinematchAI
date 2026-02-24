@@ -30,14 +30,22 @@ async def health_check():
         agents = get_agents()
         agents_loaded = len(agents) > 0
 
-        # Check vector DB connection
+        # Check vector DB connection (Qdrant on Lambda, ChromaDB locally)
         vectordb_connected = False
         try:
-            from src.core.vectordb.chroma_client import get_chroma_client
-
-            chroma_client = get_chroma_client()
-            # Simple connectivity check
-            vectordb_connected = chroma_client is not None
+            import os
+            if os.environ.get("LAMBDA_TASK_ROOT") or os.environ.get("QDRANT_URL"):
+                from qdrant_client import QdrantClient
+                qc = QdrantClient(
+                    url=os.environ["QDRANT_URL"],
+                    api_key=os.environ.get("QDRANT_API_KEY"),
+                )
+                qc.get_collections()
+                vectordb_connected = True
+            else:
+                from src.core.vectordb.chroma_client import get_chroma_client
+                chroma_client = get_chroma_client()
+                vectordb_connected = chroma_client is not None
         except Exception as e:
             logger.warning(f"Vector DB check failed: {e}")
             vectordb_connected = False
