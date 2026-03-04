@@ -52,7 +52,7 @@ def init_checkpoint(db_path: str) -> sqlite3.Connection:
             overview    TEXT,
             genres      TEXT,
             director    TEXT,
-            cast        TEXT,
+            "cast"      TEXT,
             poster_path TEXT,
             lang        TEXT,
             release_date TEXT,
@@ -145,7 +145,7 @@ async def fetch_all_details(ids, api_key: str, conn: sqlite3.Connection, workers
             if rows:
                 conn.executemany("""
                     INSERT OR REPLACE INTO movies
-                        (tmdb_id, title, overview, genres, director, cast, poster_path,
+                        (tmdb_id, title, overview, genres, director, "cast", poster_path,
                          lang, release_date, vote_average, vote_count, popularity, status)
                     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,'fetched')
                 """, [(r["tmdb_id"], r["title"], r["overview"], r["genres"], r["director"],
@@ -169,7 +169,7 @@ def embed_and_upsert(conn: sqlite3.Connection, args, qdrant, vo, collection: str
 
     # Fetch all 'fetched' rows with quality filter
     rows = conn.execute("""
-        SELECT tmdb_id, title, overview, genres, director, cast, poster_path,
+        SELECT tmdb_id, title, overview, genres, director, "cast", poster_path,
                lang, release_date, vote_average, vote_count, popularity
         FROM movies
         WHERE status = 'fetched'

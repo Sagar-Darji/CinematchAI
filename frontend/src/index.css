@@ -19,10 +19,26 @@ html, body, #root {
   margin: 0;
   padding: 0;
   min-height: 100vh;
+  /* Use 100dvh on mobile to respect browser chrome correctly */
+  min-height: 100dvh;
   background-color: var(--bg-primary);
   color: var(--text-primary);
   font-family: "Inter", "Helvetica Neue", Helvetica, Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
+}
+
+/* Safe area insets for iPhone notch / Dynamic Island / home indicator */
+:root {
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+}
+
+/* Prevent tap highlight on interactive elements (app-like feel) */
+a, button, [role="button"] {
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
 }
 
 /* Scrollbar */

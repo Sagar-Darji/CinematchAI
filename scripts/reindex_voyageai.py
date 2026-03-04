@@ -63,6 +63,7 @@ def main():
     parser.add_argument("--chroma-db", type=str, default="data/vectordb/chroma.sqlite3", help="Path to ChromaDB SQLite")
     parser.add_argument("--resume-from", type=int, default=0, help="Skip first N movies (resume interrupted run)")
     parser.add_argument("--recreate", action="store_true", help="Delete and recreate the Qdrant collection before indexing")
+    parser.add_argument("--rpm", type=int, default=3, help="Voyage AI rate limit in requests/min (free=3, paid=300)")
     args = parser.parse_args()
 
     voyage_key = os.environ.get("VOYAGE_API_KEY")
@@ -109,27 +110,42 @@ def main():
     texts = [row[1] or row[2] or "unknown movie" for row in movies]  # document or title fallback
 
     # Embed + upsert in lockstep batches to avoid storing all 108K embeddings in RAM
-    print(f"Embedding & upserting {len(texts):,} movies (batch={args.batch_size}) ...")
+    print(f"Embedding & upserting {len(texts):,} movies (batch={args.batch_size}, rpm={args.rpm}) ...")
+    # Proactive rate limiting: ensure minimum gap between API calls
+    min_gap = 60.0 / args.rpm  # seconds between calls (e.g. 20s at 3 RPM)
     point_id = args.resume_from  # global, ever-incrementing — never resets
     points = []
+    last_call_at = 0.0
 
     import time
     for i in tqdm(range(0, len(texts), args.batch_size), desc="Progress"):
         chunk_texts = texts[i : i + args.batch_size]
         chunk_rows  = movies[i : i + args.batch_size]
 
+        # Proactive rate limit: wait until min_gap has elapsed since last call
+        elapsed = time.time() - last_call_at
+        if elapsed < min_gap:
+            time.sleep(min_gap - elapsed)
+
         # Retry loop with backoff for rate-limit errors
-        for attempt in range(6):
+        result = None
+        last_exc = None
+        for attempt in range(8):
             try:
+                last_call_at = time.time()
                 result = vo.embed(chunk_texts, model=args.model, input_type="document")
                 break
             except Exception as e:
+                last_exc = e
                 if "rate" in str(e).lower() or "429" in str(e):
-                    wait = 20 * (attempt + 1)
-                    tqdm.write(f"Rate limit hit — waiting {wait}s (attempt {attempt+1}/6)")
+                    wait = min_gap * (attempt + 2)  # progressive backoff
+                    tqdm.write(f"Rate limit hit — waiting {wait:.0f}s (attempt {attempt+1}/8)")
                     time.sleep(wait)
                 else:
                     raise
+        if result is None:
+            raise RuntimeError(f"All retry attempts exhausted at batch {i}. Last error: {last_exc}\n"
+                               f"Resume with --resume-from {args.resume_from + i}")
 
         for row, emb in zip(chunk_rows, result.embeddings):
             point_id += 1  # unique ID for every movie

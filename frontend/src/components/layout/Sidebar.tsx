@@ -42,7 +42,13 @@ export function Sidebar() {
 
   return (
     <aside
-      style={{ background: 'var(--bg-card)', borderRight: '1px solid var(--border)' }}
+      style={{
+        background: 'var(--bg-card)',
+        borderRight: '1px solid var(--border)',
+        paddingTop: 'env(safe-area-inset-top, 0px)',
+        paddingBottom: 'env(safe-area-inset-bottom, 0px)',
+        paddingLeft: 'env(safe-area-inset-left, 0px)',
+      }}
       className="fixed top-0 left-0 h-full w-16 md:w-56 flex flex-col z-30"
     >
       {/* Logo */}
