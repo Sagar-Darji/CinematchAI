@@ -462,7 +462,8 @@ class MovieService:
         """Execute a TMDB discover query with arbitrary params.
 
         Handles pagination (up to the number of pages in params['_pages']).
-        Uses diskcache with 6h TTL keyed by sorted params hash.
+        If results < 50% of target, retries with relaxed filters (#2 multi-query fallback).
+        Uses diskcache with 30min TTL keyed by sorted params hash.
 
         Args:
             params: TMDB discover API parameters (may include internal keys prefixed with '_').
@@ -477,10 +478,6 @@ class MovieService:
         target_k = params.pop("_target_k", limit)
         actual_limit = min(limit, target_k)
 
-        # Build cache key from ALL API params (including the random page injected by
-        # SmartQueryStrategy._genre_query). This ensures different users/calls with
-        # different starting pages get distinct cache entries, preventing the bug where
-        # all users received the same cached movie set.
         api_params = {k: v for k, v in sorted(params.items()) if not k.startswith("_")}
         param_hash = hashlib.md5(str(api_params).encode()).hexdigest()[:12]
         cache_key = f"discover_{param_hash}"
@@ -489,49 +486,92 @@ class MovieService:
         if cached:
             return cached[:actual_limit]
 
-        # Extract the starting page (random 1-5 set by _genre_query) so the TMDB
-        # request loop begins from that page rather than always page 1.
         start_page = int(api_params.pop("page", 1))
 
         try:
-            all_movies: List[Movie] = []
-            seen_ids: set = set()
+            all_movies = self._fetch_discover_pages(api_params, start_page, pages, actual_limit, strategy)
 
-            for page in range(start_page, start_page + pages):
-                url = f"{self.base_url}/discover/movie"
-                request_params = {"api_key": self.api_key, **api_params, "page": page}
-
-                response = self._session.get(url, params=request_params, timeout=10)
-                if response.status_code != 200:
-                    logger.warning(f"Discover API returned {response.status_code} for {strategy}")
-                    break
-
-                data = response.json()
-                for item in data.get("results", []):
-                    tmdb_id = str(item.get("id", ""))
-                    if tmdb_id in seen_ids:
-                        continue
-                    seen_ids.add(tmdb_id)
-                    movie = self._parse_tmdb_search_result(item)
-                    if movie:
-                        all_movies.append(movie)
-
-                if len(all_movies) >= actual_limit:
-                    break
+            # Multi-query fallback (#2): if we got < 50% of target, retry with relaxed filters
+            if len(all_movies) < actual_limit // 2:
+                seen_ids = {str(m.metadata.tmdb_id) for m in all_movies}
+                relaxed = self._relax_discover_params(api_params)
+                if relaxed:
+                    fallback_movies = self._fetch_discover_pages(
+                        relaxed, 1, pages, actual_limit - len(all_movies), f"{strategy}_relaxed",
+                    )
+                    for m in fallback_movies:
+                        if str(m.metadata.tmdb_id) not in seen_ids:
+                            all_movies.append(m)
+                            seen_ids.add(str(m.metadata.tmdb_id))
+                    logger.info(f"Discover fallback ({strategy}): +{len(fallback_movies)} from relaxed query")
 
             result = all_movies[:actual_limit]
-
-            # Reduced from 6h → 30min: shorter TTL limits how long two users can
-            # collide on the same cached page even if they happen to pick the same
-            # random page offset.
             cache.set(cache_key, result, expire=1800)
-
             logger.info(f"Discover ({strategy}, page_start={start_page}): {len(result)} movies fetched")
             return result
 
         except Exception as e:
             logger.error(f"Discover ({strategy}) failed: {e}")
             return []
+
+    def _fetch_discover_pages(
+        self, api_params: Dict, start_page: int, pages: int, limit: int, strategy: str,
+    ) -> List["Movie"]:
+        """Fetch pages from TMDB discover API."""
+        all_movies: List[Movie] = []
+        seen_ids: set = set()
+
+        for page in range(start_page, start_page + pages):
+            url = f"{self.base_url}/discover/movie"
+            request_params = {"api_key": self.api_key, **api_params, "page": page}
+
+            response = self._session.get(url, params=request_params, timeout=10)
+            if response.status_code != 200:
+                logger.warning(f"Discover API returned {response.status_code} for {strategy}")
+                break
+
+            data = response.json()
+            for item in data.get("results", []):
+                tmdb_id = str(item.get("id", ""))
+                if tmdb_id in seen_ids:
+                    continue
+                seen_ids.add(tmdb_id)
+                movie = self._parse_tmdb_search_result(item)
+                if movie:
+                    all_movies.append(movie)
+
+            if len(all_movies) >= limit:
+                break
+
+        return all_movies[:limit]
+
+    @staticmethod
+    def _relax_discover_params(params: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Relax discover params for fallback retry (#2).
+
+        Strategies: lower vote_count, remove vote_average, broaden sort.
+        Returns None if already at minimum constraints.
+        """
+        relaxed = dict(params)
+        changed = False
+
+        # Lower vote_count threshold
+        vote_gte = relaxed.get("vote_count.gte")
+        if vote_gte and int(vote_gte) > 20:
+            relaxed["vote_count.gte"] = max(20, int(vote_gte) // 2)
+            changed = True
+
+        # Remove vote_average minimum
+        if "vote_average.gte" in relaxed:
+            del relaxed["vote_average.gte"]
+            changed = True
+
+        # Switch to popularity sort if currently by vote_average
+        if relaxed.get("sort_by") == "vote_average.desc":
+            relaxed["sort_by"] = "popularity.desc"
+            changed = True
+
+        return relaxed if changed else None
 
     def _parse_tmdb_movie(self, data: Dict) -> Movie:
         """Parse full TMDB movie response."""

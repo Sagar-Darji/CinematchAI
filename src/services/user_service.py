@@ -631,7 +631,7 @@ class UserService:
             if norm < 1e-9:
                 continue
             sim = float(np.dot(u, v) / norm)
-            if sim > 0.1:
+            if sim > 0.25:  # Raised from 0.1 — fewer but higher-quality neighbors (#3)
                 neighbors.append((other_id, sim))
 
         if not neighbors:

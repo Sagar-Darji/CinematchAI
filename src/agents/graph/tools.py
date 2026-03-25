@@ -60,9 +60,9 @@ def retrieve_candidates_hybrid(
         # Build a context-boosted query so ChromaDB returns mood/companion-
         # appropriate movies, not just historically-liked ones.
         query_embedding = _build_context_query_embedding(
-            user_profile.profile_embedding, context, context_factors
+            user_profile.profile_embedding, context, context_factors, user_profile,
         )
-        db_candidates = _vector_db_search(query_embedding, db_k, context, context_factors)
+        db_candidates = _vector_db_search(query_embedding, db_k, context, context_factors, user_profile)
         logger.info(f"Vector DB: {len(db_candidates)} candidates")
 
     # 3. Smart TMDB path
@@ -76,12 +76,15 @@ def retrieve_candidates_hybrid(
     # 3b. Collaborative filtering candidates (25% of k, non-cold-start only)
     cf_candidates: List[Tuple[float, Movie]] = []
     cf_user_id = state.get("user_id", "")
-    if cf_user_id and has_embedding and getattr(user_profile, "total_ratings", 0) >= 10:
+    if cf_user_id and has_embedding and getattr(user_profile, "total_ratings", 0) >= 5:
         try:
             from src.services.user_service import get_user_service
             from src.services.movie_service import get_movie_service as _get_movie_svc
             cf_k = max(int(k * 0.25), 5)
-            cf_pairs = get_user_service().get_cf_candidates(cf_user_id, k=cf_k)
+            # Lower min_neighbors for sparse users (#3)
+            total_ratings = getattr(user_profile, "total_ratings", 0)
+            cf_min_n = 1 if total_ratings < 10 else 2
+            cf_pairs = get_user_service().get_cf_candidates(cf_user_id, k=cf_k, min_neighbors=cf_min_n)
             if cf_pairs:
                 _movie_svc = _get_movie_svc()
                 for mid_str, cf_score in cf_pairs:
@@ -232,6 +235,7 @@ def _build_context_query_embedding(
     profile_embedding: List[float],
     context: Dict,
     context_factors: Dict,
+    user_profile=None,
 ) -> List[float]:
     """Return a context-boosted query embedding for vector DB search.
 
@@ -258,6 +262,12 @@ def _build_context_query_embedding(
         parts.append(occasion)
     if nl_context:
         parts.append(nl_context)
+
+    # Enrich mood embedding with user's favourite genres (#6)
+    if user_profile and hasattr(user_profile, "preferences"):
+        fav_genres = getattr(user_profile.preferences, "favorite_genres", None)
+        if fav_genres:
+            parts.append(" ".join(fav_genres[:3]))
 
     if not parts:
         return profile_embedding  # no context signal → pure profile query
@@ -294,18 +304,19 @@ def _build_context_query_embedding(
 def _voyage_query_embedding(
     context: Dict,
     context_factors: Dict,
+    user_profile=None,
 ) -> Optional[List[float]]:
     """Build a 1024-dim Voyage AI query embedding from context for Qdrant search.
 
     The Qdrant collection is indexed with Voyage AI (1024-dim) but the local
     profile embedding is 768-dim (all-mpnet-base-v2). This bridges the gap by
     building a descriptive text query and embedding it via Voyage AI.
+    Now enriched with user's favourite genres (#6).
     """
     try:
         from src.core.embeddings.voyage_embedder import get_voyage_embedder
         embedder = get_voyage_embedder()
 
-        # Build descriptive query from user context
         parts = []
         mood = context_factors.get("mood") or context.get("mood")
         companion = context_factors.get("companion") or context.get("companion")
@@ -324,6 +335,12 @@ def _voyage_query_embedding(
         if nl_context:
             parts.append(nl_context)
 
+        # Enrich with user's favourite genres (#6)
+        if user_profile and hasattr(user_profile, "preferences"):
+            fav_genres = getattr(user_profile.preferences, "favorite_genres", None)
+            if fav_genres:
+                parts.append(" ".join(fav_genres[:4]))
+
         # Default fallback query if no context
         if not parts:
             parts.append("popular highly rated drama comedy action adventure movie")
@@ -341,6 +358,7 @@ def _vector_db_search(
     k: int,
     context: Dict,
     context_factors: Dict,
+    user_profile=None,
 ) -> List[Tuple[float, Movie]]:
     """Search cloud vector DB with fallback chain.
 
@@ -356,7 +374,7 @@ def _vector_db_search(
         # If Qdrant expects 1024-dim (Voyage AI) but we have 768-dim, re-embed
         search_embedding = query_embedding
         if len(query_embedding) != 1024 and cloud_db.qdrant is not None:
-            voyage_emb = _voyage_query_embedding(context, context_factors)
+            voyage_emb = _voyage_query_embedding(context, context_factors, user_profile)
             if voyage_emb:
                 search_embedding = voyage_emb
                 logger.info("Using Voyage AI embedding for Qdrant search (1024-dim)")
@@ -420,7 +438,11 @@ def _chroma_fallback_search(
 
 
 def _build_cloud_filter(context: Dict, context_factors: Dict) -> Optional[Dict]:
-    """Build a filter dict for CloudVectorDB.search()."""
+    """Build a filter dict for CloudVectorDB.search().
+
+    Includes genre filtering (#5) via companion avoid-genres and optional
+    genre preference boosting.
+    """
     f: Dict[str, Any] = {}
     if context.get("language"):
         f["original_language"] = context["language"]
@@ -428,6 +450,15 @@ def _build_cloud_filter(context: Dict, context_factors: Dict) -> Optional[Dict]:
         f["year_min"] = int(context["year_min"])
     if context.get("year_max"):
         f["year_max"] = int(context["year_max"])
+
+    # Genre exclusion for companions (#5)
+    companion = context_factors.get("companion") or context.get("companion")
+    if companion:
+        from src.services.smart_query import COMPANION_EXCLUDE_GENRES, GENRE_ID_TO_NAME
+        exclude_ids = COMPANION_EXCLUDE_GENRES.get(companion.lower(), [])
+        if exclude_ids:
+            f["exclude_genres"] = [GENRE_ID_TO_NAME.get(gid, "") for gid in exclude_ids if gid in GENRE_ID_TO_NAME]
+
     return f if f else None
 
 

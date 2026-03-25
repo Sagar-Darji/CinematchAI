@@ -216,11 +216,12 @@ class CloudVectorDB:
 
     def _search_qdrant(self, embedding: list, k: int, filters: Optional[Dict]) -> List[Dict]:
         """Search Qdrant Cloud."""
-        from qdrant_client.models import Filter, FieldCondition, MatchValue, Range
+        from qdrant_client.models import Filter, FieldCondition, MatchValue, MatchText, Range
 
         query_filter = None
         if filters:
             conditions = []
+            must_not = []
             if "original_language" in filters:
                 conditions.append(
                     FieldCondition(
@@ -237,8 +238,18 @@ class CloudVectorDB:
                 conditions.append(
                     FieldCondition(key="year", range=Range(**range_kwargs))
                 )
-            if conditions:
-                query_filter = Filter(must=conditions)
+            # Genre exclusion (#5) — genres field is stored as comma-separated string
+            if "exclude_genres" in filters:
+                for genre_name in filters["exclude_genres"]:
+                    if genre_name:
+                        must_not.append(
+                            FieldCondition(key="genres", match=MatchText(text=genre_name))
+                        )
+            if conditions or must_not:
+                query_filter = Filter(
+                    must=conditions if conditions else None,
+                    must_not=must_not if must_not else None,
+                )
 
         response = self.qdrant.query_points(
             collection_name=self.COLLECTION_NAME,
@@ -297,6 +308,11 @@ class CloudVectorDB:
             parts.append(f"year >= {int(filters['year_min'])}")
         if "year_max" in filters:
             parts.append(f"year <= {int(filters['year_max'])}")
+        # Genre exclusion (#5) — genres is a VARCHAR field, use NOT LIKE
+        if "exclude_genres" in filters:
+            for genre_name in filters["exclude_genres"]:
+                if genre_name:
+                    parts.append(f'genres not like "%{genre_name}%"')
         return " and ".join(parts)
 
     # --------------------------------------------------------------- upsert
