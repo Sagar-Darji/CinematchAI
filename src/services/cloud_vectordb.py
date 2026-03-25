@@ -240,9 +240,9 @@ class CloudVectorDB:
             if conditions:
                 query_filter = Filter(must=conditions)
 
-        results = self.qdrant.search(
+        response = self.qdrant.query_points(
             collection_name=self.COLLECTION_NAME,
-            query_vector=embedding,
+            query=embedding,
             limit=k,
             query_filter=query_filter,
             with_payload=True,
@@ -253,7 +253,7 @@ class CloudVectorDB:
                 "score": hit.score,
                 "payload": hit.payload or {},
             }
-            for hit in results
+            for hit in response.points
         ]
 
     def _search_chroma(self, embedding: list, k: int, filters: Optional[Dict]) -> List[Dict]:

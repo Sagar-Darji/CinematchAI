@@ -142,8 +142,14 @@ class LLMClient:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
 
+        # Use the correct Ollama model name (not the Groq model name)
+        # Fall back to llama3.1:8b if the configured model isn't available
+        ollama_model = (
+            self.model if self.provider == LLMProvider.OLLAMA
+            else "llama3.1:8b"
+        )
         payload = {
-            "model": self.model,
+            "model": ollama_model,
             "prompt": prompt,
             "system": system_prompt or "",
             "stream": False,

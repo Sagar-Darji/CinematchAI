@@ -291,6 +291,51 @@ def _build_context_query_embedding(
 # ---------------------------------------------------------------------------
 
 
+def _voyage_query_embedding(
+    context: Dict,
+    context_factors: Dict,
+) -> Optional[List[float]]:
+    """Build a 1024-dim Voyage AI query embedding from context for Qdrant search.
+
+    The Qdrant collection is indexed with Voyage AI (1024-dim) but the local
+    profile embedding is 768-dim (all-mpnet-base-v2). This bridges the gap by
+    building a descriptive text query and embedding it via Voyage AI.
+    """
+    try:
+        from src.core.embeddings.voyage_embedder import get_voyage_embedder
+        embedder = get_voyage_embedder()
+
+        # Build descriptive query from user context
+        parts = []
+        mood = context_factors.get("mood") or context.get("mood")
+        companion = context_factors.get("companion") or context.get("companion")
+        nl_context = (
+            context_factors.get("natural_language_context")
+            or context.get("natural_language_context")
+        )
+
+        if mood:
+            desc = _MOOD_DESCRIPTIONS.get(mood.lower(), mood)
+            parts.append(desc)
+        if companion and companion.lower() not in ("alone", "solo", ""):
+            desc = _COMPANION_DESCRIPTIONS.get(companion.lower(), "")
+            if desc:
+                parts.append(desc)
+        if nl_context:
+            parts.append(nl_context)
+
+        # Default fallback query if no context
+        if not parts:
+            parts.append("popular highly rated drama comedy action adventure movie")
+
+        query_text = " ".join(parts)
+        emb = embedder.embed_text(query_text, input_type="query")
+        return emb[0].tolist()
+    except Exception as e:
+        logger.warning(f"Voyage AI query embedding failed: {e}")
+        return None
+
+
 def _vector_db_search(
     query_embedding: List[float],
     k: int,
@@ -308,8 +353,16 @@ def _vector_db_search(
         from src.services.cloud_vectordb import get_cloud_vectordb
         cloud_db = get_cloud_vectordb()
 
+        # If Qdrant expects 1024-dim (Voyage AI) but we have 768-dim, re-embed
+        search_embedding = query_embedding
+        if len(query_embedding) != 1024 and cloud_db.qdrant is not None:
+            voyage_emb = _voyage_query_embedding(context, context_factors)
+            if voyage_emb:
+                search_embedding = voyage_emb
+                logger.info("Using Voyage AI embedding for Qdrant search (1024-dim)")
+
         results = cloud_db.search(
-            query_embedding=query_embedding,
+            query_embedding=search_embedding,
             k=k,
             filters=filters,
         )
