@@ -7,6 +7,9 @@ FROM public.ecr.aws/lambda/python:3.11-arm64
 
 WORKDIR ${LAMBDA_TASK_ROOT}
 
+# psycopg2 may fall back to a source build on arm64; provide pg_config/toolchain.
+RUN yum install -y gcc postgresql-devel && yum clean all
+
 # Install Python deps (slimmed — no torch/transformers)
 # All packages use binary wheels — no system lib compilation needed
 COPY requirements-aws.txt .

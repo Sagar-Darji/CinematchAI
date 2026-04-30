@@ -29,8 +29,11 @@ aws ecr describe-repositories --repository-names "${ECR_REPO}" --region "${AWS_R
   aws ecr create-repository --repository-name "${ECR_REPO}" --region "${AWS_REGION}"
 
 echo "==> Building Lambda container image (linux/arm64) ..."
-docker build \
+docker buildx build \
   --platform linux/arm64 \
+  --provenance=false \
+  --sbom=false \
+  --load \
   -f Dockerfile.lambda \
   -t "${ECR_URI}" \
   .
