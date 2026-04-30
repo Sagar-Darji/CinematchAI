@@ -1,6 +1,32 @@
-const API_URL = import.meta.env.VITE_API_URL || ''
-const BASE = `${API_URL}/api/v1`
-const AUTH_BASE = `${API_URL}/api/v1/auth`
+const API_URL = (import.meta.env.VITE_API_URL ?? '').trim().replace(/\/+$/, '')
+const BASE = API_URL ? `${API_URL}/api/v1` : '/api/v1'
+const AUTH_BASE = API_URL ? `${API_URL}/api/v1/auth` : '/api/v1/auth'
+const AUTH_BASE_FALLBACK = '/api/v1/auth'
+
+function isNetworkError(err: unknown): boolean {
+  return err instanceof TypeError && err.message === 'Failed to fetch'
+}
+
+function toNetworkError(action: string, err: unknown): never {
+  if (isNetworkError(err)) {
+    const target = API_URL || window.location.origin
+    throw new Error(`Cannot reach the API server at ${target}. Check VITE_API_URL or the /api proxy.`)
+  }
+  throw err instanceof Error ? err : new Error(action)
+}
+
+async function authFetch(path: string, init: RequestInit): Promise<Response> {
+  const primaryUrl = `${AUTH_BASE}${path}`
+  try {
+    return await fetch(primaryUrl, init)
+  } catch (err: unknown) {
+    // If VITE_API_URL is set but unreachable, retry via same-origin /api proxy.
+    if (isNetworkError(err) && API_URL) {
+      return fetch(`${AUTH_BASE_FALLBACK}${path}`, init)
+    }
+    throw err
+  }
+}
 
 export interface AuthResponse {
   token: string
@@ -12,55 +38,71 @@ export interface AuthResponse {
 export type MediaType = 'movie' | 'tv'
 
 export async function registerUser(username: string, email: string, password: string): Promise<AuthResponse> {
-  const res = await fetch(`${AUTH_BASE}/register`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username, email, password }),
-  })
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: 'Registration failed' }))
-    throw new Error(err.detail || 'Registration failed')
+  try {
+    const res = await authFetch('/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, email, password }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'Registration failed' }))
+      throw new Error(err.detail || 'Registration failed')
+    }
+    return res.json()
+  } catch (err: unknown) {
+    toNetworkError('Registration failed', err)
   }
-  return res.json()
 }
 
 export async function loginWithPassword(identifier: string, password: string): Promise<AuthResponse> {
-  const res = await fetch(`${AUTH_BASE}/login`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ identifier, password }),
-  })
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: 'Login failed' }))
-    throw new Error(err.detail || 'Login failed')
+  try {
+    const res = await authFetch('/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier, password }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'Login failed' }))
+      throw new Error(err.detail || 'Login failed')
+    }
+    return res.json()
+  } catch (err: unknown) {
+    toNetworkError('Login failed', err)
   }
-  return res.json()
 }
 
 export async function googleAuth(idToken: string, username?: string): Promise<AuthResponse> {
-  const res = await fetch(`${AUTH_BASE}/google`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ id_token: idToken, username }),
-  })
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: 'Google sign-in failed' }))
-    throw new Error(err.detail || 'Google sign-in failed')
+  try {
+    const res = await authFetch('/google', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id_token: idToken, username }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'Google sign-in failed' }))
+      throw new Error(err.detail || 'Google sign-in failed')
+    }
+    return res.json()
+  } catch (err: unknown) {
+    toNetworkError('Google sign-in failed', err)
   }
-  return res.json()
 }
 
 export async function renameUser(oldUserId: string, newUsername: string, token: string): Promise<AuthResponse> {
-  const res = await fetch(`${AUTH_BASE}/rename-user`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ old_user_id: oldUserId, new_username: newUsername, token }),
-  })
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: 'Rename failed' }))
-    throw new Error(err.detail || 'Rename failed')
+  try {
+    const res = await authFetch('/rename-user', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ old_user_id: oldUserId, new_username: newUsername, token }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'Rename failed' }))
+      throw new Error(err.detail || 'Rename failed')
+    }
+    return res.json()
+  } catch (err: unknown) {
+    toNetworkError('Rename failed', err)
   }
-  return res.json()
 }
 
 
