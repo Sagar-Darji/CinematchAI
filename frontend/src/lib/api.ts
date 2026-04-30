@@ -9,6 +9,8 @@ export interface AuthResponse {
   is_new_user: boolean
 }
 
+export type MediaType = 'movie' | 'tv'
+
 export async function registerUser(username: string, email: string, password: string): Promise<AuthResponse> {
   const res = await fetch(`${AUTH_BASE}/register`, {
     method: 'POST',
@@ -62,6 +64,14 @@ export async function renameUser(oldUserId: string, newUsername: string, token: 
 }
 
 
+export interface Season {
+  season_number: number
+  name?: string
+  episode_count?: number
+  air_date?: string
+  poster_path?: string
+}
+
 export interface Movie {
   tmdb_id: number
   id?: number
@@ -72,8 +82,13 @@ export interface Movie {
   poster_path?: string
   vote_average?: number
   director?: string
+  creator?: string
   runtime?: number
   original_language?: string
+  media_type?: MediaType
+  season_count?: number
+  episode_count?: number
+  seasons?: Season[]
 }
 
 export interface Recommendation {
@@ -155,8 +170,9 @@ export async function pollJobStatus(jobId: string): Promise<JobStatus> {
 
 // ── Browse / Search ───────────────────────────────────────────────────────────
 
-export async function getTrending(limit = 40, language?: string, page = 1): Promise<Movie[]> {
+export async function getTrending(limit = 40, language?: string, page = 1, mediaType: MediaType = 'movie'): Promise<Movie[]> {
   const params = new URLSearchParams({ time_window: 'week' })
+  params.set('media_type', mediaType)
   if (language) params.set('language', language)
   if (page > 1) params.set('page', String(page))
   const res = await fetch(`${BASE}/movies/trending?${params}`)
@@ -165,8 +181,9 @@ export async function getTrending(limit = 40, language?: string, page = 1): Prom
   return (data.movies ?? []).slice(0, limit)
 }
 
-export async function searchMovies(query: string, limit = 40, language?: string, page = 1): Promise<Movie[]> {
+export async function searchMovies(query: string, limit = 40, language?: string, page = 1, mediaType: MediaType = 'movie'): Promise<Movie[]> {
   const params = new URLSearchParams({ query, limit: String(limit) })
+  params.set('media_type', mediaType)
   if (language) params.set('language', language)
   if (page > 1) params.set('page', String(page))
   const res = await fetch(`${BASE}/movies/search?${params}`)
@@ -175,14 +192,22 @@ export async function searchMovies(query: string, limit = 40, language?: string,
   return data.movies ?? []
 }
 
-export async function discoverByGenre(genre: string, limit = 40, language?: string, page = 1): Promise<Movie[]> {
+export async function discoverByGenre(genre: string, limit = 40, language?: string, page = 1, mediaType: MediaType = 'movie'): Promise<Movie[]> {
   const params = new URLSearchParams({ genre, limit: String(limit) })
+  params.set('media_type', mediaType)
   if (language) params.set('language', language)
   if (page > 1) params.set('page', String(page))
   const res = await fetch(`${BASE}/movies/discover?${params}`)
   if (!res.ok) return []
   const data = await res.json()
   return data.movies ?? []
+}
+
+export async function getMediaDetails(tmdbId: number, mediaType: MediaType = 'movie'): Promise<Movie | null> {
+  const params = new URLSearchParams({ media_type: mediaType })
+  const res = await fetch(`${BASE}/movies/${tmdbId}?${params}`)
+  if (!res.ok) return null
+  return res.json()
 }
 
 // ── Users ────────────────────────────────────────────────────────────────────

@@ -1,14 +1,19 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Search, X, SlidersHorizontal, ChevronLeft, ChevronRight } from 'lucide-react'
 import { getTrending, searchMovies, discoverByGenre } from '@/lib/api'
-import type { Movie } from '@/lib/api'
+import type { MediaType, Movie } from '@/lib/api'
 import { MovieCard, movieToRec } from '@/components/ui/MovieCard'
 import { PageLoader } from '@/components/ui/PageLoader'
 
-const GENRES = [
+const MOVIE_GENRES = [
   'Action', 'Comedy', 'Drama', 'Horror', 'Sci-Fi', 'Romance',
   'Thriller', 'Animation', 'Documentary', 'Crime', 'Adventure', 'Mystery',
   'Fantasy', 'History', 'Music', 'War',
+]
+
+const TV_GENRES = [
+  'Action', 'Comedy', 'Drama', 'Sci-Fi', 'Crime', 'Mystery',
+  'Documentary', 'Animation', 'Family', 'Reality', 'Kids', 'War',
 ]
 
 const LANGUAGES = [
@@ -26,6 +31,7 @@ const LANGUAGES = [
 
 export default function Browse() {
   const [movies, setMovies] = useState<Movie[]>([])
+  const [mediaType, setMediaType] = useState<MediaType>('movie')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(false)
   const [query, setQuery] = useState('')
@@ -35,17 +41,21 @@ export default function Browse() {
   const [currentPage, setCurrentPage] = useState(1)
   const [hasMore, setHasMore] = useState(true)
 
-  const load = useCallback(async (q: string, genre: string, lang: string, page: number) => {
+  const genreOptions = mediaType === 'tv' ? TV_GENRES : MOVIE_GENRES
+  const mediaLabel = mediaType === 'tv' ? 'series' : 'films'
+  const mediaTitle = mediaType === 'tv' ? 'Series' : 'Movies'
+
+  const load = useCallback(async (q: string, genre: string, lang: string, page: number, type: MediaType) => {
     setLoading(true)
     setError(false)
     try {
       let results: Movie[]
       if (q.trim()) {
-        results = await searchMovies(q.trim(), 18, lang || undefined, page)
+        results = await searchMovies(q.trim(), 18, lang || undefined, page, type)
       } else if (genre) {
-        results = await discoverByGenre(genre, 18, lang || undefined, page)
+        results = await discoverByGenre(genre, 18, lang || undefined, page, type)
       } else {
-        results = await getTrending(18, lang || undefined, page)
+        results = await getTrending(18, lang || undefined, page, type)
       }
       setMovies(results)
       setHasMore(results.length >= 18)
@@ -61,22 +71,28 @@ export default function Browse() {
   useEffect(() => {
     setCurrentPage(1)
     if (!query.trim()) {
-      load('', activeGenre, activeLang, 1)
+      load('', activeGenre, activeLang, 1, mediaType)
       return
     }
-    const t = setTimeout(() => load(query, activeGenre, activeLang, 1), 380)
+    const t = setTimeout(() => load(query, activeGenre, activeLang, 1, mediaType), 380)
     return () => clearTimeout(t)
-  }, [query, activeGenre, activeLang, load])
+  }, [query, activeGenre, activeLang, mediaType, load])
 
   const toggleGenre = (g: string) => { setActiveGenre(g === activeGenre ? '' : g); setQuery(''); setCurrentPage(1) }
   const toggleLang = (code: string) => { setActiveLang(code === activeLang ? '' : code); setCurrentPage(1) }
   const clearAll = () => { setQuery(''); setActiveGenre(''); setActiveLang(''); setCurrentPage(1) }
+  const switchMediaType = (type: MediaType) => {
+    if (type === mediaType) return
+    setMediaType(type)
+    setActiveGenre('')
+    setCurrentPage(1)
+  }
 
   const nextPage = () => {
     if (hasMore) {
       const newPage = currentPage + 1
       setCurrentPage(newPage)
-      load(query, activeGenre, activeLang, newPage)
+      load(query, activeGenre, activeLang, newPage, mediaType)
       window.scrollTo({ top: 0, behavior: 'smooth' })
     }
   }
@@ -84,7 +100,7 @@ export default function Browse() {
     if (currentPage > 1) {
       const newPage = currentPage - 1
       setCurrentPage(newPage)
-      load(query, activeGenre, activeLang, newPage)
+      load(query, activeGenre, activeLang, newPage, mediaType)
       window.scrollTo({ top: 0, behavior: 'smooth' })
     }
   }
@@ -93,7 +109,7 @@ export default function Browse() {
   const heading = query ? `"${query}"`
     : activeGenre ? activeGenre
     : activeLang ? (LANGUAGES.find(l => l.code === activeLang)?.label ?? activeLang)
-    : 'Trending'
+    : `Trending ${mediaTitle}`
 
   return (
     <div className="min-h-screen" style={{ background: 'var(--bg-primary)' }}>
@@ -108,6 +124,23 @@ export default function Browse() {
           <div className="flex-1 min-w-0">
             <p className="text-[10px] font-bold tracking-[0.3em] uppercase mb-0.5" style={{ color: 'var(--accent-gold)' }}>Discover</p>
             <h1 className="text-lg font-black text-white leading-none truncate">{heading}</h1>
+            <div className="mt-2 inline-flex items-center gap-1 rounded-full p-1" style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}>
+              {(['movie', 'tv'] as const).map((type) => (
+                <button
+                  key={type}
+                  onClick={() => switchMediaType(type)}
+                  className="px-3 py-1 rounded-full text-[11px] font-bold uppercase tracking-wide"
+                  style={{
+                    background: mediaType === type ? 'var(--accent-gold)' : 'transparent',
+                    color: mediaType === type ? '#0a0a0f' : 'var(--text-muted)',
+                    border: 'none',
+                    cursor: 'pointer',
+                  }}
+                >
+                  {type === 'tv' ? 'Series' : 'Movies'}
+                </button>
+              ))}
+            </div>
           </div>
 
           <div className="flex items-center gap-2 flex-shrink-0">
@@ -116,7 +149,7 @@ export default function Browse() {
               style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', width: '200px' }}>
               <Search size={13} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
               <input
-                type="text" placeholder="Search titles…" value={query}
+                type="text" placeholder={`Search ${mediaType === 'tv' ? 'series' : 'movies'}…`} value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 className="flex-1 bg-transparent text-sm outline-none min-w-0"
                 style={{ color: 'var(--text-primary)' }}
@@ -178,7 +211,7 @@ export default function Browse() {
 
             <span className="text-[10px] font-bold uppercase tracking-widest block" style={{ color: 'var(--text-muted)' }}>Genre</span>
             <div className="flex gap-1.5 overflow-x-auto pb-0.5" style={{ scrollbarWidth: 'none' }}>
-              {GENRES.map((g) => (
+              {genreOptions.map((g) => (
                 <button key={g} onClick={() => toggleGenre(g)}
                   className="px-2.5 py-1 rounded-full text-[11px] font-semibold whitespace-nowrap flex-shrink-0"
                   style={{
@@ -196,7 +229,7 @@ export default function Browse() {
         {!loading && movies.length > 0 && (
           <div className="px-4 md:px-6 py-2 flex items-center gap-2 flex-wrap border-t" style={{ borderColor: 'var(--border)' }}>
             <span className="text-[11px] font-semibold tabular-nums" style={{ color: 'var(--accent-gold)' }}>
-              {movies.length} {movies.length === 1 ? 'film' : 'films'}
+              {movies.length} {movies.length === 1 ? (mediaType === 'tv' ? 'series' : 'film') : mediaLabel}
             </span>
             <span className="text-[11px]" style={{ color: 'var(--text-muted)' }}>on this page</span>
             {activeGenre && (
@@ -231,11 +264,11 @@ export default function Browse() {
               style={{ background: 'rgba(229,9,20,0.1)', color: 'var(--accent-red)' }}>
               <span className="text-3xl">⚠️</span>
             </div>
-            <p className="text-base font-bold text-white mb-2">Unable to load movies</p>
+            <p className="text-base font-bold text-white mb-2">Unable to load {mediaType === 'tv' ? 'series' : 'movies'}</p>
             <p className="text-sm mb-5 max-w-sm" style={{ color: 'var(--text-muted)' }}>
               The API server might be offline or experiencing issues. Please try again.
             </p>
-            <button onClick={() => load(query, activeGenre, activeLang, currentPage)}
+            <button onClick={() => load(query, activeGenre, activeLang, currentPage, mediaType)}
               className="px-5 py-2.5 rounded-xl text-sm font-bold transition-transform hover:scale-105"
               style={{ background: 'var(--accent-gold)', color: '#0a0a0f', border: 'none', cursor: 'pointer' }}>
               Retry
@@ -247,15 +280,15 @@ export default function Browse() {
               style={{ background: 'rgba(245,197,24,0.1)', color: 'var(--accent-gold)' }}>
               <span className="text-3xl">🎬</span>
             </div>
-            <p className="text-base font-bold text-white mb-2">No films found</p>
+            <p className="text-base font-bold text-white mb-2">No {mediaType === 'tv' ? 'series' : 'films'} found</p>
             <p className="text-sm mb-1 max-w-sm" style={{ color: 'var(--text-muted)' }}>
               {query 
-                ? `We couldn't find any movies matching "${query}"`
+                ? `We couldn't find any ${mediaType === 'tv' ? 'series' : 'movies'} matching "${query}"`
                 : activeGenre 
-                ? `No ${activeGenre} films available with current filters`
+                ? `No ${activeGenre} ${mediaType === 'tv' ? 'series' : 'films'} available with current filters`
                 : activeLang
-                ? `No films found in ${LANGUAGES.find(l => l.code === activeLang)?.label ?? activeLang}`
-                : 'No movies available'}
+                ? `No ${mediaType === 'tv' ? 'series' : 'films'} found in ${LANGUAGES.find(l => l.code === activeLang)?.label ?? activeLang}`
+                : `No ${mediaType === 'tv' ? 'series' : 'movies'} available`}
             </p>
             <p className="text-xs mb-5" style={{ color: 'var(--text-muted)' }}>
               Try adjusting your filters or search terms.

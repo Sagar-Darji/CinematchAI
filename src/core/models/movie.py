@@ -1,4 +1,4 @@
-"""Movie data models."""
+"""Movie and TV media data models."""
 
 from datetime import date
 from typing import Dict, List, Optional
@@ -6,8 +6,18 @@ from typing import Dict, List, Optional
 from pydantic import BaseModel, Field
 
 
+class SeasonMetadata(BaseModel):
+    """TV season metadata from TMDB."""
+
+    season_number: int = Field(..., description="TMDB season number")
+    name: Optional[str] = Field(None, description="Season display name")
+    episode_count: Optional[int] = Field(None, description="Number of episodes in season")
+    air_date: Optional[date] = Field(None, description="Season air date")
+    poster_path: Optional[str] = Field(None, description="Path to season poster image")
+
+
 class MovieMetadata(BaseModel):
-    """Movie metadata from TMDB."""
+    """Movie or TV metadata from TMDB."""
 
     tmdb_id: str = Field(..., description="TMDB movie ID")
     imdb_id: Optional[str] = Field(None, description="IMDB movie ID")
@@ -40,6 +50,11 @@ class MovieMetadata(BaseModel):
     spoken_languages: List[str] = Field(default_factory=list, description="Spoken languages")
 
     # Additional metadata
+    media_type: str = Field(default="movie", description="TMDB media type: movie or tv")
+    creator: Optional[str] = Field(None, description="TV creator/showrunner name")
+    season_count: Optional[int] = Field(None, description="Number of seasons for TV shows")
+    episode_count: Optional[int] = Field(None, description="Number of episodes for TV shows")
+    seasons: List[SeasonMetadata] = Field(default_factory=list, description="TV seasons")
     budget: Optional[int] = Field(None, description="Production budget")
     revenue: Optional[int] = Field(None, description="Box office revenue")
     status: Optional[str] = Field(None, description="Release status")

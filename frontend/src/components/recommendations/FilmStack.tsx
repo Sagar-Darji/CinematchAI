@@ -220,7 +220,7 @@ function FilmInfo({
 
       {/* Full-screen player overlay */}
       {showPlayer && tmdbId && (
-        <FullScreenPlayer tmdbId={tmdbId} title={movie.title} onClose={() => setShowPlayer(false)} />
+        <FullScreenPlayer tmdbId={tmdbId} title={movie.title} mediaType="movie" onClose={() => setShowPlayer(false)} />
       )}
     </div>
   )

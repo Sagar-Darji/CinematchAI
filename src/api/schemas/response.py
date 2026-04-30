@@ -5,8 +5,18 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
 
+class SeasonResponse(BaseModel):
+    """Season information for TV shows."""
+
+    season_number: int
+    name: Optional[str] = None
+    episode_count: Optional[int] = None
+    air_date: Optional[str] = None
+    poster_path: Optional[str] = None
+
+
 class MovieResponse(BaseModel):
-    """Movie information in API response."""
+    """Movie or TV information in API response."""
 
     tmdb_id: int
     title: str
@@ -15,7 +25,14 @@ class MovieResponse(BaseModel):
     overview: str
     vote_average: Optional[float]
     director: Optional[str]
+    creator: Optional[str] = None
     poster_path: Optional[str]
+    runtime: Optional[int] = None
+    original_language: Optional[str] = None
+    media_type: str = "movie"
+    season_count: Optional[int] = None
+    episode_count: Optional[int] = None
+    seasons: List[SeasonResponse] = Field(default_factory=list)
 
 
 class RecommendationItemResponse(BaseModel):

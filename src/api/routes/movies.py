@@ -13,6 +13,36 @@ logger = get_logger(__name__)
 router = APIRouter(prefix="/movies", tags=["movies"])
 
 
+def _to_movie_response(movie) -> MovieResponse:
+    """Convert a domain movie/media object to API response shape."""
+    return MovieResponse(
+        tmdb_id=int(movie.metadata.tmdb_id),
+        title=movie.metadata.title,
+        year=movie.metadata.year,
+        genres=movie.metadata.genres,
+        overview=movie.metadata.overview or "",
+        vote_average=movie.metadata.vote_average,
+        director=movie.metadata.director,
+        creator=movie.metadata.creator,
+        poster_path=movie.metadata.poster_path,
+        runtime=movie.metadata.runtime,
+        original_language=movie.metadata.original_language,
+        media_type=movie.metadata.media_type,
+        season_count=movie.metadata.season_count,
+        episode_count=movie.metadata.episode_count,
+        seasons=[
+            {
+                "season_number": season.season_number,
+                "name": season.name,
+                "episode_count": season.episode_count,
+                "air_date": season.air_date.isoformat() if season.air_date else None,
+                "poster_path": season.poster_path,
+            }
+            for season in movie.metadata.seasons
+        ],
+    )
+
+
 @router.get(
     "/trending",
     status_code=status.HTTP_200_OK,
@@ -25,6 +55,7 @@ async def get_trending_movies(
     time_window: str = Query("week", description="Time window: day or week"),
     language: Optional[str] = Query(None, description="Filter by language (e.g., en, hi, ko, ja)"),
     page: int = Query(1, ge=1, le=500, description="Page number (default: 1)"),
+    media_type: str = Query("movie", description="Media type: movie or tv"),
 ):
     """
     Get trending movies from TMDB.
@@ -35,7 +66,9 @@ async def get_trending_movies(
 
     Returns currently trending movies, optionally filtered by language.
     """
-    logger.info(f"GET /movies/trending: time_window={time_window}, language={language}, page={page}")
+    logger.info(
+        f"GET /movies/trending: media_type={media_type}, time_window={time_window}, language={language}, page={page}"
+    )
 
     if time_window not in ["day", "week"]:
         raise HTTPException(
@@ -49,22 +82,10 @@ async def get_trending_movies(
             time_window=time_window,
             language=language,
             page=page,
+            media_type=media_type,
         )
 
-        # Convert to MovieResponse format
-        movie_responses = [
-            MovieResponse(
-                tmdb_id=int(movie.metadata.tmdb_id),
-                title=movie.metadata.title,
-                year=movie.metadata.year,
-                genres=movie.metadata.genres,
-                overview=movie.metadata.overview,
-                vote_average=movie.metadata.vote_average,
-                director=movie.metadata.director,
-                poster_path=movie.metadata.poster_path,
-            )
-            for movie in movies
-        ]
+        movie_responses = [_to_movie_response(movie) for movie in movies]
 
         return {
             "movies": movie_responses,
@@ -72,6 +93,7 @@ async def get_trending_movies(
             "time_window": time_window,
             "language": language,
             "page": page,
+            "media_type": media_type,
         }
 
     except Exception as e:
@@ -116,19 +138,7 @@ async def get_popular_by_language(
             limit=limit,
         )
 
-        movie_responses = [
-            MovieResponse(
-                tmdb_id=int(movie.metadata.tmdb_id),
-                title=movie.metadata.title,
-                year=movie.metadata.year,
-                genres=movie.metadata.genres,
-                overview=movie.metadata.overview,
-                vote_average=movie.metadata.vote_average,
-                director=movie.metadata.director,
-                poster_path=movie.metadata.poster_path,
-            )
-            for movie in movies
-        ]
+        movie_responses = [_to_movie_response(movie) for movie in movies]
 
         return {
             "movies": movie_responses,
@@ -179,19 +189,7 @@ async def get_recent_releases(
             days=days,
         )
 
-        movie_responses = [
-            MovieResponse(
-                tmdb_id=int(movie.metadata.tmdb_id),
-                title=movie.metadata.title,
-                year=movie.metadata.year,
-                genres=movie.metadata.genres,
-                overview=movie.metadata.overview,
-                vote_average=movie.metadata.vote_average,
-                director=movie.metadata.director,
-                poster_path=movie.metadata.poster_path,
-            )
-            for movie in movies
-        ]
+        movie_responses = [_to_movie_response(movie) for movie in movies]
 
         return {
             "movies": movie_responses,
@@ -223,6 +221,7 @@ async def search_movies(
     language: Optional[str] = Query(None, description="Filter by language"),
     limit: int = Query(20, ge=1, le=50, description="Number of results (max 50)"),
     page: int = Query(1, ge=1, le=500, description="Page number (default: 1)"),
+    media_type: str = Query("movie", description="Media type: movie or tv"),
 ):
     """
     Search movies by title.
@@ -236,7 +235,7 @@ async def search_movies(
     Returns movies matching the search query.
     """
     logger.info(
-        f"GET /movies/search: query={query}, year={year}, language={language}, limit={limit}, page={page}"
+        f"GET /movies/search: media_type={media_type}, query={query}, year={year}, language={language}, limit={limit}, page={page}"
     )
 
     try:
@@ -247,21 +246,10 @@ async def search_movies(
             language=language,
             limit=limit,
             page=page,
+            media_type=media_type,
         )
 
-        movie_responses = [
-            MovieResponse(
-                tmdb_id=int(movie.metadata.tmdb_id),
-                title=movie.metadata.title,
-                year=movie.metadata.year,
-                genres=movie.metadata.genres,
-                overview=movie.metadata.overview,
-                vote_average=movie.metadata.vote_average,
-                director=movie.metadata.director,
-                poster_path=movie.metadata.poster_path,
-            )
-            for movie in movies
-        ]
+        movie_responses = [_to_movie_response(movie) for movie in movies]
 
         return {
             "movies": movie_responses,
@@ -270,6 +258,7 @@ async def search_movies(
             "year": year,
             "language": language,
             "page": page,
+            "media_type": media_type,
         }
 
     except Exception as e:
@@ -294,19 +283,7 @@ async def get_now_playing(
     try:
         service = get_movie_service()
         movies = service.get_now_playing(region=region, language=language, page=page)
-        movie_responses = [
-            MovieResponse(
-                tmdb_id=int(m.metadata.tmdb_id),
-                title=m.metadata.title,
-                year=m.metadata.year,
-                genres=m.metadata.genres,
-                overview=m.metadata.overview,
-                vote_average=m.metadata.vote_average,
-                director=m.metadata.director,
-                poster_path=m.metadata.poster_path,
-            )
-            for m in movies
-        ]
+        movie_responses = [_to_movie_response(m) for m in movies]
         return {"movies": movie_responses, "count": len(movie_responses), "region": region, "page": page}
     except Exception as e:
         logger.error(f"Failed to get now playing: {e}")
@@ -327,19 +304,7 @@ async def get_upcoming(
     try:
         service = get_movie_service()
         movies = service.get_upcoming(region=region, language=language, page=page)
-        movie_responses = [
-            MovieResponse(
-                tmdb_id=int(m.metadata.tmdb_id),
-                title=m.metadata.title,
-                year=m.metadata.year,
-                genres=m.metadata.genres,
-                overview=m.metadata.overview,
-                vote_average=m.metadata.vote_average,
-                director=m.metadata.director,
-                poster_path=m.metadata.poster_path,
-            )
-            for m in movies
-        ]
+        movie_responses = [_to_movie_response(m) for m in movies]
         return {"movies": movie_responses, "count": len(movie_responses), "region": region, "page": page}
     except Exception as e:
         logger.error(f"Failed to get upcoming: {e}")
@@ -368,19 +333,7 @@ async def get_ott_releases(
             days=days,
             page=page,
         )
-        movie_responses = [
-            MovieResponse(
-                tmdb_id=int(m.metadata.tmdb_id),
-                title=m.metadata.title,
-                year=m.metadata.year,
-                genres=m.metadata.genres,
-                overview=m.metadata.overview,
-                vote_average=m.metadata.vote_average,
-                director=m.metadata.director,
-                poster_path=m.metadata.poster_path,
-            )
-            for m in movies
-        ]
+        movie_responses = [_to_movie_response(m) for m in movies]
         return {"movies": movie_responses, "count": len(movie_responses), "region": region, "days": days, "page": page}
     except Exception as e:
         logger.error(f"Failed to get OTT releases: {e}")
@@ -396,36 +349,44 @@ async def discover_movies(
     language: Optional[str] = Query(None, description="Language code (e.g. en, hi, ko)"),
     limit: int = Query(40, ge=1, le=50, description="Number of results"),
     page: int = Query(1, ge=1, le=500, description="Page number (default: 1)"),
+    media_type: str = Query("movie", description="Media type: movie or tv"),
 ):
     """
     Discover movies by genre and/or language via TMDB.
 
     Falls back to trending if no genre specified.
     """
-    logger.info(f"GET /movies/discover: genre={genre}, language={language}, limit={limit}, page={page}")
+    logger.info(
+        f"GET /movies/discover: media_type={media_type}, genre={genre}, language={language}, limit={limit}, page={page}"
+    )
     try:
         service = get_movie_service()
-        # Use search with genre keyword, or trending as fallback
         if genre:
-            movies = service.search_movies(query=genre, language=language, limit=limit, page=page)
+            movies = service.discover_media(
+                genre=genre,
+                language=language,
+                limit=limit,
+                page=page,
+                media_type=media_type,
+            )
         else:
-            movies = service.get_trending_movies(time_window="week", language=language, page=page)
+            movies = service.get_trending_movies(
+                time_window="week",
+                language=language,
+                page=page,
+                media_type=media_type,
+            )
             movies = movies[:limit]
 
-        movie_responses = [
-            MovieResponse(
-                tmdb_id=int(m.metadata.tmdb_id),
-                title=m.metadata.title,
-                year=m.metadata.year,
-                genres=m.metadata.genres,
-                overview=m.metadata.overview,
-                vote_average=m.metadata.vote_average,
-                director=m.metadata.director,
-                poster_path=m.metadata.poster_path,
-            )
-            for m in movies
-        ]
-        return {"movies": movie_responses, "count": len(movie_responses), "genre": genre, "language": language, "page": page}
+        movie_responses = [_to_movie_response(m) for m in movies]
+        return {
+            "movies": movie_responses,
+            "count": len(movie_responses),
+            "genre": genre,
+            "language": language,
+            "page": page,
+            "media_type": media_type,
+        }
     except Exception as e:
         logger.error(f"Failed to discover movies: {e}")
         raise HTTPException(status_code=500, detail="Failed to discover movies")
@@ -439,7 +400,10 @@ async def discover_movies(
         500: {"model": ErrorResponse},
     },
 )
-async def get_movie_by_id(tmdb_id: int):
+async def get_movie_by_id(
+    tmdb_id: int,
+    media_type: str = Query("movie", description="Media type: movie or tv"),
+):
     """
     Get movie details by TMDB ID.
 
@@ -447,11 +411,11 @@ async def get_movie_by_id(tmdb_id: int):
 
     Returns detailed movie information from TMDB API.
     """
-    logger.info(f"GET /movies/{tmdb_id}")
+    logger.info(f"GET /movies/{tmdb_id}: media_type={media_type}")
 
     try:
         service = get_movie_service()
-        movie = service.get_movie_by_id(tmdb_id=tmdb_id)
+        movie = service.get_movie_by_id(tmdb_id=tmdb_id, media_type=media_type)
 
         if not movie:
             raise HTTPException(
@@ -459,18 +423,7 @@ async def get_movie_by_id(tmdb_id: int):
                 detail=f"Movie {tmdb_id} not found",
             )
 
-        movie_response = MovieResponse(
-            tmdb_id=int(movie.metadata.tmdb_id),
-            title=movie.metadata.title,
-            year=movie.metadata.year,
-            genres=movie.metadata.genres,
-            overview=movie.metadata.overview,
-            vote_average=movie.metadata.vote_average,
-            director=movie.metadata.director,
-            poster_path=movie.metadata.poster_path,
-        )
-
-        return movie_response
+        return _to_movie_response(movie)
 
     except HTTPException:
         raise

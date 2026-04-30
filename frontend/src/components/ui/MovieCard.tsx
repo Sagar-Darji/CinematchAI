@@ -1,31 +1,99 @@
 import { useState, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { Star, Calendar, Clock, PlayCircle, X, ThumbsUp, ThumbsDown } from 'lucide-react'
-import type { Movie, Recommendation } from '@/lib/api'
+import { getMediaDetails, submitFeedback, recordInteraction } from '@/lib/api'
+import type { MediaType, Movie, Recommendation, Season } from '@/lib/api'
 import { tmdbPoster, scoreColor, formatRuntime, cn } from '@/lib/utils'
-import { submitFeedback, recordInteraction } from '@/lib/api'
 import { useUserStore } from '@/store/useUserStore'
 
-// ── Embed source list — update domains here when a provider changes ───────────
-// Sources are tried in order; the player shows a "Try next source" button and
-// also auto-advances on iframe load-error (best-effort, cross-origin limited).
+type EmbedSource = {
+  name: string
+  movieUrl: (id: string | number) => string
+  tvUrl: (id: string | number, season?: number, episode?: number) => string
+}
+
 const EMBED_SOURCES = [
-  { name: 'VidSrc',     url: (type: string, id: string | number) => `https://vsembed.su/embed/${type}/${id}` },
-  { name: 'VidSrc.to',  url: (type: string, id: string | number) => `https://vidsrc.to/embed/${type}/${id}` },
-  { name: 'VidSrc.xyz', url: (type: string, id: string | number) => `https://vidsrc.xyz/embed/${type}/${id}` },
-  { name: '2embed',     url: (_type: string, id: string | number) => `https://www.2embed.cc/embed/${id}` },
-]
+  {
+    name: 'VidSrc.to',
+    movieUrl: (id) => `https://vidsrc.to/embed/movie/${id}`,
+    tvUrl: (id, season, episode) => season && episode
+      ? `https://vidsrc.to/embed/tv/${id}/${season}/${episode}`
+      : `https://vidsrc.to/embed/tv/${id}`,
+  },
+  {
+    name: 'VidSrc.xyz',
+    movieUrl: (id) => `https://vidsrc.xyz/embed/movie/${id}`,
+    tvUrl: (id, season, episode) => season && episode
+      ? `https://vidsrc.xyz/embed/tv/${id}/${season}-${episode}`
+      : `https://vidsrc.xyz/embed/tv/${id}`,
+  },
+  {
+    name: 'VidSrc.in',
+    movieUrl: (id) => `https://vidsrc.in/embed/movie/${id}`,
+    tvUrl: (id, season, episode) => season && episode
+      ? `https://vidsrc.in/embed/tv/${id}/${season}-${episode}`
+      : `https://vidsrc.in/embed/tv/${id}`,
+  },
+] satisfies EmbedSource[]
+
+function getPlayableSeasons(seasons?: Season[]) {
+  return (seasons ?? []).filter((season) => (season.episode_count ?? 0) > 0)
+}
+
+function getDefaultSeasonNumber(seasons?: Season[]) {
+  const playableSeasons = getPlayableSeasons(seasons)
+  const preferred = playableSeasons.find((season) => season.season_number > 0) ?? playableSeasons[0]
+  return preferred?.season_number ?? 1
+}
+
+function buildEmbedUrl(
+  source: EmbedSource,
+  mediaType: MediaType,
+  tmdbId: string | number,
+  season?: number,
+  episode?: number,
+) {
+  return mediaType === 'tv'
+    ? source.tvUrl(tmdbId, season, episode)
+    : source.movieUrl(tmdbId)
+}
 
 // ── Full-screen video player overlay ─────────────────────────────────────────
 
-export function FullScreenPlayer({ tmdbId, title, onClose }: { tmdbId: number | string; title: string; onClose: () => void }) {
-  const [mode, setMode] = useState<'movie' | 'tv'>('movie')
+export function FullScreenPlayer({
+  tmdbId,
+  title,
+  mediaType,
+  seasons,
+  onClose,
+}: {
+  tmdbId: number | string
+  title: string
+  mediaType: MediaType
+  seasons?: Season[]
+  onClose: () => void
+}) {
   const [adShield, setAdShield] = useState(true)
   const [srcIdx, setSrcIdx] = useState(0)
+  const [selectedSeason, setSelectedSeason] = useState(() => getDefaultSeasonNumber(seasons))
+  const [selectedEpisode, setSelectedEpisode] = useState(1)
+  const playableSeasons = getPlayableSeasons(seasons)
+  const selectedSeasonData = playableSeasons.find((season) => season.season_number === selectedSeason)
+  const episodeCount = Math.max(selectedSeasonData?.episode_count ?? 1, 1)
 
   const nextSource = () => setSrcIdx((i) => (i + 1) % EMBED_SOURCES.length)
 
-  useEffect(() => { setSrcIdx(0) }, [mode]) // reset source when switching movie/tv
+  useEffect(() => {
+    setSrcIdx(0)
+    setSelectedSeason(getDefaultSeasonNumber(seasons))
+    setSelectedEpisode(1)
+  }, [mediaType, seasons])
+
+  useEffect(() => {
+    if (selectedEpisode > episodeCount) {
+      setSelectedEpisode(1)
+    }
+  }, [selectedEpisode, episodeCount])
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
@@ -41,7 +109,13 @@ export function FullScreenPlayer({ tmdbId, title, onClose }: { tmdbId: number | 
     }
   }, [onClose])
 
-  const src = EMBED_SOURCES[srcIdx].url(mode, tmdbId)
+  const src = buildEmbedUrl(
+    EMBED_SOURCES[srcIdx],
+    mediaType,
+    tmdbId,
+    mediaType === 'tv' && playableSeasons.length > 0 ? selectedSeason : undefined,
+    mediaType === 'tv' && playableSeasons.length > 0 ? selectedEpisode : undefined,
+  )
 
   return createPortal(
     <div
@@ -55,23 +129,14 @@ export function FullScreenPlayer({ tmdbId, title, onClose }: { tmdbId: number | 
         background: '#000',
       }}
     >
-      {/* Top bar: mode toggle + source switcher + close */}
+      {/* Top bar: source switcher + close */}
       <div className="absolute top-0 inset-x-0 z-10 flex items-center justify-between px-4 py-3"
         style={{ background: 'linear-gradient(to bottom, rgba(0,0,0,0.8), transparent)' }}>
         <div className="flex items-center gap-2">
-          <div className="flex items-center gap-1 rounded-full p-0.5" style={{ background: 'rgba(255,255,255,0.1)' }}>
-            {(['movie', 'tv'] as const).map((m) => (
-              <button key={m} onClick={() => setMode(m)}
-                className="px-3.5 py-1.5 rounded-full text-xs font-bold capitalize"
-                style={{
-                  background: mode === m ? 'var(--accent-gold)' : 'transparent',
-                  color: mode === m ? '#0a0a0f' : 'rgba(255,255,255,0.6)',
-                  border: 'none', cursor: 'pointer',
-                }}>
-                {m === 'tv' ? 'TV Show' : 'Movie'}
-              </button>
-            ))}
-          </div>
+          <span className="px-3 py-1.5 rounded-full text-[11px] font-bold uppercase tracking-wide"
+            style={{ background: 'rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.78)' }}>
+            {mediaType === 'tv' ? 'Series' : 'Movie'}
+          </span>
           {/* Source switcher */}
           <button
             onClick={nextSource}
@@ -95,6 +160,62 @@ export function FullScreenPlayer({ tmdbId, title, onClose }: { tmdbId: number | 
         </button>
       </div>
 
+      {mediaType === 'tv' && playableSeasons.length > 0 && (
+        <div className="absolute top-14 left-4 right-4 z-10 flex items-center gap-2 flex-wrap"
+          style={{ pointerEvents: 'none' }}>
+          <div className="flex items-center gap-2 rounded-2xl px-3 py-2"
+            style={{
+              pointerEvents: 'auto',
+              background: 'rgba(0,0,0,0.58)',
+              border: '1px solid rgba(255,255,255,0.12)',
+              backdropFilter: 'blur(10px)',
+            }}>
+            <label className="text-[11px] font-bold uppercase tracking-wide" style={{ color: 'rgba(255,255,255,0.72)' }}>
+              Season
+            </label>
+            <select
+              value={selectedSeason}
+              onChange={(e) => {
+                setSelectedSeason(Number(e.target.value))
+                setSelectedEpisode(1)
+              }}
+              className="rounded-lg px-2.5 py-1.5 text-xs font-semibold outline-none"
+              style={{
+                background: 'rgba(255,255,255,0.08)',
+                color: '#fff',
+                border: '1px solid rgba(255,255,255,0.12)',
+              }}
+            >
+              {playableSeasons.map((season) => (
+                <option key={season.season_number} value={season.season_number}>
+                  {season.name || `Season ${season.season_number}`}
+                </option>
+              ))}
+            </select>
+
+            <label className="text-[11px] font-bold uppercase tracking-wide ml-1" style={{ color: 'rgba(255,255,255,0.72)' }}>
+              Episode
+            </label>
+            <select
+              value={selectedEpisode}
+              onChange={(e) => setSelectedEpisode(Number(e.target.value))}
+              className="rounded-lg px-2.5 py-1.5 text-xs font-semibold outline-none"
+              style={{
+                background: 'rgba(255,255,255,0.08)',
+                color: '#fff',
+                border: '1px solid rgba(255,255,255,0.12)',
+              }}
+            >
+              {Array.from({ length: episodeCount }, (_, index) => index + 1).map((episode) => (
+                <option key={episode} value={episode}>
+                  Episode {episode}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+      )}
+
       {/* Ad shield: absorbs the first click (VidSrc ad redirect) then disappears */}
       {adShield && (
         <div
@@ -110,7 +231,7 @@ export function FullScreenPlayer({ tmdbId, title, onClose }: { tmdbId: number | 
       )}
 
       <iframe
-        key={`${mode}-${srcIdx}`}
+        key={`${mediaType}-${selectedSeason}-${selectedEpisode}-${srcIdx}`}
         src={src}
         style={{ width: '100%', height: '100%', border: 'none', display: 'block' }}
         referrerPolicy="no-referrer"
@@ -142,13 +263,19 @@ function MovieModal({ rec, onClose }: ModalProps) {
   const { movie, score, explanation, is_exploration } = rec
   const [showPlayer, setShowPlayer] = useState(false)
   const [rated, setRated] = useState<'up' | 'down' | null>(null)
+  const [detailMovie, setDetailMovie] = useState<Movie | null>(null)
+  const [detailLoading, setDetailLoading] = useState(false)
+  const [detailError, setDetailError] = useState(false)
   const userId = useUserStore((s) => s.userId)
   const overlayRef = useRef<HTMLDivElement>(null)
 
-  const poster = tmdbPoster(movie.poster_path, 'w500')
+  const mediaType = movie.media_type ?? 'movie'
+  const displayMovie = detailMovie ?? movie
+  const poster = tmdbPoster(displayMovie.poster_path, 'w500')
   const pct = Math.round(score * 100)
   const barColor = scoreColor(score)
   const tmdbId = movie.tmdb_id || movie.id
+  const isTv = mediaType === 'tv'
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
@@ -160,8 +287,41 @@ function MovieModal({ rec, onClose }: ModalProps) {
     }
   }, [onClose])
 
+  useEffect(() => {
+    let cancelled = false
+
+    if (!tmdbId || mediaType !== 'tv') {
+      setDetailMovie(null)
+      setDetailLoading(false)
+      setDetailError(false)
+      return
+    }
+
+    setDetailLoading(true)
+    setDetailError(false)
+
+    getMediaDetails(Number(tmdbId), mediaType)
+      .then((details) => {
+        if (cancelled) return
+        setDetailMovie(details)
+        setDetailError(!details)
+      })
+      .catch(() => {
+        if (cancelled) return
+        setDetailError(true)
+      })
+      .finally(() => {
+        if (cancelled) return
+        setDetailLoading(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [mediaType, tmdbId])
+
   const handleRate = async (v: 'up' | 'down') => {
-    if (!userId || !tmdbId) return
+    if (!userId || !tmdbId || isTv) return
     setRated(v)
     await submitFeedback(userId, tmdbId, v === 'up' ? 5.0 : 1.0)
     // Also record as dismissal signal for the feedback loop
@@ -209,14 +369,14 @@ function MovieModal({ rec, onClose }: ModalProps) {
               <div className="relative h-full flex items-center justify-center">
                 <img
                   src={poster}
-                  alt={movie.title}
+                  alt={displayMovie.title}
                   style={{ height: '200px', borderRadius: '10px', boxShadow: '0 20px 60px rgba(0,0,0,0.8)', objectFit: 'cover' }}
                 />
               </div>
             </>
           ) : (
             <div className="h-full flex items-center justify-center" style={{ background: 'linear-gradient(135deg,#1a1a2e,#0f3460)' }}>
-              <span className="text-xl font-bold" style={{ color: 'var(--accent-gold)' }}>{movie.title}</span>
+              <span className="text-xl font-bold" style={{ color: 'var(--accent-gold)' }}>{displayMovie.title}</span>
             </div>
           )}
           <div className="absolute bottom-0 inset-x-0 h-16" style={{ background: 'linear-gradient(to bottom, transparent, var(--bg-card))' }} />
@@ -230,23 +390,48 @@ function MovieModal({ rec, onClose }: ModalProps) {
           )}
 
           <div>
-            <h2 className="text-2xl font-black text-white leading-tight">{movie.title}</h2>
+            <div className="flex items-start gap-2 flex-wrap">
+              <h2 className="text-2xl font-black text-white leading-tight">{displayMovie.title}</h2>
+              <span className="mt-1 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide"
+                style={{ background: isTv ? 'rgba(91,192,190,0.12)' : 'rgba(245,197,24,0.12)', color: isTv ? '#8be0db' : 'var(--accent-gold)', border: `1px solid ${isTv ? 'rgba(91,192,190,0.3)' : 'rgba(245,197,24,0.22)'}` }}>
+                {isTv ? 'Series' : 'Movie'}
+              </span>
+            </div>
             <div className="flex flex-wrap items-center gap-3 mt-1.5 text-xs" style={{ color: 'var(--text-muted)' }}>
-              {movie.year && <span className="flex items-center gap-1"><Calendar size={11} />{movie.year}</span>}
-              {movie.vote_average && (
+              {displayMovie.year && <span className="flex items-center gap-1"><Calendar size={11} />{displayMovie.year}</span>}
+              {displayMovie.vote_average && (
                 <span className="flex items-center gap-1">
                   <Star size={11} style={{ color: 'var(--accent-gold)' }} />
-                  {Number(movie.vote_average).toFixed(1)}/10
+                  {Number(displayMovie.vote_average).toFixed(1)}/10
                 </span>
               )}
-              {movie.runtime && <span className="flex items-center gap-1"><Clock size={11} />{formatRuntime(movie.runtime)}</span>}
-              {movie.director && <span>🎬 {movie.director}</span>}
+              {displayMovie.runtime && <span className="flex items-center gap-1"><Clock size={11} />{formatRuntime(displayMovie.runtime)}</span>}
+              {displayMovie.director && <span>🎬 {displayMovie.director}</span>}
+              {displayMovie.creator && <span>📺 {displayMovie.creator}</span>}
+              {isTv && displayMovie.season_count && (
+                <span>{displayMovie.season_count} {displayMovie.season_count === 1 ? 'season' : 'seasons'}</span>
+              )}
+              {isTv && displayMovie.episode_count && (
+                <span>{displayMovie.episode_count} episodes</span>
+              )}
             </div>
           </div>
 
-          {(movie.genres?.length ?? 0) > 0 && (
+          {(displayMovie.genres?.length ?? 0) > 0 && (
             <div className="flex flex-wrap gap-1.5">
-              {movie.genres!.map((g) => <span key={g} className="genre-pill">{g}</span>)}
+              {displayMovie.genres!.map((g) => <span key={g} className="genre-pill">{g}</span>)}
+            </div>
+          )}
+
+          {isTv && detailLoading && (
+            <div className="rounded-lg px-4 py-3 text-sm" style={{ background: 'var(--bg-overlay)', color: 'var(--text-muted)' }}>
+              Loading seasons and episodes…
+            </div>
+          )}
+
+          {isTv && detailError && (
+            <div className="rounded-lg px-4 py-3 text-sm" style={{ background: 'rgba(229,9,20,0.08)', color: '#ff9b9b', border: '1px solid rgba(229,9,20,0.18)' }}>
+              Season details could not be loaded. You can still try the player, but episode selection may be limited.
             </div>
           )}
 
@@ -259,8 +444,8 @@ function MovieModal({ rec, onClose }: ModalProps) {
             <span className="text-sm font-black" style={{ color: barColor }}>{pct}%</span>
           </div>
 
-          {movie.overview && (
-            <p className="text-sm leading-relaxed" style={{ color: 'var(--text-muted)' }}>{movie.overview}</p>
+          {displayMovie.overview && (
+            <p className="text-sm leading-relaxed" style={{ color: 'var(--text-muted)' }}>{displayMovie.overview}</p>
           )}
 
           {explanation && (
@@ -270,32 +455,47 @@ function MovieModal({ rec, onClose }: ModalProps) {
           )}
 
           {/* Feedback */}
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-xs" style={{ color: 'var(--text-muted)' }}>Rate this pick:</span>
-            {([{ v: 'up', I: ThumbsUp, l: 'Love it', a: 'var(--accent-gold)', at: '#0a0a0f' },
-               { v: 'down', I: ThumbsDown, l: 'Not for me', a: 'var(--accent-red)', at: '#fff' }] as const)
-              .map(({ v, I, l, a, at }) => (
-                <button key={v} onClick={() => handleRate(v)}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium"
-                  style={{ background: rated === v ? a : 'var(--bg-overlay)', color: rated === v ? at : 'var(--text-muted)', border: '1px solid var(--border)', cursor: 'pointer' }}>
-                  <I size={11} /> {l}
-                </button>
-              ))}
-          </div>
+          {!isTv && (
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-xs" style={{ color: 'var(--text-muted)' }}>Rate this pick:</span>
+              {([{ v: 'up', I: ThumbsUp, l: 'Love it', a: 'var(--accent-gold)', at: '#0a0a0f' },
+                 { v: 'down', I: ThumbsDown, l: 'Not for me', a: 'var(--accent-red)', at: '#fff' }] as const)
+                .map(({ v, I, l, a, at }) => (
+                  <button key={v} onClick={() => handleRate(v)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium"
+                    style={{ background: rated === v ? a : 'var(--bg-overlay)', color: rated === v ? at : 'var(--text-muted)', border: '1px solid var(--border)', cursor: 'pointer' }}>
+                    <I size={11} /> {l}
+                  </button>
+                ))}
+            </div>
+          )}
 
           {/* Watch Now */}
           {tmdbId && (
             <button onClick={() => {
               setShowPlayer(true)
-              recordInteraction(userId, tmdbId, 'clicked')
+              if (!isTv && userId) recordInteraction(userId, tmdbId, 'clicked')
             }}
+              disabled={isTv && detailLoading}
               className="flex items-center gap-2 text-sm font-bold"
-              style={{ color: 'var(--accent-gold)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>
-              <PlayCircle size={16} /> Watch Now
+              style={{
+                color: isTv && detailLoading ? 'var(--text-muted)' : 'var(--accent-gold)',
+                background: 'none',
+                border: 'none',
+                cursor: isTv && detailLoading ? 'progress' : 'pointer',
+                padding: 0,
+              }}>
+              <PlayCircle size={16} /> {isTv ? 'Watch Series' : 'Watch Now'}
             </button>
           )}
           {showPlayer && tmdbId && (
-            <FullScreenPlayer tmdbId={tmdbId} title={movie.title} onClose={() => setShowPlayer(false)} />
+            <FullScreenPlayer
+              tmdbId={tmdbId}
+              title={displayMovie.title}
+              mediaType={mediaType}
+              seasons={displayMovie.seasons}
+              onClose={() => setShowPlayer(false)}
+            />
           )}
         </div>
       </div>
@@ -316,7 +516,6 @@ export function MovieCard({ rec, rank, compact = true }: MovieCardProps) {
   const barColor = scoreColor(score)
 
   const handleClick = () => {
-    console.log('MovieCard clicked, opening modal for:', movie.title)
     setOpen(true)
   }
 
@@ -376,6 +575,16 @@ export function MovieCard({ rec, rank, compact = true }: MovieCardProps) {
             {/* Hover overlay with info */}
             <div className="absolute inset-0 opacity-0 group-hover/card:opacity-100 transition-all duration-200 flex flex-col justify-end p-2.5"
               style={{ background: 'linear-gradient(to top, rgba(0,0,0,0.95) 0%, rgba(0,0,0,0.7) 45%, transparent 80%)' }}>
+              <div className="mb-1.5">
+                <span className="text-[8px] px-1.5 py-0.5 rounded-full font-bold uppercase tracking-wide"
+                  style={{
+                    background: movie.media_type === 'tv' ? 'rgba(91,192,190,0.18)' : 'rgba(245,197,24,0.18)',
+                    color: movie.media_type === 'tv' ? '#8be0db' : 'var(--accent-gold)',
+                    border: `1px solid ${movie.media_type === 'tv' ? 'rgba(91,192,190,0.28)' : 'rgba(245,197,24,0.22)'}`,
+                  }}>
+                  {movie.media_type === 'tv' ? 'Series' : 'Movie'}
+                </span>
+              </div>
               <p className="text-white text-[11px] font-bold line-clamp-2 leading-tight mb-1">{movie.title}</p>
               
               <div className="flex items-center gap-1.5 mb-1 flex-wrap">

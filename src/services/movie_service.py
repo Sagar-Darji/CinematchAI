@@ -1,16 +1,16 @@
-"""Movie Service - On-demand movie data from TMDB API (scalable to all movies)."""
+"""Movie Service - On-demand movie and TV data from TMDB API."""
 
 import hashlib
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Dict, List, Optional
 from datetime import datetime, timedelta
+from typing import Any, Dict, List, Optional
 
 import requests
 from requests.adapters import HTTPAdapter
 from diskcache import Cache
 
 from config.settings import get_settings
-from src.core.models import Movie, MovieMetadata
+from src.core.models import Movie, MovieMetadata, SeasonMetadata
 from src.utils.logging import get_logger
 
 import os
@@ -21,6 +21,71 @@ settings = get_settings()
 # On Lambda, /tmp is the only writable directory
 _cache_dir = "/tmp/tmdb" if os.environ.get("LAMBDA_TASK_ROOT") else "./data/cache/tmdb"
 cache = Cache(_cache_dir)
+
+MOVIE_GENRE_NAME_TO_ID = {
+    "Action": 28,
+    "Adventure": 12,
+    "Animation": 16,
+    "Comedy": 35,
+    "Crime": 80,
+    "Documentary": 99,
+    "Drama": 18,
+    "Family": 10751,
+    "Fantasy": 14,
+    "History": 36,
+    "Horror": 27,
+    "Music": 10402,
+    "Mystery": 9648,
+    "Romance": 10749,
+    "Science Fiction": 878,
+    "Sci-Fi": 878,
+    "Thriller": 53,
+    "War": 10752,
+    "Western": 37,
+}
+
+TV_GENRE_NAME_TO_ID = {
+    "Action": 10759,
+    "Action & Adventure": 10759,
+    "Adventure": 10759,
+    "Animation": 16,
+    "Comedy": 35,
+    "Crime": 80,
+    "Documentary": 99,
+    "Drama": 18,
+    "Family": 10751,
+    "Kids": 10762,
+    "Mystery": 9648,
+    "News": 10763,
+    "Reality": 10764,
+    "Sci-Fi": 10765,
+    "Sci-Fi & Fantasy": 10765,
+    "Soap": 10766,
+    "Talk": 10767,
+    "War": 10768,
+    "War & Politics": 10768,
+    "Western": 37,
+}
+
+MOVIE_GENRE_ID_TO_NAME = {v: k for k, v in MOVIE_GENRE_NAME_TO_ID.items()}
+TV_GENRE_ID_TO_NAME = {
+    10759: "Action & Adventure",
+    16: "Animation",
+    35: "Comedy",
+    80: "Crime",
+    99: "Documentary",
+    18: "Drama",
+    10751: "Family",
+    10762: "Kids",
+    9648: "Mystery",
+    10763: "News",
+    10764: "Reality",
+    10765: "Sci-Fi & Fantasy",
+    10766: "Soap",
+    10767: "Talk",
+    10768: "War & Politics",
+    37: "Western",
+}
 
 
 class MovieService:
@@ -44,17 +109,23 @@ class MovieService:
         self._session.mount("https://", adapter)
         self._session.mount("http://", adapter)
 
-    def get_movie_by_id(self, tmdb_id: int) -> Optional[Movie]:
+    def get_movie_by_id(self, tmdb_id: int, media_type: str = "movie") -> Optional[Movie]:
         """
-        Get movie by TMDB ID (on-demand from API).
+        Get movie or TV item by TMDB ID (on-demand from API).
 
         Args:
             tmdb_id: TMDB movie ID.
+            media_type: TMDB media type ("movie" or "tv").
 
         Returns:
             Movie object or None.
         """
-        cache_key = f"movie_{tmdb_id}"
+        return self.get_media_by_id(tmdb_id=tmdb_id, media_type=media_type)
+
+    def get_media_by_id(self, tmdb_id: int, media_type: str = "movie") -> Optional[Movie]:
+        """Get a movie or TV show by TMDB ID."""
+        media_type = self._normalize_media_type(media_type)
+        cache_key = f"{media_type}_{tmdb_id}"
 
         # Check cache first
         cached = cache.get(cache_key)
@@ -62,7 +133,7 @@ class MovieService:
             return cached
 
         try:
-            url = f"{self.base_url}/movie/{tmdb_id}"
+            url = f"{self.base_url}/{media_type}/{tmdb_id}"
             params = {
                 "api_key": self.api_key,
                 "append_to_response": "credits",
@@ -73,8 +144,7 @@ class MovieService:
             if response.status_code == 200:
                 data = response.json()
 
-                # Build Movie object
-                movie = self._parse_tmdb_movie(data)
+                movie = self._parse_tmdb_media(data, media_type=media_type)
 
                 # Cache for 24 hours
                 cache.set(cache_key, movie, expire=86400)
@@ -84,7 +154,7 @@ class MovieService:
             return None
 
         except Exception as e:
-            logger.error(f"Failed to fetch movie {tmdb_id}: {e}")
+            logger.error(f"Failed to fetch {media_type} {tmdb_id}: {e}")
             return None
 
     def get_movies_batch(
@@ -123,9 +193,10 @@ class MovieService:
         language: Optional[str] = None,
         limit: int = 20,
         page: int = 1,
+        media_type: str = "movie",
     ) -> List[Movie]:
         """
-        Search movies by title.
+        Search movies or TV shows by title.
 
         Args:
             query: Search query.
@@ -133,12 +204,14 @@ class MovieService:
             language: Filter by language (e.g., "en", "hi", "ko", "ja").
             limit: Max results.
             page: Page number for pagination.
+            media_type: TMDB media type ("movie" or "tv").
 
         Returns:
             List of movies.
         """
         try:
-            url = f"{self.base_url}/search/movie"
+            media_type = self._normalize_media_type(media_type)
+            url = f"{self.base_url}/search/{media_type}"
             params = {
                 "api_key": self.api_key,
                 "query": query,
@@ -146,7 +219,7 @@ class MovieService:
             }
 
             if year:
-                params["year"] = year
+                params["year" if media_type == "movie" else "first_air_date_year"] = year
 
             if language:
                 params["language"] = language
@@ -159,7 +232,7 @@ class MovieService:
 
                 movies = []
                 for item in results[:limit]:
-                    movie = self._parse_tmdb_search_result(item)
+                    movie = self._parse_tmdb_search_result(item, media_type=media_type)
                     if movie:
                         movies.append(movie)
 
@@ -168,24 +241,30 @@ class MovieService:
             return []
 
         except Exception as e:
-            logger.error(f"Search failed for '{query}': {e}")
+            logger.error(f"Search failed for '{query}' ({media_type}): {e}")
             return []
 
     def get_trending_movies(
-        self, time_window: str = "week", language: Optional[str] = None, page: int = 1
+        self,
+        time_window: str = "week",
+        language: Optional[str] = None,
+        page: int = 1,
+        media_type: str = "movie",
     ) -> List[Movie]:
         """
-        Get trending movies.
+        Get trending movies or TV shows.
 
         Args:
             time_window: "day" or "week".
             language: Filter by language.
             page: Page number for pagination.
+            media_type: TMDB media type ("movie" or "tv").
 
         Returns:
             List of trending movies.
         """
-        cache_key = f"trending_{time_window}_{language or 'all'}_{page}"
+        media_type = self._normalize_media_type(media_type)
+        cache_key = f"trending_{media_type}_{time_window}_{language or 'all'}_{page}"
 
         # Check cache (1 hour for trending)
         cached = cache.get(cache_key)
@@ -193,7 +272,7 @@ class MovieService:
             return cached
 
         try:
-            url = f"{self.base_url}/trending/movie/{time_window}"
+            url = f"{self.base_url}/trending/{media_type}/{time_window}"
             params = {"api_key": self.api_key, "page": page}
 
             if language:
@@ -207,7 +286,7 @@ class MovieService:
 
                 movies = []
                 for item in results[:20]:
-                    movie = self._parse_tmdb_search_result(item)
+                    movie = self._parse_tmdb_search_result(item, media_type=media_type)
                     if movie:
                         movies.append(movie)
 
@@ -219,7 +298,52 @@ class MovieService:
             return []
 
         except Exception as e:
-            logger.error(f"Failed to get trending movies: {e}")
+            logger.error(f"Failed to get trending {media_type}: {e}")
+            return []
+
+    def discover_media(
+        self,
+        genre: Optional[str] = None,
+        language: Optional[str] = None,
+        limit: int = 20,
+        page: int = 1,
+        media_type: str = "movie",
+    ) -> List[Movie]:
+        """Discover movies or TV shows by TMDB genre/language filters."""
+        media_type = self._normalize_media_type(media_type)
+        cache_key = f"discover_{media_type}_{genre or 'all'}_{language or 'all'}_{limit}_{page}"
+        cached = cache.get(cache_key)
+        if cached:
+            return cached[:limit]
+
+        try:
+            url = f"{self.base_url}/discover/{media_type}"
+            params: Dict[str, Any] = {
+                "api_key": self.api_key,
+                "sort_by": "popularity.desc",
+                "page": page,
+            }
+            if language:
+                params["with_original_language"] = language
+
+            genre_id = self._resolve_genre_id(genre, media_type=media_type)
+            if genre_id:
+                params["with_genres"] = genre_id
+
+            response = self._session.get(url, params=params, timeout=10)
+            if response.status_code == 200:
+                data = response.json()
+                movies = [
+                    movie
+                    for item in data.get("results", [])
+                    if (movie := self._parse_tmdb_search_result(item, media_type=media_type))
+                ][:limit]
+                cache.set(cache_key, movies, expire=3600)
+                return movies
+
+            return []
+        except Exception as e:
+            logger.error(f"Failed to discover {media_type}: {e}")
             return []
 
     def get_popular_by_language(
@@ -536,7 +660,7 @@ class MovieService:
                 if tmdb_id in seen_ids:
                     continue
                 seen_ids.add(tmdb_id)
-                movie = self._parse_tmdb_search_result(item)
+                movie = self._parse_tmdb_search_result(item, media_type="movie")
                 if movie:
                     all_movies.append(movie)
 
@@ -573,58 +697,146 @@ class MovieService:
 
         return relaxed if changed else None
 
+    @staticmethod
+    def _normalize_media_type(media_type: str) -> str:
+        """Normalize caller input to TMDB media type."""
+        return "tv" if str(media_type).lower() in {"tv", "series", "show"} else "movie"
+
+    @staticmethod
+    def _parse_date(value: Optional[str]):
+        """Parse TMDB ISO date strings safely."""
+        if not value:
+            return None
+        try:
+            return datetime.strptime(value, "%Y-%m-%d").date()
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _extract_year(value: Optional[str]) -> Optional[int]:
+        """Extract year from a TMDB date field."""
+        if not value:
+            return None
+        try:
+            return int(value[:4])
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _resolve_genre_id(genre: Optional[str], media_type: str) -> Optional[int]:
+        """Resolve a genre label to the correct TMDB genre id."""
+        if not genre:
+            return None
+        lookup = MOVIE_GENRE_NAME_TO_ID if media_type == "movie" else TV_GENRE_NAME_TO_ID
+        return lookup.get(genre)
+
     def _parse_tmdb_movie(self, data: Dict) -> Movie:
         """Parse full TMDB movie response."""
-        # Extract credits
+        return self._parse_tmdb_media(data, media_type="movie")
+
+    def _parse_tmdb_media(self, data: Dict, media_type: str = "movie") -> Movie:
+        """Parse a full TMDB movie or TV detail response."""
+        media_type = self._normalize_media_type(media_type)
         credits = data.get("credits", {})
         crew = credits.get("crew", [])
         cast = credits.get("cast", [])
 
         director = None
-        for person in crew:
-            if person.get("job") == "Director":
-                director = person.get("name")
-                break
+        if media_type == "movie":
+            for person in crew:
+                if person.get("job") == "Director":
+                    director = person.get("name")
+                    break
 
-        cast_names = [person["name"] for person in cast[:5]]
+        creator = None
+        created_by = [person.get("name") for person in data.get("created_by", []) if person.get("name")]
+        if created_by:
+            creator = ", ".join(created_by[:2])
+        elif media_type == "tv":
+            for person in crew:
+                if person.get("job") in {"Creator", "Executive Producer"} and person.get("name"):
+                    creator = person.get("name")
+                    break
+
+        runtime = data.get("runtime")
+        if media_type == "tv":
+            episode_runtime = data.get("episode_run_time") or []
+            runtime = episode_runtime[0] if episode_runtime else None
+
+        seasons = [
+            SeasonMetadata(
+                season_number=season["season_number"],
+                name=season.get("name"),
+                episode_count=season.get("episode_count"),
+                air_date=self._parse_date(season.get("air_date")),
+                poster_path=season.get("poster_path"),
+            )
+            for season in data.get("seasons", [])
+            if season.get("season_number") is not None
+        ]
+
+        release_date = data.get("release_date") or data.get("first_air_date")
+        cast_names = [person["name"] for person in cast[:5] if person.get("name")]
+        spoken_languages = [
+            lang.get("english_name") or lang.get("name") or lang.get("iso_639_1")
+            for lang in data.get("spoken_languages", [])
+            if lang.get("english_name") or lang.get("name") or lang.get("iso_639_1")
+        ]
 
         metadata = MovieMetadata(
             tmdb_id=str(data["id"]),
-            title=data.get("title", "Unknown"),
+            title=data.get("title") or data.get("name") or "Unknown",
+            original_title=data.get("original_title") or data.get("original_name"),
             overview=data.get("overview", ""),
+            tagline=data.get("tagline"),
+            release_date=self._parse_date(release_date),
+            year=self._extract_year(release_date),
             genres=[g["name"] for g in data.get("genres", [])],
-            year=int(data.get("release_date", "1900")[:4])
-            if data.get("release_date")
-            else None,
-            vote_average=data.get("vote_average"),
-            vote_count=data.get("vote_count"),
+            runtime=runtime,
             director=director,
             cast=cast_names,
+            vote_average=data.get("vote_average"),
+            vote_count=data.get("vote_count"),
+            popularity=data.get("popularity"),
             poster_path=data.get("poster_path"),
+            backdrop_path=data.get("backdrop_path"),
             original_language=data.get("original_language"),
+            spoken_languages=spoken_languages,
+            media_type=media_type,
+            creator=creator,
+            season_count=data.get("number_of_seasons") if media_type == "tv" else None,
+            episode_count=data.get("number_of_episodes") if media_type == "tv" else None,
+            seasons=seasons,
+            budget=data.get("budget"),
+            revenue=data.get("revenue"),
+            status=data.get("status"),
         )
 
         return Movie(movie_id=str(data["id"]), metadata=metadata)
 
-    def _parse_tmdb_search_result(self, data: Dict) -> Optional[Movie]:
-        """Parse TMDB search/discover/trending result (includes genre_ids)."""
+    def _parse_tmdb_search_result(self, data: Dict, media_type: str = "movie") -> Optional[Movie]:
+        """Parse TMDB search/discover/trending result."""
         try:
-            from src.services.smart_query import GENRE_ID_TO_NAME
+            media_type = self._normalize_media_type(
+                data.get("media_type") if data.get("media_type") in {"movie", "tv"} else media_type
+            )
+            genre_lookup = MOVIE_GENRE_ID_TO_NAME if media_type == "movie" else TV_GENRE_ID_TO_NAME
             genre_ids = data.get("genre_ids", [])
-            genres = [GENRE_ID_TO_NAME[gid] for gid in genre_ids if gid in GENRE_ID_TO_NAME]
+            genres = [genre_lookup[gid] for gid in genre_ids if gid in genre_lookup]
+            release_date = data.get("release_date") or data.get("first_air_date")
 
             metadata = MovieMetadata(
                 tmdb_id=str(data["id"]),
-                title=data.get("title", "Unknown"),
+                title=data.get("title") or data.get("name") or "Unknown",
+                original_title=data.get("original_title") or data.get("original_name"),
                 overview=data.get("overview", ""),
                 genres=genres,
-                year=int(data.get("release_date", "1900")[:4])
-                if data.get("release_date")
-                else None,
+                year=self._extract_year(release_date),
                 vote_average=data.get("vote_average"),
                 vote_count=data.get("vote_count"),
                 poster_path=data.get("poster_path"),
                 original_language=data.get("original_language"),
+                media_type=media_type,
             )
 
             return Movie(movie_id=str(data["id"]), metadata=metadata)

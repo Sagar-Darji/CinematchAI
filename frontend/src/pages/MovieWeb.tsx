@@ -426,6 +426,7 @@ function BottomSheet({ node, accent, onClose, onExplore }: {
         <FullScreenPlayer
           tmdbId={node.id}
           title={node.title}
+          mediaType="movie"
           onClose={() => setShowPlayer(false)}
         />
       )}
