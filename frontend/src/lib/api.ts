@@ -4,7 +4,14 @@ const AUTH_BASE = API_URL ? `${API_URL}/api/v1/auth` : '/api/v1/auth'
 const AUTH_BASE_FALLBACK = '/api/v1/auth'
 
 function isNetworkError(err: unknown): boolean {
-  return err instanceof TypeError && err.message === 'Failed to fetch'
+  if (!(err instanceof TypeError)) return false
+  const message = err.message.toLowerCase()
+  return (
+    message.includes('failed to fetch') ||
+    message.includes('load failed') ||
+    message.includes('networkerror') ||
+    message.includes('network request failed')
+  )
 }
 
 function toNetworkError(action: string, err: unknown): never {
