@@ -29,7 +29,14 @@ async function authFetch(path: string, init: RequestInit): Promise<Response> {
   } catch (err: unknown) {
     // If VITE_API_URL is set but unreachable, retry via same-origin /api proxy.
     if (isNetworkError(err) && API_URL) {
-      return fetch(`${AUTH_BASE_FALLBACK}${path}`, init)
+      const res = await fetch(`${AUTH_BASE_FALLBACK}${path}`, init)
+      // If the same-origin path has no real proxy (e.g. Amplify SPA hosting),
+      // it responds with index.html. Reject that instead of feeding HTML to res.json().
+      const ct = res.headers.get('content-type') ?? ''
+      if (!ct.includes('application/json')) {
+        throw new Error(`Cannot reach the API server at ${API_URL}. Check VITE_API_URL or the /api proxy.`)
+      }
+      return res
     }
     throw err
   }

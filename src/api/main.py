@@ -127,11 +127,12 @@ app = FastAPI(
 )
 
 
-# CORS middleware (allow all origins for development)
+# CORS middleware. allow_credentials must be False when allow_origins is "*",
+# otherwise browsers reject the response per the CORS spec.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, restrict to specific origins
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
