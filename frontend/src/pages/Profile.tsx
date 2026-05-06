@@ -263,7 +263,7 @@ export default function Profile() {
   const avgRating = admin?.avg_rating_given
 
   return (
-    <div className="p-5 md:p-8 min-h-screen max-w-2xl">
+    <div className="p-5 md:p-8 min-h-screen max-w-2xl lg:max-w-4xl">
       <PageLoader visible={loading} />
 
       <h1 className="text-3xl font-black tracking-tight text-white mb-8">Profile</h1>

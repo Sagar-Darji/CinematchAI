@@ -227,7 +227,7 @@ export default function Recommendations() {
 
       {/* Filters sidebar */}
       {sidebarOpen && (
-        <aside className="fixed md:relative inset-x-0 bottom-0 md:inset-auto md:w-72 md:flex-shrink-0 border-t md:border-t-0 md:border-l p-5 space-y-4 overflow-y-auto z-40 rounded-t-2xl md:rounded-none"
+        <aside className="fixed lg:relative inset-x-0 bottom-0 lg:inset-auto lg:w-72 lg:flex-shrink-0 border-t lg:border-t-0 lg:border-l p-5 space-y-4 overflow-y-auto z-40 rounded-t-2xl lg:rounded-none"
           style={{ background: 'var(--bg-card)', borderColor: 'var(--border)', maxHeight: '80vh' }}>
           <div className="flex items-center justify-between">
             <h2 className="font-black text-xs uppercase tracking-widest" style={{ color: 'var(--accent-gold)' }}>Customize</h2>

@@ -60,7 +60,7 @@ function MovieGrid({ movies, loading, error, onRetry }: {
 }) {
   if (loading) {
     return (
-      <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-3 md:gap-4 pt-4">
+      <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3 md:gap-4 pt-4">
         {Array.from({ length: 18 }).map((_, i) => (
           <div key={i} className="skeleton rounded-xl" style={{ aspectRatio: '2/3', animationDelay: `${i * 0.025}s` }} />
         ))}
@@ -100,7 +100,7 @@ function MovieGrid({ movies, loading, error, onRetry }: {
   }
 
   return (
-    <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-3 md:gap-4 pt-4">
+    <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3 md:gap-4 pt-4">
       {movies.map((movie, i) => (
         <div key={movie.tmdb_id ?? i} className="animate-fade-in" style={{ animationDelay: `${Math.min(i * 0.02, 0.6)}s` }}>
           <MovieCard rec={movieToRec(movie, i + 1)} compact={false} />
