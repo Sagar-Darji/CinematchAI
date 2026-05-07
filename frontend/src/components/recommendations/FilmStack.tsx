@@ -5,6 +5,7 @@ import type { Recommendation } from '@/lib/api'
 import { tmdbPoster, scoreColor, cn } from '@/lib/utils'
 import { submitFeedback } from '@/lib/api'
 import { useUserStore } from '@/store/useUserStore'
+import { useHistoryStore } from '@/store/useHistoryStore'
 import { FullScreenPlayer } from '@/components/ui/MovieCard'
 
 interface FilmStackProps {
@@ -187,7 +188,16 @@ function FilmInfo({
       <div className="flex items-center justify-center gap-3 flex-wrap">
         {tmdbId && (
           <button
-            onClick={() => setShowPlayer(true)}
+            onClick={() => {
+              useHistoryStore.getState().record({
+                tmdbId,
+                mediaType: 'movie',
+                title: movie.title,
+                posterPath: movie.poster_path,
+                year: movie.year,
+              })
+              setShowPlayer(true)
+            }}
             className="flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-bold transition-all hover:scale-105"
             style={{ background: 'var(--accent-gold)', color: '#0a0a0f', border: 'none', cursor: 'pointer' }}
           >

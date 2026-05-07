@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { PlayCircle, Info } from 'lucide-react'
 import type { Movie, MediaType } from '@/lib/api'
 import { FullScreenPlayer } from '@/components/ui/MovieCard'
+import { useHistoryStore } from '@/store/useHistoryStore'
 
 interface HeroProps {
   movie: Movie | null
@@ -92,7 +93,16 @@ export function Hero({ movie }: HeroProps) {
             )}
             <div className="flex items-center gap-2.5 flex-wrap">
               <button
-                onClick={() => setPlayerOpen(true)}
+                onClick={() => {
+                  useHistoryStore.getState().record({
+                    tmdbId,
+                    mediaType,
+                    title: movie.title,
+                    posterPath: movie.poster_path,
+                    year: movie.year,
+                  })
+                  setPlayerOpen(true)
+                }}
                 className="flex items-center gap-2 px-5 py-3 rounded-xl font-bold text-sm md:text-base transition-transform hover:scale-105"
                 style={{
                   background: 'var(--accent-gold)',

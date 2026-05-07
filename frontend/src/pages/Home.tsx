@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Sparkles, UserPlus } from 'lucide-react'
 import { useUserStore } from '@/store/useUserStore'
+import { useHistoryStore } from '@/store/useHistoryStore'
 import { getTrending, getNowPlaying, getOttReleases, type Movie } from '@/lib/api'
 import { Hero } from '@/components/home/Hero'
 import { Rail } from '@/components/home/Rail'
@@ -150,12 +151,23 @@ export default function Home() {
 
   // ── Logged-in OTT hub ────────────────────────────────────────────────────
   const heroMovie = rails.trending[0] ?? null
+  const history = useHistoryStore((s) => s.items)
+  const continueWatching: Movie[] = history.map((h) => ({
+    tmdb_id: h.tmdbId,
+    title: h.title,
+    year: h.year,
+    poster_path: h.posterPath,
+    media_type: h.mediaType,
+  }))
 
   return (
     <div className="min-h-screen pb-8" style={{ background: 'var(--bg-primary)' }}>
       <Hero movie={heroMovie} />
 
       <div className="mt-2">
+        {continueWatching.length > 0 && (
+          <Rail title="Continue Watching" items={continueWatching} seeAllHref="/profile" />
+        )}
         <Rail title="Trending Now" items={rails.trending} loading={loading.trending} seeAllHref="/browse" />
         <Rail title="In Theaters" items={rails.nowPlaying} loading={loading.nowPlaying} seeAllHref="/calendar" />
         <Rail title="Top Picks · Hindi" items={rails.trendingHi} loading={loading.trendingHi} seeAllHref="/browse" />

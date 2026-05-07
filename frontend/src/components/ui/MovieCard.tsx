@@ -6,6 +6,7 @@ import { getMediaDetails, submitFeedback, recordInteraction } from '@/lib/api'
 import type { MediaType, Movie, Recommendation, Season } from '@/lib/api'
 import { tmdbPoster, scoreColor, formatRuntime, cn } from '@/lib/utils'
 import { useUserStore } from '@/store/useUserStore'
+import { useHistoryStore } from '@/store/useHistoryStore'
 
 type EmbedSource = {
   name: string
@@ -97,8 +98,25 @@ export function FullScreenPlayer({
 }) {
   const [adShield, setAdShield] = useState(true)
   const [srcIdx, setSrcIdx] = useState(0)
-  const [selectedSeason, setSelectedSeason] = useState(() => getDefaultSeasonNumber(seasons))
-  const [selectedEpisode, setSelectedEpisode] = useState(1)
+  // Resume the last season/episode the user navigated to last time, if any.
+  const [selectedSeason, setSelectedSeason] = useState(() => {
+    if (mediaType === 'tv') {
+      const hist = useHistoryStore.getState().items.find(
+        (i) => i.tmdbId === Number(tmdbId) && i.mediaType === 'tv',
+      )
+      if (hist?.lastSeason) return hist.lastSeason
+    }
+    return getDefaultSeasonNumber(seasons)
+  })
+  const [selectedEpisode, setSelectedEpisode] = useState(() => {
+    if (mediaType === 'tv') {
+      const hist = useHistoryStore.getState().items.find(
+        (i) => i.tmdbId === Number(tmdbId) && i.mediaType === 'tv',
+      )
+      if (hist?.lastEpisode) return hist.lastEpisode
+    }
+    return 1
+  })
   const playableSeasons = getPlayableSeasons(seasons)
   const selectedSeasonData = playableSeasons.find((season) => season.season_number === selectedSeason)
   const episodeCount = Math.max(selectedSeasonData?.episode_count ?? 1, 1)
@@ -107,9 +125,21 @@ export function FullScreenPlayer({
 
   useEffect(() => {
     setSrcIdx(0)
-    setSelectedSeason(getDefaultSeasonNumber(seasons))
-    setSelectedEpisode(1)
-  }, [mediaType, seasons])
+    // Don't clobber resumed state when seasons reload — only reset on real
+    // mediaType change. The state initializers above already seeded from
+    // history; subsequent navigation drives setProgress.
+  }, [mediaType])
+
+  // Persist TV progress as the user navigates seasons/episodes inside the player.
+  useEffect(() => {
+    if (mediaType !== 'tv' || !tmdbId) return
+    useHistoryStore.getState().setProgress(
+      Number(tmdbId),
+      mediaType,
+      selectedSeason,
+      selectedEpisode,
+    )
+  }, [selectedSeason, selectedEpisode, mediaType, tmdbId])
 
   useEffect(() => {
     if (selectedEpisode > episodeCount) {
