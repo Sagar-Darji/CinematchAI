@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { LogOut, User } from 'lucide-react'
+import { LogOut, User, Bookmark } from 'lucide-react'
 import { useUserStore } from '@/store/useUserStore'
 import { useRecommendationStore } from '@/store/useRecommendationStore'
 
@@ -78,6 +78,13 @@ export function AvatarMenu() {
             style={{ color: 'var(--text-primary)', background: 'none', border: 'none', cursor: 'pointer' }}
           >
             <User size={14} /> Profile
+          </button>
+          <button
+            onClick={() => { setOpen(false); navigate('/watchlist') }}
+            className="w-full text-left px-3 py-2 text-sm flex items-center gap-2.5"
+            style={{ color: 'var(--text-primary)', background: 'none', border: 'none', cursor: 'pointer' }}
+          >
+            <Bookmark size={14} /> Watchlist
           </button>
           <button
             onClick={handleLogout}

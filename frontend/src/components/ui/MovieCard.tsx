@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
+import { useNavigate } from 'react-router-dom'
 import { Star, Calendar, Clock, PlayCircle, X, ThumbsUp, ThumbsDown } from 'lucide-react'
 import { getMediaDetails, submitFeedback, recordInteraction } from '@/lib/api'
 import type { MediaType, Movie, Recommendation, Season } from '@/lib/api'
@@ -530,14 +531,17 @@ function MovieModal({ rec, onClose }: ModalProps) {
 // ── Compact row (Recommendations list) ───────────────────────────────────────
 
 export function MovieCard({ rec, rank, compact = true }: MovieCardProps) {
-  const [open, setOpen] = useState(false)
+  const navigate = useNavigate()
   const { movie, score, is_exploration } = rec
   const poster = tmdbPoster(movie.poster_path, 'w185')
   const pct = Math.round(score * 100)
   const barColor = scoreColor(score)
 
   const handleClick = () => {
-    setOpen(true)
+    const id = movie.tmdb_id ?? movie.id
+    if (!id) return
+    const mt = movie.media_type ?? 'movie'
+    navigate(`/title/${mt}/${id}`)
   }
 
   return (
@@ -637,7 +641,6 @@ export function MovieCard({ rec, rank, compact = true }: MovieCardProps) {
         )}
       </button>
 
-      {open && <MovieModal rec={rec} onClose={() => setOpen(false)} />}
     </>
   )
 }

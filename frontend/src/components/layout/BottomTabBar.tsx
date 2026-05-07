@@ -1,13 +1,13 @@
 import { NavLink } from 'react-router-dom'
-import { Home, Sparkles, Search, Network, User } from 'lucide-react'
+import { Home, Sparkles, Search, Bookmark, User } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 const TABS = [
-  { to: '/',                icon: Home,     label: 'Home'     },
-  { to: '/recommendations', icon: Sparkles, label: 'For You'  },
-  { to: '/browse',          icon: Search,   label: 'Discover' },
-  { to: '/web',             icon: Network,  label: 'CineWeb'  },
-  { to: '/profile',         icon: User,     label: 'Profile'  },
+  { to: '/',                icon: Home,     label: 'Home'      },
+  { to: '/recommendations', icon: Sparkles, label: 'For You'   },
+  { to: '/browse',          icon: Search,   label: 'Discover'  },
+  { to: '/watchlist',       icon: Bookmark, label: 'Watchlist' },
+  { to: '/profile',         icon: User,     label: 'Profile'   },
 ]
 
 export function BottomTabBar() {

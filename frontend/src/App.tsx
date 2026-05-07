@@ -15,6 +15,8 @@ import Digest from '@/pages/Digest'
 import ReleaseCalendar from '@/pages/ReleaseCalendar'
 import MovieWeb from '@/pages/MovieWeb'
 import Search from '@/pages/Search'
+import MovieDetail from '@/pages/MovieDetail'
+import Watchlist from '@/pages/Watchlist'
 import { useUserStore } from '@/store/useUserStore'
 
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID ?? ''
@@ -64,6 +66,15 @@ export default function App() {
           <Route path="/calendar" element={<ReleaseCalendar />} />
           <Route path="/web" element={<MovieWeb />} />
           <Route path="/search" element={<Search />} />
+          <Route path="/title/:mediaType/:tmdbId" element={<MovieDetail />} />
+          <Route
+            path="/watchlist"
+            element={
+              <ProtectedRoute>
+                <Watchlist />
+              </ProtectedRoute>
+            }
+          />
         </Route>
       </Routes>
     </BrowserRouter>
