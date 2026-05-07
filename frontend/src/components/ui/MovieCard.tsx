@@ -146,45 +146,75 @@ export function FullScreenPlayer({
         top: 0,
         left: 0,
         width: '100vw',
-        height: '100vh',
+        height: '100dvh',
         zIndex: 99999,
         background: '#000',
       }}
     >
       {/* Top bar: source switcher + close */}
-      <div className="absolute top-0 inset-x-0 z-10 flex items-center justify-between px-4 py-3"
-        style={{ background: 'linear-gradient(to bottom, rgba(0,0,0,0.8), transparent)' }}>
-        <div className="flex items-center gap-2">
-          <span className="px-3 py-1.5 rounded-full text-[11px] font-bold uppercase tracking-wide"
-            style={{ background: 'rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.78)' }}>
+      <div
+        className="absolute top-0 inset-x-0 z-10 flex items-center justify-between gap-3"
+        style={{
+          background: 'linear-gradient(to bottom, rgba(0,0,0,0.85), transparent)',
+          paddingTop: 'max(env(safe-area-inset-top, 0px), 0.75rem)',
+          paddingBottom: '0.75rem',
+          paddingLeft: 'max(env(safe-area-inset-left, 0px), 1rem)',
+          paddingRight: 'max(env(safe-area-inset-right, 0px), 1rem)',
+        }}
+      >
+        <div className="flex items-center gap-2 min-w-0">
+          <span
+            className="hidden sm:inline-flex px-3 py-1.5 rounded-full text-[11px] font-bold uppercase tracking-wide flex-shrink-0"
+            style={{ background: 'rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.78)' }}
+          >
             {mediaType === 'tv' ? 'Series' : 'Movie'}
           </span>
-          {/* Source switcher */}
           <button
             onClick={nextSource}
             title="Try next streaming source"
+            className="flex-shrink-0"
             style={{
-              fontSize: '11px', padding: '4px 10px', borderRadius: '12px',
-              border: '1px solid rgba(255,255,255,0.25)', background: 'rgba(255,255,255,0.1)',
-              color: 'rgba(255,255,255,0.75)', cursor: 'pointer', whiteSpace: 'nowrap',
+              fontSize: '11px',
+              padding: '6px 12px',
+              borderRadius: '12px',
+              border: '1px solid rgba(255,255,255,0.25)',
+              background: 'rgba(255,255,255,0.1)',
+              color: 'rgba(255,255,255,0.75)',
+              cursor: 'pointer',
+              whiteSpace: 'nowrap',
             }}
           >
             ⟳ {EMBED_SOURCES[srcIdx].name}
           </button>
         </div>
-        <span className="text-white text-sm font-semibold truncate mx-4 flex-1 text-center opacity-70">{title}</span>
+        <span className="text-white text-sm font-semibold truncate flex-1 text-center opacity-70 hidden md:inline">
+          {title}
+        </span>
         <button
           onClick={onClose}
-          className="w-9 h-9 flex items-center justify-center rounded-full flex-shrink-0"
-          style={{ background: 'rgba(255,255,255,0.15)', color: 'white', border: 'none', cursor: 'pointer' }}
+          aria-label="Close player"
+          className="w-10 h-10 flex items-center justify-center rounded-full flex-shrink-0"
+          style={{
+            background: 'rgba(255,255,255,0.18)',
+            color: 'white',
+            border: 'none',
+            cursor: 'pointer',
+          }}
         >
           <X size={18} />
         </button>
       </div>
 
       {mediaType === 'tv' && playableSeasons.length > 0 && (
-        <div className="absolute top-14 left-4 right-4 z-10 flex items-center gap-2 flex-wrap"
-          style={{ pointerEvents: 'none' }}>
+        <div
+          className="absolute z-10 flex items-center gap-2 flex-wrap"
+          style={{
+            pointerEvents: 'none',
+            top: 'calc(max(env(safe-area-inset-top, 0px), 0.75rem) + 3.5rem)',
+            left: 'max(env(safe-area-inset-left, 0px), 1rem)',
+            right: 'max(env(safe-area-inset-right, 0px), 1rem)',
+          }}
+        >
           <div className="flex items-center gap-2 rounded-2xl px-3 py-2"
             style={{
               pointerEvents: 'auto',
