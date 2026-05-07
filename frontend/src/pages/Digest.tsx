@@ -417,7 +417,7 @@ export default function Digest() {
       {/* ── Sticky filter bar ── */}
       <div
         ref={filterBarRef}
-        className="sticky top-0 z-20 px-5 md:px-8 pb-3 pt-3 space-y-2"
+        className="sticky top-14 z-20 px-5 md:px-8 pb-3 pt-3 space-y-2"
         style={{
           background: 'rgba(10,10,15,0.85)',
           backdropFilter: 'blur(12px)',

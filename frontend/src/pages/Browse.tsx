@@ -116,7 +116,7 @@ export default function Browse() {
       <PageLoader visible={loading} />
 
       {/* Sticky header */}
-      <div className="sticky top-0 z-20"
+      <div className="sticky top-14 z-20"
         style={{ background: 'rgba(10,10,15,0.95)', backdropFilter: 'blur(14px)', borderBottom: '1px solid var(--border)' }}>
 
         {/* Title + search row */}

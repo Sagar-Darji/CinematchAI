@@ -120,7 +120,7 @@ export default function Recommendations() {
       <div className="flex-1 min-w-0">
         {/* Sticky header */}
         <div
-          className="sticky top-0 z-20 flex items-center justify-between px-5 md:px-8 py-4 border-b"
+          className="sticky top-14 z-20 flex items-center justify-between px-5 md:px-8 py-4 border-b"
           style={{ background: 'rgba(10,10,15,0.92)', backdropFilter: 'blur(12px)', borderColor: 'var(--border)' }}
         >
           <div>

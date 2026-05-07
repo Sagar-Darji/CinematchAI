@@ -14,6 +14,7 @@ import Profile from '@/pages/Profile'
 import Digest from '@/pages/Digest'
 import ReleaseCalendar from '@/pages/ReleaseCalendar'
 import MovieWeb from '@/pages/MovieWeb'
+import Search from '@/pages/Search'
 import { useUserStore } from '@/store/useUserStore'
 
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID ?? ''
@@ -62,6 +63,7 @@ export default function App() {
           <Route path="/digest" element={<Digest />} />
           <Route path="/calendar" element={<ReleaseCalendar />} />
           <Route path="/web" element={<MovieWeb />} />
+          <Route path="/search" element={<Search />} />
         </Route>
       </Routes>
     </BrowserRouter>
