@@ -14,6 +14,27 @@ type EmbedSource = {
 
 const EMBED_SOURCES = [
   {
+    name: 'VidLink',
+    movieUrl: (id) => `https://vidlink.pro/movie/${id}`,
+    tvUrl: (id, season, episode) => season && episode
+      ? `https://vidlink.pro/tv/${id}/${season}/${episode}`
+      : `https://vidlink.pro/tv/${id}`,
+  },
+  {
+    name: 'AutoEmbed',
+    movieUrl: (id) => `https://player.autoembed.cc/embed/movie/${id}`,
+    tvUrl: (id, season, episode) => season && episode
+      ? `https://player.autoembed.cc/embed/tv/${id}/${season}/${episode}`
+      : `https://player.autoembed.cc/embed/tv/${id}`,
+  },
+  {
+    name: 'Embed.su',
+    movieUrl: (id) => `https://embed.su/embed/movie/${id}`,
+    tvUrl: (id, season, episode) => season && episode
+      ? `https://embed.su/embed/tv/${id}/${season}/${episode}`
+      : `https://embed.su/embed/tv/${id}`,
+  },
+  {
     name: 'VidSrc.to',
     movieUrl: (id) => `https://vidsrc.to/embed/movie/${id}`,
     tvUrl: (id, season, episode) => season && episode
@@ -236,7 +257,6 @@ export function FullScreenPlayer({
         style={{ width: '100%', height: '100%', border: 'none', display: 'block' }}
         referrerPolicy="no-referrer"
         allow="autoplay; fullscreen; encrypted-media"
-        sandbox="allow-scripts allow-same-origin allow-presentation"
         allowFullScreen
         loading="lazy"
         title={`Watch ${title}`}
