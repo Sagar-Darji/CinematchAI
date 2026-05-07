@@ -236,6 +236,7 @@ export function FullScreenPlayer({
         style={{ width: '100%', height: '100%', border: 'none', display: 'block' }}
         referrerPolicy="no-referrer"
         allow="autoplay; fullscreen; encrypted-media"
+        sandbox="allow-scripts allow-same-origin allow-presentation"
         allowFullScreen
         loading="lazy"
         title={`Watch ${title}`}
