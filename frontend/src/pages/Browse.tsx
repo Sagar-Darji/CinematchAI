@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Search, X, SlidersHorizontal, ChevronLeft, ChevronRight } from 'lucide-react'
+import { X, SlidersHorizontal, ChevronLeft, ChevronRight } from 'lucide-react'
 import { getTrending, searchMovies, discoverByGenre } from '@/lib/api'
 import type { MediaType, Movie } from '@/lib/api'
 import { MovieCard, movieToRec } from '@/components/ui/MovieCard'
@@ -144,23 +144,27 @@ export default function Browse() {
           </div>
 
           <div className="flex items-center gap-2 flex-shrink-0">
-            {/* Search */}
-            <div className="flex items-center gap-2 rounded-xl px-3 py-2"
-              style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', width: '200px' }}>
-              <Search size={13} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
-              <input
-                type="text" placeholder={`Search ${mediaType === 'tv' ? 'series' : 'movies'}…`} value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                className="flex-1 bg-transparent text-sm outline-none min-w-0"
-                style={{ color: 'var(--text-primary)' }}
-              />
-              {query && (
-                <button onClick={() => setQuery('')}
-                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: 0, lineHeight: 0 }}>
-                  <X size={12} />
+            {/* Active query chip — set via global search or ?q= deep link */}
+            {query && (
+              <span
+                className="hidden sm:inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold"
+                style={{
+                  background: 'rgba(245,197,24,0.12)',
+                  color: 'var(--accent-gold)',
+                  border: '1px solid rgba(245,197,24,0.25)',
+                  maxWidth: '180px',
+                }}
+              >
+                <span className="truncate">"{query}"</span>
+                <button
+                  onClick={() => setQuery('')}
+                  aria-label="Clear search query"
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'inherit', padding: 0, lineHeight: 0 }}
+                >
+                  <X size={11} />
                 </button>
-              )}
-            </div>
+              </span>
+            )}
 
             {/* Filter toggle */}
             <button onClick={() => setFiltersOpen((v) => !v)}
