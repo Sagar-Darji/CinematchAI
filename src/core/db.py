@@ -132,10 +132,21 @@ class _PgCursor:
 
 
 class _PgConnection:
-    """Wraps a psycopg2 connection to provide a sqlite3-like interface."""
+    """Wraps a psycopg2 connection to provide a sqlite3-like interface.
 
-    def __init__(self, conn):
+    The wrapper supports two close semantics:
+    - When `pooled=True`, close() commits/rolls back but does not actually
+      close the underlying connection — the connection is parked back into
+      the module-level cache for reuse on the next invocation in the same
+      Lambda container.
+    - When `pooled=False`, close() closes the underlying socket as before.
+    """
+
+    def __init__(self, conn, pooled: bool = False, on_release=None):
         self._conn = conn
+        self._pooled = pooled
+        self._on_release = on_release  # called with (conn, ok: bool)
+        self._released = False
 
     def cursor(self) -> _PgCursor:
         import psycopg2.extras
@@ -154,17 +165,34 @@ class _PgConnection:
         self._conn.rollback()
 
     def close(self):
-        self._conn.close()
+        if self._released:
+            return
+        self._released = True
+        if self._pooled and self._on_release:
+            self._on_release(self._conn, True)
+        else:
+            self._conn.close()
 
     def __enter__(self):
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        if exc_type:
-            self.rollback()
-        else:
-            self.commit()
-        self.close()
+        ok = exc_type is None
+        try:
+            if exc_type:
+                self.rollback()
+            else:
+                self.commit()
+        except Exception:
+            ok = False
+        finally:
+            if self._released:
+                return
+            self._released = True
+            if self._pooled and self._on_release:
+                self._on_release(self._conn, ok)
+            else:
+                self._conn.close()
 
 
 # ── SQLite wrapper (adds context-manager support) ──────────────────────────────
@@ -211,7 +239,15 @@ class DBAdapter:
     """
     Connects to PostgreSQL when DATABASE_URL is set, otherwise falls back to
     SQLite stored at <data_dir>/users.db.
+
+    For PostgreSQL we keep a single per-process cached connection. Lambda
+    containers serve one request at a time, so a single connection is enough,
+    and reusing it across invocations within the same warm container avoids
+    the ~50–200ms TLS+auth handshake every request.
     """
+
+    # Class-level cache. One connection per Lambda container instance.
+    _cached_pg_conn = None
 
     def __init__(self):
         from config.settings import get_settings
@@ -228,12 +264,48 @@ class DBAdapter:
     def is_postgres(self) -> bool:
         return bool(self.database_url) and self.database_url.startswith(("postgres://", "postgresql://"))
 
+    @classmethod
+    def _drop_cached(cls):
+        conn = cls._cached_pg_conn
+        cls._cached_pg_conn = None
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    @classmethod
+    def _release(cls, conn, ok: bool):
+        """Return a connection to the cache (or drop it if the txn errored)."""
+        if not ok:
+            try:
+                conn.close()
+            except Exception:
+                pass
+            if cls._cached_pg_conn is conn:
+                cls._cached_pg_conn = None
+            return
+        # Sanity check the cache slot.
+        if cls._cached_pg_conn is None:
+            cls._cached_pg_conn = conn
+
     def connect(self):
-        """Return an open connection (SQLite or PostgreSQL)."""
+        """Return an open connection (SQLite or PostgreSQL).
+
+        For Postgres, reuses a cached connection within the same process when
+        possible.
+        """
         if self.is_postgres:
             import psycopg2
+            cached = self.__class__._cached_pg_conn
+            # `closed` is 0 when alive; non-zero when closed.
+            if cached is not None and getattr(cached, "closed", 0) == 0:
+                # Take it out of the cache while in use to avoid two callers
+                # sharing a single connection.
+                self.__class__._cached_pg_conn = None
+                return _PgConnection(cached, pooled=True, on_release=self.__class__._release)
             conn = psycopg2.connect(self.database_url)
-            return _PgConnection(conn)
+            return _PgConnection(conn, pooled=True, on_release=self.__class__._release)
         else:
             conn = sqlite3.connect(str(self.db_path), timeout=15)
             conn.row_factory = sqlite3.Row

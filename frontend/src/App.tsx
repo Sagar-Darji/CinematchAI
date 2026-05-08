@@ -25,16 +25,45 @@ const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID ?? ''
 const GOOGLE_ENABLED = GOOGLE_CLIENT_ID.length > 0
 
 export default function App() {
-  const { userId, isOnboarded, token } = useUserStore()
+  const { userId, isOnboarded, token, hasHydrated } = useUserStore()
 
   // On boot: if we have a persisted token, ping /me to validate it. The api
   // wrapper handles 401 by clearing local state and bouncing to /login, so we
   // don't need to do anything with the result here.
   useEffect(() => {
-    if (token) {
+    if (hasHydrated && token) {
       getCurrentUser().catch(() => { /* handled by 401 interceptor */ })
     }
-  }, [token])
+  }, [hasHydrated, token])
+
+  // Avoid the login-screen flash on slow devices: don't render routes until
+  // Zustand has finished reading persisted state from localStorage.
+  if (!hasHydrated) {
+    return (
+      <div
+        style={{
+          minHeight: '100dvh',
+          background: 'var(--bg-primary)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        <div
+          aria-hidden
+          style={{
+            width: 28,
+            height: 28,
+            borderRadius: '50%',
+            border: '2px solid var(--border)',
+            borderTopColor: 'var(--accent-gold)',
+            animation: 'spin 0.8s linear infinite',
+          }}
+        />
+        <style>{'@keyframes spin{to{transform:rotate(360deg)}}'}</style>
+      </div>
+    )
+  }
 
   const routes = (
     <BrowserRouter>

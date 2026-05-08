@@ -50,6 +50,6 @@ export const useWatchlistStore = create<WatchlistState>()(
         get().items.some((i) => i.tmdbId === tmdbId && i.mediaType === mediaType),
       clear: () => set({ items: [] }),
     }),
-    { name: 'cinematch-watchlist' },
+    { name: 'cinematch-watchlist', version: 1 },
   ),
 )

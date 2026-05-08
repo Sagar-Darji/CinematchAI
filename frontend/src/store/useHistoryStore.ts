@@ -92,6 +92,6 @@ export const useHistoryStore = create<HistoryState>()(
 
       clear: () => set({ items: [] }),
     }),
-    { name: 'cinematch-history' },
+    { name: 'cinematch-history', version: 1 },
   ),
 )

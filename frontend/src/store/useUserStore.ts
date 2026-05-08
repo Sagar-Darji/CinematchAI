@@ -10,6 +10,8 @@ interface UserState {
   isOnboarded: boolean
   ratingCount: number
   hasSeenTour: boolean
+  /** True once Zustand has finished reading from localStorage. Use to gate route rendering. */
+  hasHydrated: boolean
   setUserId: (id: string) => void
   setEmail: (email: string) => void
   setToken: (token: string) => void
@@ -28,6 +30,7 @@ export const useUserStore = create<UserState>()(
       isOnboarded: false,
       ratingCount: 0,
       hasSeenTour: false,
+      hasHydrated: false,
       setUserId: (id) => set({ userId: id }),
       setEmail: (email) => set({ email }),
       setToken: (token) => set({ token }),
@@ -42,6 +45,21 @@ export const useUserStore = create<UserState>()(
         set({ userId: '', email: '', token: '', isOnboarded: false, ratingCount: 0, hasSeenTour: false })
       },
     }),
-    { name: 'cinematch-user' },
+    {
+      name: 'cinematch-user',
+      version: 1,
+      // hasHydrated is runtime-only — do not persist it
+      partialize: (state) => ({
+        userId: state.userId,
+        email: state.email,
+        token: state.token,
+        isOnboarded: state.isOnboarded,
+        ratingCount: state.ratingCount,
+        hasSeenTour: state.hasSeenTour,
+      }),
+      onRehydrateStorage: () => (state) => {
+        if (state) state.hasHydrated = true
+      },
+    },
   ),
 )
