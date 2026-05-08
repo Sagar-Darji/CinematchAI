@@ -1,8 +1,69 @@
 import { useEffect, useState, useRef } from 'react'
-import { User, Film, Star, TrendingUp, Upload, Loader2, Check, X } from 'lucide-react'
+import { Link } from 'react-router-dom'
+import { User, Film, Star, TrendingUp, Upload, Loader2, Check, X, ChevronRight, PlayCircle, Bookmark } from 'lucide-react'
 import { useUserStore } from '@/store/useUserStore'
+import { useHistoryStore } from '@/store/useHistoryStore'
+import { useWatchlistStore } from '@/store/useWatchlistStore'
 import { getUserProfile, getAdminProfile, importLetterboxd, pollImportJob, type UserProfile, type AdminProfile } from '@/lib/api'
+import { tmdbPoster } from '@/lib/utils'
 import { PageLoader } from '@/components/ui/PageLoader'
+
+// ── Mini-rail of poster thumbnails for in-Profile sections ────────────────────
+
+function PosterStrip({
+  items,
+  emptyMsg,
+}: {
+  items: { tmdbId: number; mediaType: 'movie' | 'tv'; title: string; posterPath?: string; subtitle?: string }[]
+  emptyMsg?: string
+}) {
+  if (items.length === 0) {
+    return (
+      <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
+        {emptyMsg ?? 'Nothing here yet.'}
+      </p>
+    )
+  }
+  return (
+    <div className="flex gap-2.5 overflow-x-auto hide-scrollbar pb-1" style={{ scrollSnapType: 'x mandatory' }}>
+      {items.map((it) => {
+        const poster = tmdbPoster(it.posterPath, 'w185')
+        return (
+          <Link
+            key={`${it.tmdbId}-${it.mediaType}`}
+            to={`/title/${it.mediaType}/${it.tmdbId}`}
+            className="flex-shrink-0 group"
+            style={{ width: '92px', scrollSnapAlign: 'start', textDecoration: 'none' }}
+          >
+            <div
+              className="rounded-lg overflow-hidden mb-1.5"
+              style={{ aspectRatio: '2/3', border: '1px solid var(--border)', background: 'var(--bg-overlay)' }}
+            >
+              {poster ? (
+                <img
+                  src={poster}
+                  alt={it.title}
+                  className="w-full h-full object-cover transition-transform group-hover:scale-105"
+                  loading="lazy"
+                />
+              ) : (
+                <div className="w-full h-full flex items-center justify-center text-center p-1 text-[10px] font-bold text-white">
+                  {it.title}
+                </div>
+              )}
+            </div>
+            <p className="text-[11px] font-semibold text-white truncate leading-tight">{it.title}</p>
+            {it.subtitle && (
+              <p className="text-[10px] truncate leading-tight" style={{ color: 'var(--text-muted)' }}>
+                {it.subtitle}
+              </p>
+            )}
+          </Link>
+        )
+      })}
+    </div>
+  )
+}
 
 // ── Skeleton components ────────────────────────────────────────────────────────
 
@@ -238,6 +299,9 @@ function LetterboxdImport({ userId, onComplete }: { userId: string; onComplete: 
 
 export default function Profile() {
   const { userId, ratingCount, setRatingCount } = useUserStore()
+  const history = useHistoryStore((s) => s.items)
+  const clearHistory = useHistoryStore((s) => s.clear)
+  const watchlist = useWatchlistStore((s) => s.items)
   const [profile, setProfile] = useState<UserProfile | null>(null)
   const [admin, setAdmin] = useState<AdminProfile | null>(null)
   const [loading, setLoading] = useState(false)
@@ -324,6 +388,87 @@ export default function Profile() {
               </div>
             ))}
           </div>
+
+          {/* Continue Watching */}
+          {history.length > 0 && (
+            <div
+              className="rounded-xl p-5 animate-fade-in"
+              style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', animationDelay: '0.10s' }}
+            >
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-2">
+                  <PlayCircle size={14} style={{ color: 'var(--accent-gold)' }} />
+                  <h3 className="text-xs font-bold uppercase tracking-widest" style={{ color: 'var(--text-muted)' }}>
+                    Continue Watching
+                  </h3>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded-full font-bold"
+                    style={{ background: 'var(--bg-overlay)', color: 'var(--text-muted)', border: '1px solid var(--border)' }}>
+                    {history.length}
+                  </span>
+                </div>
+                {history.length > 0 && (
+                  <button
+                    onClick={() => { if (confirm('Clear your watch history?')) clearHistory() }}
+                    className="text-[10px] font-semibold"
+                    style={{ color: 'var(--text-muted)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
+              <PosterStrip
+                items={history.slice(0, 12).map((h) => ({
+                  tmdbId: h.tmdbId,
+                  mediaType: h.mediaType,
+                  title: h.title,
+                  posterPath: h.posterPath,
+                  subtitle:
+                    h.mediaType === 'tv' && h.lastSeason && h.lastEpisode
+                      ? `S${h.lastSeason} · E${h.lastEpisode}`
+                      : h.year
+                        ? String(h.year)
+                        : undefined,
+                }))}
+              />
+            </div>
+          )}
+
+          {/* Watchlist preview */}
+          {watchlist.length > 0 && (
+            <div
+              className="rounded-xl p-5 animate-fade-in"
+              style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', animationDelay: '0.12s' }}
+            >
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-2">
+                  <Bookmark size={14} style={{ color: 'var(--accent-gold)' }} />
+                  <h3 className="text-xs font-bold uppercase tracking-widest" style={{ color: 'var(--text-muted)' }}>
+                    Watchlist
+                  </h3>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded-full font-bold"
+                    style={{ background: 'var(--bg-overlay)', color: 'var(--text-muted)', border: '1px solid var(--border)' }}>
+                    {watchlist.length}
+                  </span>
+                </div>
+                <Link
+                  to="/watchlist"
+                  className="text-[10px] font-semibold flex items-center gap-0.5"
+                  style={{ color: 'var(--accent-gold)', textDecoration: 'none' }}
+                >
+                  See all <ChevronRight size={10} />
+                </Link>
+              </div>
+              <PosterStrip
+                items={watchlist.slice(0, 12).map((w) => ({
+                  tmdbId: w.tmdbId,
+                  mediaType: w.mediaType,
+                  title: w.title,
+                  posterPath: w.posterPath,
+                  subtitle: w.year ? String(w.year) : undefined,
+                }))}
+              />
+            </div>
+          )}
 
           {/* Genre breakdown */}
           {topGenres.length > 0 && (
