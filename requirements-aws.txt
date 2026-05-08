@@ -52,6 +52,7 @@ python-json-logger==3.3.0
 
 # Rate Limiting
 slowapi==0.1.9
+sentry-sdk[fastapi]==2.20.0
 
 # TMDB API
 tmdbv3api==1.9.0

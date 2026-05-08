@@ -9,13 +9,39 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from prometheus_fastapi_instrumentator import Instrumentator
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 import time
 import uuid
 
+from src.api.rate_limit import limiter
 from src.api.routes import admin, auth, groups, health, history, movie_web, movies, news, recommendations, users, watchlist
 from src.utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+# ── Sentry — no-op when SENTRY_DSN isn't set ──────────────────────────────────
+_sentry_dsn = os.environ.get("SENTRY_DSN", "").strip()
+if _sentry_dsn:
+    try:
+        import sentry_sdk
+        from sentry_sdk.integrations.fastapi import FastApiIntegration
+        from sentry_sdk.integrations.starlette import StarletteIntegration
+
+        sentry_sdk.init(
+            dsn=_sentry_dsn,
+            environment=os.environ.get("DEPLOYMENT_ENV", "development"),
+            traces_sample_rate=float(os.environ.get("SENTRY_TRACES_SAMPLE_RATE", "0.0")),
+            integrations=[StarletteIntegration(), FastApiIntegration()],
+            send_default_pii=False,
+        )
+        logger.info("Sentry initialized")
+    except Exception as exc:  # pragma: no cover
+        logger.warning(f"Sentry init failed (continuing without it): {exc}")
+
+# Rate limiter is imported as a singleton from src.api.rate_limit so route
+# modules can decorate endpoints with @limiter.limit("…") and share state.
 
 
 @asynccontextmanager
@@ -127,15 +153,37 @@ app = FastAPI(
 )
 
 
-# CORS middleware. allow_credentials must be False when allow_origins is "*",
-# otherwise browsers reject the response per the CORS spec.
+# CORS — read explicit origins from CORS_ORIGINS (comma-separated) when set;
+# fall back to a sane production allow-list. allow_credentials stays False so
+# browsers accept the response with allow-origin: * fallback if the env var is
+# missing.
+def _cors_origins() -> list[str]:
+    raw = os.environ.get("CORS_ORIGINS", "").strip()
+    if raw:
+        return [o.strip() for o in raw.split(",") if o.strip()]
+    return [
+        "https://cinematch-ai.me",
+        "https://www.cinematch-ai.me",
+        "https://feat-aws-deployment.dlhjm5yul87j0.amplifyapp.com",
+        "http://localhost:3000",
+        "http://localhost:5173",
+    ]
+
+
+_origins = _cors_origins()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_origins,
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+logger.info(f"CORS allow_origins: {_origins}")
+
+# Wire slowapi limiter — endpoints opt in via @limiter.limit("…").
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
 
 
 # Request ID middleware

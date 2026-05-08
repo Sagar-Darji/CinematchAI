@@ -2,10 +2,11 @@
 
 import json
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 
 from src.api.deps import get_current_user
+from src.api.rate_limit import limiter
 from src.api.schemas.request import RecommendationRequest
 from src.api.schemas.response import ErrorResponse, RecommendationResponse
 from src.services.recommendation_service import get_recommendation_service
@@ -67,8 +68,10 @@ async def get_recommendations(
 
 
 @router.post("/async", status_code=status.HTTP_202_ACCEPTED)
+@limiter.limit("30/hour")
 async def submit_async_recommendations(
-    request: RecommendationRequest,
+    request: Request,
+    body: RecommendationRequest,
     current_user: str = Depends(get_current_user),
 ):
     """Submit a recommendation job for the current user asynchronously.
@@ -81,8 +84,8 @@ async def submit_async_recommendations(
     service = get_recommendation_service()
     job_id = service.submit_async(
         user_id=current_user,
-        context=request.context,
-        k=request.k,
+        context=body.context,
+        k=body.k,
     )
     return {"job_id": job_id, "status": "pending"}
 

@@ -51,10 +51,27 @@ async def health_check():
             logger.warning(f"Vector DB check failed: {e}")
             vectordb_connected = False
 
-        # Determine overall status
-        if agents_loaded and vectordb_connected:
+        # Postgres health — quick SELECT 1 against the cached connection
+        postgres_connected = False
+        postgres_error = None
+        try:
+            from src.core.db import get_db
+            db = get_db()
+            if db.is_postgres:
+                with db.connect() as conn:
+                    conn.execute("SELECT 1")
+                postgres_connected = True
+            else:
+                postgres_connected = True  # SQLite fallback always reachable
+        except Exception as e:
+            postgres_error = str(e)
+            logger.warning(f"Postgres health check failed: {e}")
+
+        # Determine overall status — Postgres is now load-bearing for auth
+        components_ok = [agents_loaded, vectordb_connected, postgres_connected]
+        if all(components_ok):
             overall_status = "healthy"
-        elif agents_loaded or vectordb_connected:
+        elif any(components_ok):
             overall_status = "degraded"
         else:
             overall_status = "unhealthy"
@@ -68,6 +85,8 @@ async def health_check():
                 "agents_count": len(agents) if agents_loaded else 0,
                 "vectordb_type": "Qdrant" if os.environ.get("QDRANT_URL") else "ChromaDB",
                 "movie_count": movie_count if vectordb_connected and os.environ.get("QDRANT_URL") else None,
+                "postgres_connected": postgres_connected,
+                **({"postgres_error": postgres_error} if postgres_error else {}),
             },
         )
 

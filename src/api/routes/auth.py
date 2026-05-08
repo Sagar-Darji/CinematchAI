@@ -4,7 +4,7 @@ import re
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, field_validator
 
 from config.settings import get_settings
@@ -13,6 +13,8 @@ from src.core.auth.jwt import create_access_token
 from src.core.auth.password import hash_password, verify_password
 from src.services.user_service import get_user_service
 from src.utils.logging import get_logger
+
+from src.api.rate_limit import limiter
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
@@ -99,7 +101,8 @@ def _verify_google_token(access_token: str) -> dict:
 # ── Endpoints ──────────────────────────────────────────────────────────────────
 
 @router.post("/register", response_model=AuthResponse, status_code=status.HTTP_201_CREATED)
-async def register(req: RegisterRequest):
+@limiter.limit("8/hour")
+async def register(request: Request, req: RegisterRequest):
     """Create a new account with username + email + password."""
     svc = get_user_service()
 
@@ -128,7 +131,8 @@ async def register(req: RegisterRequest):
 
 
 @router.post("/login", response_model=AuthResponse)
-async def login(req: LoginRequest):
+@limiter.limit("10/minute")
+async def login(request: Request, req: LoginRequest):
     """Sign in with email or username + password."""
     svc = get_user_service()
     identifier = req.identifier.strip()
@@ -335,7 +339,8 @@ def _send_reset_email(to_email: str, reset_link: str) -> bool:
 
 
 @router.post("/forgot-password", status_code=200)
-async def forgot_password(req: ForgotPasswordRequest):
+@limiter.limit("5/15minutes")
+async def forgot_password(request: Request, req: ForgotPasswordRequest):
     """
     Request a password reset link.
     Always returns 200 (never reveals whether the email exists).

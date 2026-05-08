@@ -23,9 +23,12 @@ def _secret() -> str:
     Lambda. Local dev keeps the placeholder so first-run setup works.
     """
     s = get_settings()
-    secret = getattr(s, "jwt_secret", None) or os.environ.get("JWT_SECRET")
-    if secret:
-        return secret
+    raw = getattr(s, "jwt_secret", None) or os.environ.get("JWT_SECRET") or ""
+
+    # The pydantic-settings default for jwt_secret is also _DEV_FALLBACK, so we
+    # have to treat that string as "not configured" rather than as a real key.
+    if raw and raw != _DEV_FALLBACK:
+        return raw
 
     deployment_env = (
         os.environ.get("DEPLOYMENT_ENV")
