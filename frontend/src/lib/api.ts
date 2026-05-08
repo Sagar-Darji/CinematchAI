@@ -3,6 +3,52 @@ const BASE = API_URL ? `${API_URL}/api/v1` : '/api/v1'
 const AUTH_BASE = API_URL ? `${API_URL}/api/v1/auth` : '/api/v1/auth'
 const AUTH_BASE_FALLBACK = '/api/v1/auth'
 
+// ── Auth header helper ────────────────────────────────────────────────────────
+// We can't import the Zustand store directly (circular dep), so we read the
+// persisted JSON straight out of localStorage. The shape matches
+// useUserStore's persist({ name: 'cinematch-user' }) state.
+
+function readPersistedToken(): string {
+  try {
+    const raw = localStorage.getItem('cinematch-user')
+    if (!raw) return ''
+    const parsed = JSON.parse(raw) as { state?: { token?: string } }
+    return parsed?.state?.token ?? ''
+  } catch {
+    return ''
+  }
+}
+
+export function authHeaders(extra?: Record<string, string>): Record<string, string> {
+  const token = readPersistedToken()
+  return {
+    ...(extra ?? {}),
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  }
+}
+
+/**
+ * If a fetch returns 401, the token is invalid/expired. Clear persisted state
+ * and redirect to /login. Returns the response untouched so callers can still
+ * inspect non-401 statuses.
+ */
+function handle401IfNeeded(res: Response): Response {
+  if (res.status !== 401) return res
+  try {
+    localStorage.removeItem('cinematch-user')
+    localStorage.removeItem('cinematch-watchlist')
+    localStorage.removeItem('cinematch-history')
+  } catch { /* ignore */ }
+  // Avoid loops: only redirect if we're not already on a public auth route.
+  const path = window.location.pathname
+  const isAuthRoute = ['/login', '/register', '/forgot-password', '/reset-password'].includes(path)
+  if (!isAuthRoute) {
+    const next = encodeURIComponent(path + window.location.search)
+    window.location.href = `/login?next=${next}`
+  }
+  return res
+}
+
 function isNetworkError(err: unknown): boolean {
   if (!(err instanceof TypeError)) return false
   const message = err.message.toLowerCase()
@@ -205,11 +251,11 @@ export async function submitRecommendationJob(
   k: number,
   useHybrid = true,
 ): Promise<string> {
-  const res = await fetch(`${BASE}/recommendations/async`, {
+  const res = handle401IfNeeded(await fetch(`${BASE}/recommendations/async`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ user_id: userId, context, k, use_hybrid: useHybrid }),
-  })
+  }))
   if (!res.ok) {
     const text = await res.text()
     throw new Error(`Submit failed: ${text}`)
@@ -219,7 +265,9 @@ export async function submitRecommendationJob(
 }
 
 export async function pollJobStatus(jobId: string): Promise<JobStatus> {
-  const res = await fetch(`${BASE}/recommendations/result/${jobId}`)
+  const res = handle401IfNeeded(await fetch(`${BASE}/recommendations/result/${jobId}`, {
+    headers: authHeaders(),
+  }))
   if (!res.ok) throw new Error(`Poll failed: ${res.status}`)
   return res.json()
 }
@@ -269,13 +317,13 @@ export async function getMediaDetails(tmdbId: number, mediaType: MediaType = 'mo
 // ── Users ────────────────────────────────────────────────────────────────────
 
 export async function getUserProfile(userId: string): Promise<UserProfile | null> {
-  const res = await fetch(`${BASE}/users/${userId}`)
+  const res = handle401IfNeeded(await fetch(`${BASE}/users/${userId}`, { headers: authHeaders() }))
   if (!res.ok) return null
   return res.json()
 }
 
 export async function getAdminProfile(userId: string): Promise<AdminProfile | null> {
-  const res = await fetch(`${BASE}/admin/users/${userId}/profile`)
+  const res = handle401IfNeeded(await fetch(`${BASE}/admin/users/${userId}/profile`, { headers: authHeaders() }))
   if (!res.ok) return null
   return res.json()
 }
@@ -303,35 +351,35 @@ export async function onboardUser(
   userId: string,
   ratings: Record<string, number>,
 ): Promise<void> {
-  await fetch(`${BASE}/users/onboard`, {
+  handle401IfNeeded(await fetch(`${BASE}/users/onboard`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ user_id: userId, ratings }),
-  })
+  }))
 }
 
 export async function importLetterboxd(userId: string, csvContent: string): Promise<{ job_id: string; total_movies: number }> {
-  const res = await fetch(`${BASE}/users/import/letterboxd`, {
+  const res = handle401IfNeeded(await fetch(`${BASE}/users/import/letterboxd`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ user_id: userId, csv_content: csvContent }),
-  })
+  }))
   if (!res.ok) throw new Error(await res.text())
   return res.json()
 }
 
 export async function pollImportJob(jobId: string): Promise<{ status: string; progress: number; result?: unknown }> {
-  const res = await fetch(`${BASE}/users/jobs/${jobId}`)
+  const res = handle401IfNeeded(await fetch(`${BASE}/users/jobs/${jobId}`, { headers: authHeaders() }))
   if (!res.ok) throw new Error('Job not found')
   return res.json()
 }
 
 export async function submitFeedback(userId: string, movieId: number, rating: number): Promise<void> {
-  await fetch(`${BASE}/users/feedback`, {
+  handle401IfNeeded(await fetch(`${BASE}/users/feedback`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ user_id: userId, movie_id: String(movieId), rating }),
-  })
+  }))
 }
 
 /** Record an implicit interaction signal (fire-and-forget). */
@@ -346,11 +394,39 @@ export function recordInteraction(
     movie_id: String(movieId),
     action,
   })
-  // Use sendBeacon for dismissals so it survives tab close; fetch for others.
+  // sendBeacon doesn't support custom headers, so we can't attach the bearer.
+  // For dismissals we still fire it (server treats unauthenticated record as
+  // a no-op now). For others, normal fetch with auth header.
   if (action === 'dismissed' && navigator.sendBeacon) {
     navigator.sendBeacon(`${BASE}/users/interaction?${params}`)
   } else {
-    fetch(`${BASE}/users/interaction?${params}`, { method: 'POST' }).catch(() => {})
+    fetch(`${BASE}/users/interaction?${params}`, {
+      method: 'POST',
+      headers: authHeaders(),
+    }).catch(() => {})
+  }
+}
+
+// ── /me ─────────────────────────────────────────────────────────────────────
+
+export interface MeResponse {
+  user_id: string
+  email: string
+  auth_provider: string
+}
+
+/**
+ * Validate the persisted bearer token. Returns the user info on success.
+ * On 401 the api wrapper has already cleared local state and redirected;
+ * callers can treat null as "no valid session".
+ */
+export async function getCurrentUser(): Promise<MeResponse | null> {
+  try {
+    const res = handle401IfNeeded(await fetch(`${AUTH_BASE}/me`, { headers: authHeaders() }))
+    if (!res.ok) return null
+    return res.json()
+  } catch {
+    return null
   }
 }
 

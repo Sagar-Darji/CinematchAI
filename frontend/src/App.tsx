@@ -1,7 +1,9 @@
+import { useEffect } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { GoogleOAuthProvider } from '@react-oauth/google'
 import { Layout } from '@/components/layout/Layout'
 import { ProtectedRoute } from '@/components/auth/ProtectedRoute'
+import { getCurrentUser } from '@/lib/api'
 import Home from '@/pages/Home'
 import Login from '@/pages/Login'
 import Register from '@/pages/Register'
@@ -23,7 +25,16 @@ const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID ?? ''
 const GOOGLE_ENABLED = GOOGLE_CLIENT_ID.length > 0
 
 export default function App() {
-  const { userId, isOnboarded } = useUserStore()
+  const { userId, isOnboarded, token } = useUserStore()
+
+  // On boot: if we have a persisted token, ping /me to validate it. The api
+  // wrapper handles 401 by clearing local state and bouncing to /login, so we
+  // don't need to do anything with the result here.
+  useEffect(() => {
+    if (token) {
+      getCurrentUser().catch(() => { /* handled by 401 interceptor */ })
+    }
+  }, [token])
 
   const routes = (
     <BrowserRouter>

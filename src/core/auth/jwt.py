@@ -1,5 +1,6 @@
 """JWT creation and verification."""
 
+import os
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -10,11 +11,34 @@ from config.settings import get_settings
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_DAYS = 30
 
+_DEV_FALLBACK = "cinematch-dev-secret-change-in-prod"
+
 
 def _secret() -> str:
+    """Resolve the JWT signing secret.
+
+    In production (DEPLOYMENT_ENV=production) we refuse to start without an
+    explicitly-set JWT_SECRET — silently signing tokens with the dev
+    placeholder used to be a vector for forging tokens against the deployed
+    Lambda. Local dev keeps the placeholder so first-run setup works.
+    """
     s = get_settings()
-    secret = getattr(s, "jwt_secret", None) or "cinematch-dev-secret-change-in-prod"
-    return secret
+    secret = getattr(s, "jwt_secret", None) or os.environ.get("JWT_SECRET")
+    if secret:
+        return secret
+
+    deployment_env = (
+        os.environ.get("DEPLOYMENT_ENV")
+        or getattr(s, "deployment_env", None)
+        or "development"
+    ).lower()
+    if deployment_env == "production":
+        raise RuntimeError(
+            "JWT_SECRET is not configured. Refusing to use the development "
+            "fallback in production. Set the JWT_SECRET environment variable "
+            "to a long random string (e.g. `openssl rand -hex 32`)."
+        )
+    return _DEV_FALLBACK
 
 
 def create_access_token(user_id: str, email: Optional[str] = None) -> str:

@@ -27,9 +27,11 @@ data/cache/
 logs/
 *.log
 
-# Environment
+# Environment — never commit real .env files. Only .env*.example is allowed.
 .env
-.env.local
+.env.*
+!.env.example
+!.env.aws.example
 
 # IDE
 .vscode/

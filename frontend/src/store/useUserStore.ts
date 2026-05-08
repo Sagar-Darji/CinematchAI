@@ -1,5 +1,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+import { useWatchlistStore } from './useWatchlistStore'
+import { useHistoryStore } from './useHistoryStore'
 
 interface UserState {
   userId: string
@@ -32,7 +34,13 @@ export const useUserStore = create<UserState>()(
       setOnboarded: (v) => set({ isOnboarded: v }),
       setRatingCount: (n) => set({ ratingCount: n }),
       setHasSeenTour: (v) => set({ hasSeenTour: v }),
-      logout: () => set({ userId: '', email: '', token: '', isOnboarded: false, ratingCount: 0, hasSeenTour: false }),
+      logout: () => {
+        // Cascade-clear other persisted stores so private data does not leak
+        // to the next user on a shared device.
+        try { useWatchlistStore.getState().clear() } catch { /* ignore */ }
+        try { useHistoryStore.getState().clear() } catch { /* ignore */ }
+        set({ userId: '', email: '', token: '', isOnboarded: false, ratingCount: 0, hasSeenTour: false })
+      },
     }),
     { name: 'cinematch-user' },
   ),

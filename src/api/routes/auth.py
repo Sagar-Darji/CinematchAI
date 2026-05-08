@@ -4,10 +4,11 @@ import re
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, field_validator
 
 from config.settings import get_settings
+from src.api.deps import get_current_user
 from src.core.auth.jwt import create_access_token
 from src.core.auth.password import hash_password, verify_password
 from src.services.user_service import get_user_service
@@ -250,14 +251,18 @@ async def rename_user(req: RenameUserRequest):
     new_token = create_access_token(req.new_username, email)
     logger.info(f"User renamed: {req.old_user_id} → {req.new_username}")
     return AuthResponse(token=new_token, user_id=req.new_username, email=email, is_new_user=True)
-async def me(token: str):
-    """Validate a token and return current user info."""
-    from src.core.auth.jwt import decode_access_token
-    payload = decode_access_token(token)
-    if not payload:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+
+@router.get("/me")
+async def me(current_user: str = Depends(get_current_user)):
+    """Validate the bearer token and return current user info.
+
+    Used by the frontend on app boot to confirm the persisted token still
+    works. Returns 401 if the token is missing/expired (handled by the
+    dependency); 404 if the user disappeared from the DB.
+    """
     svc = get_user_service()
-    record = svc.get_auth_record(payload["sub"])
+    record = svc.get_auth_record(current_user)
     if not record:
         raise HTTPException(status_code=404, detail="User not found")
     return {

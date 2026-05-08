@@ -2,8 +2,9 @@
 
 from typing import Optional
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
+from src.api.deps import get_current_user
 from src.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -75,8 +76,16 @@ async def get_trace(trace_id: str):
 
 
 @router.get("/users/{user_id}/profile")
-async def get_user_profile(user_id: str):
-    """Get real user profile data: ratings, preferences, import history."""
+async def get_user_profile(user_id: str, current_user: str = Depends(get_current_user)):
+    """Get real user profile data: ratings, preferences, import history.
+
+    A user can only read their own profile via this endpoint.
+    """
+    if user_id != current_user:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only view your own profile",
+        )
     from src.services.user_service import get_user_service
     from src.services.job_service import get_job_service
 

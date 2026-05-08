@@ -1,7 +1,8 @@
 """User Management API Routes."""
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 
+from src.api.deps import get_current_user
 from src.api.schemas.request import (
     FeedbackRequest,
     LetterboxdImportRequest,
@@ -33,25 +34,28 @@ router = APIRouter(prefix="/users", tags=["users"])
         500: {"model": ErrorResponse},
     },
 )
-async def onboard_user(request: OnboardingRequest):
+async def onboard_user(
+    request: OnboardingRequest,
+    current_user: str = Depends(get_current_user),
+):
     """
-    Onboard a new user (cold-start).
+    Onboard the current user (cold-start).
 
-    - **user_id**: New user identifier
     - **ratings**: Initial ratings (movie_id -> rating). Min 5 required.
     - **preferences**: Optional explicit preferences (favorite_genres, etc.)
 
+    The user_id is taken from the authenticated session, NOT the request body.
     Creates a user profile and returns initial recommendations.
     """
     logger.info(
-        f"POST /users/onboard: user_id={request.user_id}, {len(request.ratings)} ratings"
+        f"POST /users/onboard: user_id={current_user}, {len(request.ratings)} ratings"
     )
 
     try:
         service = get_onboarding_service()
 
         response = service.onboard_user(
-            user_id=request.user_id,
+            user_id=current_user,
             ratings=request.ratings,
             preferences=request.preferences,
         )
@@ -81,33 +85,35 @@ async def onboard_user(request: OnboardingRequest):
         500: {"model": ErrorResponse},
     },
 )
-async def submit_feedback(request: FeedbackRequest):
+async def submit_feedback(
+    request: FeedbackRequest,
+    current_user: str = Depends(get_current_user),
+):
     """
-    Submit user feedback (rating).
+    Submit a rating for the current user.
 
-    - **user_id**: User identifier
     - **movie_id**: Movie TMDB ID
     - **rating**: Rating value (0.5 to 5.0)
     - **watched**: Whether user watched the movie (default: True)
 
-    Updates user profile with new rating.
+    The user_id is taken from the authenticated session, NOT the request body.
     """
     logger.info(
-        f"POST /users/feedback: user_id={request.user_id}, movie_id={request.movie_id}, rating={request.rating}"
+        f"POST /users/feedback: user_id={current_user}, movie_id={request.movie_id}, rating={request.rating}"
     )
 
     try:
         user_service = get_user_service()
 
         user_service.add_rating(
-            user_id=request.user_id,
+            user_id=current_user,
             movie_id=request.movie_id,
             rating=request.rating,
             watched=request.watched,
         )
 
         response = FeedbackResponse(
-            user_id=request.user_id,
+            user_id=current_user,
             movie_id=request.movie_id,
             rating=request.rating,
             profile_updated=True,
@@ -136,22 +142,24 @@ async def submit_feedback(request: FeedbackRequest):
     responses={400: {"model": ErrorResponse}},
 )
 async def record_interaction(
-    user_id: str,
     movie_id: str,
     action: str,
+    current_user: str = Depends(get_current_user),
+    user_id: str | None = None,  # accepted but ignored — auth source-of-truth is current_user
 ):
     """Record an implicit interaction signal (clicked / watched / dismissed).
 
-    Stores a low-weight implicit rating if the user hasn't explicitly rated
-    the movie, feeding the collaborative filtering and profile signals.
+    The user_id is taken from the authenticated session. The legacy `user_id`
+    query parameter is accepted (for backward compatibility) but ignored.
     """
+    _ = user_id  # explicitly unused
     if action not in ("clicked", "watched", "dismissed"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="action must be one of: clicked, watched, dismissed",
         )
     try:
-        get_user_service().record_feedback(user_id=user_id, movie_id=movie_id, action=action)
+        get_user_service().record_feedback(user_id=current_user, movie_id=movie_id, action=action)
     except Exception as e:
         logger.warning(f"Interaction record failed (non-critical): {e}")
 
@@ -210,8 +218,16 @@ async def check_user_exists(user_id: str):
     "/{user_id}",
     status_code=status.HTTP_200_OK,
 )
-async def get_user(user_id: str):
-    """Get basic user profile: rating count, genre breakdown, embedding status."""
+async def get_user(user_id: str, current_user: str = Depends(get_current_user)):
+    """Get basic user profile: rating count, genre breakdown, embedding status.
+
+    Only the authenticated user can read their own profile.
+    """
+    if user_id != current_user:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only view your own profile",
+        )
     user_service = get_user_service()
     ratings = user_service.get_user_ratings(user_id)
 
@@ -251,22 +267,29 @@ async def get_user(user_id: str):
         500: {"model": ErrorResponse},
     },
 )
-async def update_context(user_id: str, request: UpdateContextRequest):
+async def update_context(
+    user_id: str,
+    request: UpdateContextRequest,
+    current_user: str = Depends(get_current_user),
+):
     """
     Update user's current context.
 
-    - **user_id**: User identifier (path parameter)
-    - **context**: Updated context (time_of_day, mood, companion, etc.)
-
-    Updates user's context for future recommendations.
+    Only the authenticated user can update their own context.
     """
+    if user_id != current_user:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only update your own context",
+        )
+
     logger.info(f"PUT /users/{user_id}/context: {request.context}")
 
     try:
         user_service = get_user_service()
 
         user_service.update_context(
-            user_id=request.user_id,
+            user_id=current_user,
             context=request.context,
         )
 
@@ -291,6 +314,7 @@ async def update_context(user_id: str, request: UpdateContextRequest):
 async def import_letterboxd(
     request: LetterboxdImportRequest,
     background_tasks: BackgroundTasks,
+    current_user: str = Depends(get_current_user),
 ):
     """
     Import user ratings from Letterboxd CSV export (ASYNC).
@@ -306,7 +330,7 @@ async def import_letterboxd(
     - Progress tracking
     - Handles 100s of ratings without blocking
     """
-    logger.info(f"POST /users/import/letterboxd: user_id={request.user_id}")
+    logger.info(f"POST /users/import/letterboxd: user_id={current_user}")
 
     try:
         import pandas as pd
@@ -321,7 +345,7 @@ async def import_letterboxd(
         job_service = get_job_service()
         job_id = job_service.create_job(
             job_type=JobType.LETTERBOXD_IMPORT,
-            user_id=request.user_id,
+            user_id=current_user,
             total=total_movies,
         )
 
@@ -329,15 +353,15 @@ async def import_letterboxd(
         background_tasks.add_task(
             _import_letterboxd_background,
             job_id=job_id,
-            user_id=request.user_id,
+            user_id=current_user,
             csv_content=request.csv_content,
         )
 
-        logger.info(f"Created Letterboxd import job {job_id} for user {request.user_id} ({total_movies} movies)")
+        logger.info(f"Created Letterboxd import job {job_id} for user {current_user} ({total_movies} movies)")
 
         return {
             "job_id": job_id,
-            "user_id": request.user_id,
+            "user_id": current_user,
             "total_movies": total_movies,
             "status": "pending",
             "message": f"Import started. Poll GET /api/v1/users/jobs/{job_id} for status.",
@@ -423,15 +447,12 @@ def _import_letterboxd_background(job_id: str, user_id: str, csv_content: str):
     "/jobs/{job_id}",
     status_code=status.HTTP_200_OK,
 )
-async def get_job_status(job_id: str):
+async def get_job_status(job_id: str, current_user: str = Depends(get_current_user)):
     """
-    Get job status by ID.
-
-    - **job_id**: Job identifier
+    Get job status by ID. Only the job's owner may poll it.
 
     Returns job status, progress (0-100), and result (if completed).
-
-    **Poll this endpoint every 2-3 seconds to track progress.**
+    Poll this endpoint every 2-3 seconds to track progress.
     """
     logger.debug(f"GET /users/jobs/{job_id}")
 
@@ -442,6 +463,14 @@ async def get_job_status(job_id: str):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Job {job_id} not found",
+        )
+
+    # Only the owner can read their job. Treat 'no owner recorded' as legacy/public.
+    job_user = job.get("user_id") if isinstance(job, dict) else None
+    if job_user and job_user != current_user:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only view your own jobs",
         )
 
     return job
