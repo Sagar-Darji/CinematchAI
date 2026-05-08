@@ -150,7 +150,7 @@ export default function Home() {
   }
 
   // ── Logged-in OTT hub ────────────────────────────────────────────────────
-  const heroMovie = rails.trending[0] ?? null
+  const heroMovies = rails.trending.slice(0, 5)
   const history = useHistoryStore((s) => s.items)
   const continueWatching: Movie[] = history.map((h) => ({
     tmdb_id: h.tmdbId,
@@ -162,7 +162,7 @@ export default function Home() {
 
   return (
     <div className="min-h-screen pb-8" style={{ background: 'var(--bg-primary)' }}>
-      <Hero movie={heroMovie} />
+      <Hero movies={heroMovies} />
 
       <div className="mt-2">
         {continueWatching.length > 0 && (

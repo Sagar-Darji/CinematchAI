@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import { PlayCircle, Info } from 'lucide-react'
 import type { Movie, MediaType } from '@/lib/api'
@@ -6,7 +6,8 @@ import { FullScreenPlayer } from '@/components/ui/MovieCard'
 import { useHistoryStore } from '@/store/useHistoryStore'
 
 interface HeroProps {
-  movie: Movie | null
+  /** Up to ~5 candidates; the hero auto-rotates through them every 8s. */
+  movies: Movie[]
 }
 
 function backdropUrl(path: string | null | undefined) {
@@ -19,8 +20,37 @@ function posterUrl(path: string | null | undefined) {
   return `https://image.tmdb.org/t/p/w780${path}`
 }
 
-export function Hero({ movie }: HeroProps) {
+const ROTATION_INTERVAL_MS = 8000
+
+export function Hero({ movies }: HeroProps) {
   const [playerOpen, setPlayerOpen] = useState(false)
+  const [index, setIndex] = useState(0)
+  const [paused, setPaused] = useState(false)
+  const intervalRef = useRef<number | null>(null)
+
+  // Cap to first 5 — anything beyond is noise.
+  const candidates = movies.slice(0, 5)
+  const movie = candidates[index] ?? null
+
+  // Auto-rotate every 8s. Pauses while the player is open or the user is
+  // hovering. Honors prefers-reduced-motion (skips rotation entirely).
+  useEffect(() => {
+    if (candidates.length <= 1) return
+    if (paused || playerOpen) return
+    if (typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return
+
+    intervalRef.current = window.setInterval(() => {
+      setIndex((i) => (i + 1) % candidates.length)
+    }, ROTATION_INTERVAL_MS)
+    return () => {
+      if (intervalRef.current) window.clearInterval(intervalRef.current)
+    }
+  }, [candidates.length, paused, playerOpen])
+
+  // If the candidates array shrinks (rare), keep index in bounds.
+  useEffect(() => {
+    if (index >= candidates.length && candidates.length > 0) setIndex(0)
+  }, [candidates.length, index])
 
   if (!movie) {
     return (
@@ -44,6 +74,10 @@ export function Hero({ movie }: HeroProps) {
       <section
         className="relative w-full overflow-hidden"
         style={{ height: 'min(70vh, 520px)', minHeight: '380px' }}
+        onPointerEnter={() => setPaused(true)}
+        onPointerLeave={() => setPaused(false)}
+        aria-roledescription="carousel"
+        aria-label="Featured titles"
       >
         {bg && (
           <div
@@ -129,6 +163,35 @@ export function Hero({ movie }: HeroProps) {
             </div>
           </div>
         </div>
+
+        {/* Rotation indicator dots */}
+        {candidates.length > 1 && (
+          <div
+            className="absolute bottom-3 right-4 md:right-10 flex items-center gap-1.5"
+            role="tablist"
+            aria-label="Featured slide selector"
+          >
+            {candidates.map((_, i) => (
+              <button
+                key={i}
+                role="tab"
+                aria-selected={i === index}
+                aria-label={`Slide ${i + 1} of ${candidates.length}`}
+                onClick={() => setIndex(i)}
+                className="transition-all"
+                style={{
+                  height: 4,
+                  width: i === index ? 22 : 8,
+                  borderRadius: 2,
+                  background: i === index ? 'var(--accent-gold)' : 'rgba(255,255,255,0.4)',
+                  border: 'none',
+                  cursor: 'pointer',
+                  padding: 0,
+                }}
+              />
+            ))}
+          </div>
+        )}
       </section>
 
       {playerOpen && tmdbId > 0 && (

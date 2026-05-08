@@ -51,7 +51,7 @@ function PosterCard({
   const barColor = scoreColor(rec.score)
 
   return (
-    <div style={getCardStyle(offset)} onClick={abs(offset) > 0 ? onClick : undefined}>
+    <div data-reduced-motion-flat style={getCardStyle(offset)} onClick={abs(offset) > 0 ? onClick : undefined}>
       <div
         className="relative overflow-hidden rounded-xl"
         style={{

@@ -8,9 +8,11 @@
   --accent-gold: #f5c518;
   --accent-red: #e50914;
   --text-primary: #ffffff;
-  --text-muted: #8a8a9a;
-  --border: #1e1e2e;
-  --border-hover: #2e2e4e;
+  /* Bumped from #8a8a9a (5.2:1) to #9da0b3 (~6.8:1) — passes WCAG AA + AAA on bg-primary */
+  --text-muted: #9da0b3;
+  /* Bumped from #1e1e2e to #2a2a3e so dividers are visible at lower contrast settings */
+  --border: #2a2a3e;
+  --border-hover: #3a3a52;
 }
 
 * { box-sizing: border-box; }
@@ -39,6 +41,48 @@ html, body, #root {
 a, button, [role="button"] {
   -webkit-tap-highlight-color: transparent;
   touch-action: manipulation;
+}
+
+/* ── Keyboard focus indicator ───────────────────────────────────────────────
+   :focus-visible only fires on keyboard navigation (Tab/Enter), so mouse
+   clicks don't get the ring. Required for WCAG 2.1 AA (2.4.7 Focus Visible). */
+:focus-visible {
+  outline: 2px solid var(--accent-gold);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+button:focus-visible,
+a:focus-visible,
+[role="button"]:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--accent-gold);
+  outline-offset: 2px;
+}
+/* Don't override outline for elements that already have a strong focus style */
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline-offset: 0;
+  box-shadow: 0 0 0 2px rgba(245, 197, 24, 0.35);
+}
+
+/* ── Reduced motion ─────────────────────────────────────────────────────────
+   Honor the OS-level "reduce motion" setting (Settings → Accessibility on
+   iOS/macOS, prefers-reduced-motion: reduce in DevTools rendering). FilmStack
+   3D rotation, pulses, and fades are vestibular triggers for some users. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001s !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001s !important;
+    scroll-behavior: auto !important;
+  }
+  /* FilmStack uses transform: rotateY(...) and scale(...) inline; flatten them. */
+  [data-reduced-motion-flat] {
+    transform: none !important;
+  }
 }
 
 /* Scrollbar */
