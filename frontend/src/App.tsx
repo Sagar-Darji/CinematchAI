@@ -20,6 +20,8 @@ import Search from '@/pages/Search'
 import MovieDetail from '@/pages/MovieDetail'
 import Watchlist from '@/pages/Watchlist'
 import { useUserStore } from '@/store/useUserStore'
+import { useWatchlistStore } from '@/store/useWatchlistStore'
+import { useHistoryStore } from '@/store/useHistoryStore'
 
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID ?? ''
 const GOOGLE_ENABLED = GOOGLE_CLIENT_ID.length > 0
@@ -29,10 +31,14 @@ export default function App() {
 
   // On boot: if we have a persisted token, ping /me to validate it. The api
   // wrapper handles 401 by clearing local state and bouncing to /login, so we
-  // don't need to do anything with the result here.
+  // don't need to do anything with the result here. Also sync watchlist and
+  // history from the backend so cross-device state and cache-wiped users
+  // get their data back.
   useEffect(() => {
     if (hasHydrated && token) {
       getCurrentUser().catch(() => { /* handled by 401 interceptor */ })
+      useWatchlistStore.getState().syncFromServer().catch(() => { /* offline */ })
+      useHistoryStore.getState().syncFromServer().catch(() => { /* offline */ })
     }
   }, [hasHydrated, token])
 

@@ -12,7 +12,7 @@ from prometheus_fastapi_instrumentator import Instrumentator
 import time
 import uuid
 
-from src.api.routes import admin, auth, groups, health, movie_web, movies, news, recommendations, users
+from src.api.routes import admin, auth, groups, health, history, movie_web, movies, news, recommendations, users, watchlist
 from src.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -200,6 +200,8 @@ app.include_router(movies.router, prefix="/api/v1")
 app.include_router(admin.router, prefix="/api/v1")
 app.include_router(news.router, prefix="/api/v1")
 app.include_router(movie_web.router, prefix="/api/v1")
+app.include_router(watchlist.router, prefix="/api/v1")
+app.include_router(history.router, prefix="/api/v1")
 
 # ── Prometheus metrics endpoint at /metrics ───────────────────────────────────
 # Exposes: request count, latency histograms, in-flight requests, response sizes

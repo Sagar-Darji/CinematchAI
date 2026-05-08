@@ -407,6 +407,132 @@ export function recordInteraction(
   }
 }
 
+// ── Watchlist (server-side) ──────────────────────────────────────────────────
+
+export interface ServerWatchlistItem {
+  user_id: string
+  tmdb_id: number
+  media_type: 'movie' | 'tv'
+  title: string
+  poster_path?: string | null
+  year?: number | null
+  added_at: string  // ISO timestamp from Postgres
+}
+
+export async function listWatchlist(): Promise<ServerWatchlistItem[]> {
+  try {
+    const res = handle401IfNeeded(await fetch(`${BASE}/watchlist`, { headers: authHeaders() }))
+    if (!res.ok) return []
+    const data = await res.json()
+    return data.items ?? []
+  } catch {
+    return []
+  }
+}
+
+export async function addToWatchlistRemote(item: {
+  tmdbId: number
+  mediaType: 'movie' | 'tv'
+  title: string
+  posterPath?: string
+  year?: number
+}): Promise<void> {
+  try {
+    handle401IfNeeded(await fetch(`${BASE}/watchlist`, {
+      method: 'POST',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({
+        tmdb_id: item.tmdbId,
+        media_type: item.mediaType,
+        title: item.title,
+        poster_path: item.posterPath ?? null,
+        year: item.year ?? null,
+      }),
+    }))
+  } catch { /* offline / unauth — local copy survives */ }
+}
+
+export async function removeFromWatchlistRemote(
+  tmdbId: number,
+  mediaType: 'movie' | 'tv',
+): Promise<void> {
+  try {
+    handle401IfNeeded(await fetch(`${BASE}/watchlist/${mediaType}/${tmdbId}`, {
+      method: 'DELETE',
+      headers: authHeaders(),
+    }))
+  } catch { /* swallow */ }
+}
+
+export async function clearWatchlistRemote(): Promise<void> {
+  try {
+    handle401IfNeeded(await fetch(`${BASE}/watchlist`, {
+      method: 'DELETE',
+      headers: authHeaders(),
+    }))
+  } catch { /* swallow */ }
+}
+
+// ── History (server-side) ────────────────────────────────────────────────────
+
+export interface ServerHistoryItem {
+  user_id: string
+  tmdb_id: number
+  media_type: 'movie' | 'tv'
+  title: string
+  poster_path?: string | null
+  year?: number | null
+  last_season?: number | null
+  last_episode?: number | null
+  watched_at: string
+}
+
+export async function listHistory(limit = 60): Promise<ServerHistoryItem[]> {
+  try {
+    const res = handle401IfNeeded(await fetch(`${BASE}/history?limit=${limit}`, { headers: authHeaders() }))
+    if (!res.ok) return []
+    const data = await res.json()
+    return data.items ?? []
+  } catch {
+    return []
+  }
+}
+
+export async function recordWatchHistoryRemote(item: {
+  tmdbId: number
+  mediaType: 'movie' | 'tv'
+  title: string
+  posterPath?: string
+  year?: number
+  lastSeason?: number
+  lastEpisode?: number
+}): Promise<void> {
+  try {
+    handle401IfNeeded(await fetch(`${BASE}/history`, {
+      method: 'POST',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({
+        tmdb_id: item.tmdbId,
+        media_type: item.mediaType,
+        title: item.title,
+        poster_path: item.posterPath ?? null,
+        year: item.year ?? null,
+        last_season: item.lastSeason ?? null,
+        last_episode: item.lastEpisode ?? null,
+      }),
+    }))
+  } catch { /* swallow */ }
+}
+
+export async function clearHistoryRemote(): Promise<void> {
+  try {
+    handle401IfNeeded(await fetch(`${BASE}/history`, {
+      method: 'DELETE',
+      headers: authHeaders(),
+    }))
+  } catch { /* swallow */ }
+}
+
 // ── /me ─────────────────────────────────────────────────────────────────────
 
 export interface MeResponse {
