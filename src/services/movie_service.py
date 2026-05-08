@@ -157,6 +157,79 @@ class MovieService:
             logger.error(f"Failed to fetch {media_type} {tmdb_id}: {e}")
             return None
 
+    def get_detail_extras(self, tmdb_id: int, media_type: str = "movie") -> Dict[str, Any]:
+        """Fetch trailer key, top cast (with profile photos), and similar titles
+        for a single TMDB id. Returns a plain dict so it can be merged into the
+        MovieResponse without touching the Movie domain model.
+
+        Falls back gracefully on partial errors — keys may be missing or empty.
+        Cached for 24h alongside the base detail fetch.
+        """
+        media_type = self._normalize_media_type(media_type)
+        cache_key = f"detail_extras_{media_type}_{tmdb_id}"
+        cached = cache.get(cache_key)
+        if cached:
+            return cached
+
+        result: Dict[str, Any] = {"trailer_key": None, "cast": [], "similar": []}
+        try:
+            url = f"{self.base_url}/{media_type}/{tmdb_id}"
+            params = {
+                "api_key": self.api_key,
+                "append_to_response": "videos,similar,credits",
+            }
+            response = self._session.get(url, params=params, timeout=10)
+            if response.status_code != 200:
+                return result
+            data = response.json()
+
+            # Trailer: prefer YouTube + Trailer; fall back to Teaser; pick highest-quality
+            videos = (data.get("videos") or {}).get("results", []) or []
+            yt_videos = [v for v in videos if (v.get("site") == "YouTube") and v.get("key")]
+            yt_videos.sort(
+                key=lambda v: (
+                    0 if v.get("type") == "Trailer" else 1 if v.get("type") == "Teaser" else 2,
+                    -(v.get("size") or 0),
+                    not v.get("official", False),
+                )
+            )
+            if yt_videos:
+                result["trailer_key"] = yt_videos[0].get("key")
+
+            # Top cast (richer than the 5-name shortlist on Movie.metadata.cast)
+            cast = ((data.get("credits") or {}).get("cast") or [])[:10]
+            result["cast"] = [
+                {
+                    "name": c.get("name"),
+                    "character": c.get("character"),
+                    "profile_path": c.get("profile_path"),
+                    "order": c.get("order"),
+                }
+                for c in cast
+                if c.get("name")
+            ]
+
+            # Similar titles — top 12
+            similar_results = ((data.get("similar") or {}).get("results") or [])[:12]
+            result["similar"] = [
+                {
+                    "tmdb_id": int(s["id"]),
+                    "title": s.get("title") or s.get("name") or "Unknown",
+                    "year": self._extract_year(s.get("release_date") or s.get("first_air_date")),
+                    "poster_path": s.get("poster_path"),
+                    "vote_average": s.get("vote_average"),
+                    "media_type": media_type,
+                }
+                for s in similar_results
+                if s.get("id")
+            ]
+
+            cache.set(cache_key, result, expire=86400)
+        except Exception as e:
+            logger.warning(f"Failed to fetch detail extras for {media_type}/{tmdb_id}: {e}")
+
+        return result
+
     def get_movies_batch(
         self, tmdb_ids: List[int], max_workers: int = 5
     ) -> List[Optional["Movie"]]:

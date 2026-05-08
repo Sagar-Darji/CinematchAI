@@ -174,6 +174,22 @@ export interface Season {
   poster_path?: string
 }
 
+export interface CastMember {
+  name: string
+  character?: string | null
+  profile_path?: string | null
+  order?: number | null
+}
+
+export interface SimilarTitle {
+  tmdb_id: number
+  title: string
+  year?: number | null
+  poster_path?: string | null
+  vote_average?: number | null
+  media_type: MediaType
+}
+
 export interface Movie {
   tmdb_id: number
   id?: number
@@ -182,6 +198,7 @@ export interface Movie {
   genres?: string[]
   overview?: string
   poster_path?: string
+  backdrop_path?: string
   vote_average?: number
   director?: string
   creator?: string
@@ -191,6 +208,10 @@ export interface Movie {
   season_count?: number
   episode_count?: number
   seasons?: Season[]
+  // Populated on /movies/{tmdb_id} detail responses only:
+  trailer_key?: string | null
+  cast?: CastMember[]
+  similar?: SimilarTitle[]
 }
 
 export interface Recommendation {

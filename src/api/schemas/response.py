@@ -15,6 +15,26 @@ class SeasonResponse(BaseModel):
     poster_path: Optional[str] = None
 
 
+class CastMember(BaseModel):
+    """One cast member as returned by TMDB credits."""
+
+    name: str
+    character: Optional[str] = None
+    profile_path: Optional[str] = None
+    order: Optional[int] = None
+
+
+class SimilarTitle(BaseModel):
+    """Trimmed title shape for the 'More like this' rail on detail pages."""
+
+    tmdb_id: int
+    title: str
+    year: Optional[int] = None
+    poster_path: Optional[str] = None
+    vote_average: Optional[float] = None
+    media_type: str = "movie"
+
+
 class MovieResponse(BaseModel):
     """Movie or TV information in API response."""
 
@@ -27,12 +47,19 @@ class MovieResponse(BaseModel):
     director: Optional[str]
     creator: Optional[str] = None
     poster_path: Optional[str]
+    backdrop_path: Optional[str] = None
     runtime: Optional[int] = None
     original_language: Optional[str] = None
     media_type: str = "movie"
     season_count: Optional[int] = None
     episode_count: Optional[int] = None
     seasons: List[SeasonResponse] = Field(default_factory=list)
+    # ── Detail-page enrichment (only /movies/{tmdb_id} populates these) ──
+    trailer_key: Optional[str] = Field(
+        default=None, description="YouTube key for the best Trailer/Teaser"
+    )
+    cast: List[CastMember] = Field(default_factory=list)
+    similar: List[SimilarTitle] = Field(default_factory=list)
 
 
 class RecommendationItemResponse(BaseModel):

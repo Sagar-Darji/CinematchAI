@@ -1,15 +1,19 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
+import { createPortal } from 'react-dom'
 import {
   Star,
   Calendar,
   Clock,
   PlayCircle,
+  Film,
   ThumbsUp,
   ThumbsDown,
   Bookmark,
   BookmarkCheck,
   ArrowLeft,
+  Share2,
+  X,
 } from 'lucide-react'
 import {
   getMediaDetails,
@@ -24,6 +28,7 @@ import { useWatchlistStore } from '@/store/useWatchlistStore'
 import { useHistoryStore } from '@/store/useHistoryStore'
 import { FullScreenPlayer } from '@/components/ui/MovieCard'
 import { PageLoader } from '@/components/ui/PageLoader'
+import { Rail } from '@/components/home/Rail'
 
 export default function MovieDetail() {
   const { mediaType, tmdbId } = useParams<{ mediaType: string; tmdbId: string }>()
@@ -36,6 +41,8 @@ export default function MovieDetail() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(false)
   const [showPlayer, setShowPlayer] = useState(false)
+  const [showTrailer, setShowTrailer] = useState(false)
+  const [shareToast, setShareToast] = useState<string | null>(null)
   const [rated, setRated] = useState<'up' | 'down' | null>(null)
   const [overviewExpanded, setOverviewExpanded] = useState(false)
 
@@ -91,6 +98,27 @@ export default function MovieDetail() {
     }
     setShowPlayer(true)
     if (!isTv) recordInteraction(userId, id, 'clicked')
+  }
+
+  const handleShare = async () => {
+    const url = `${window.location.origin}/title/${mt}/${id}`
+    const data = {
+      title: movie?.title ?? 'CineMatch AI',
+      text: movie?.title ? `Watch ${movie.title} on CineMatch AI` : 'CineMatch AI',
+      url,
+    }
+    try {
+      // Web Share API on Android Chrome / iOS Safari
+      if (typeof navigator !== 'undefined' && navigator.share) {
+        await navigator.share(data)
+        return
+      }
+      await navigator.clipboard.writeText(url)
+      setShareToast('Link copied to clipboard')
+      setTimeout(() => setShareToast(null), 2400)
+    } catch {
+      // User cancelled — no-op
+    }
   }
 
   const handleWatchlist = () => {
@@ -269,6 +297,22 @@ export default function MovieDetail() {
               >
                 <PlayCircle size={15} /> {isTv ? 'Watch' : 'Watch Now'}
               </button>
+              {movie.trailer_key && (
+                <button
+                  onClick={() => setShowTrailer(true)}
+                  aria-label="Play trailer"
+                  className="flex items-center gap-1.5 px-3 py-2 md:px-4 md:py-2.5 rounded-xl font-bold text-xs md:text-sm"
+                  style={{
+                    background: 'var(--bg-overlay)',
+                    color: 'var(--text-primary)',
+                    border: '1px solid var(--border)',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <Film size={15} />
+                  <span className="hidden sm:inline">Trailer</span>
+                </button>
+              )}
               <button
                 onClick={handleWatchlist}
                 aria-label={inWatchlist ? 'Remove from watchlist' : 'Add to watchlist'}
@@ -282,6 +326,20 @@ export default function MovieDetail() {
               >
                 {inWatchlist ? <BookmarkCheck size={15} /> : <Bookmark size={15} />}
                 <span className="hidden sm:inline">{inWatchlist ? 'In Watchlist' : 'Watchlist'}</span>
+              </button>
+              <button
+                onClick={handleShare}
+                aria-label="Share"
+                className="flex items-center justify-center w-9 h-9 md:w-auto md:h-auto md:px-3 md:py-2.5 rounded-xl text-xs font-medium md:gap-1.5"
+                style={{
+                  background: 'var(--bg-overlay)',
+                  color: 'var(--text-muted)',
+                  border: '1px solid var(--border)',
+                  cursor: 'pointer',
+                }}
+              >
+                <Share2 size={14} />
+                <span className="hidden md:inline">Share</span>
               </button>
               {!isTv && userId && (
                 <>
@@ -361,7 +419,74 @@ export default function MovieDetail() {
             </button>
           </div>
         )}
+
+        {/* Cast strip */}
+        {(movie.cast?.length ?? 0) > 0 && (
+          <div className="max-w-5xl mx-auto mt-6">
+            <h3
+              className="text-[10px] md:text-xs font-bold uppercase tracking-[0.2em] mb-2.5"
+              style={{ color: 'var(--accent-gold)' }}
+            >
+              Cast
+            </h3>
+            <div className="flex gap-2.5 overflow-x-auto hide-scrollbar pb-1" style={{ scrollSnapType: 'x mandatory' }}>
+              {movie.cast!.map((c) => {
+                const profile = c.profile_path
+                  ? `https://image.tmdb.org/t/p/w185${c.profile_path}`
+                  : null
+                return (
+                  <div
+                    key={`${c.name}-${c.order ?? ''}`}
+                    className="flex-shrink-0 text-center"
+                    style={{ width: '80px', scrollSnapAlign: 'start' }}
+                  >
+                    <div
+                      className="w-16 h-16 mx-auto rounded-full overflow-hidden mb-1.5"
+                      style={{ background: 'var(--bg-overlay)', border: '1px solid var(--border)' }}
+                    >
+                      {profile ? (
+                        <img
+                          src={profile}
+                          alt={c.name}
+                          className="w-full h-full object-cover"
+                          loading="lazy"
+                        />
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center text-[10px] font-bold" style={{ color: 'var(--text-muted)' }}>
+                          {c.name.split(' ').map((n) => n[0]).join('').slice(0, 2).toUpperCase()}
+                        </div>
+                      )}
+                    </div>
+                    <p className="text-[11px] font-semibold text-white leading-tight line-clamp-2">{c.name}</p>
+                    {c.character && (
+                      <p className="text-[10px] leading-tight line-clamp-1" style={{ color: 'var(--text-muted)' }}>
+                        {c.character}
+                      </p>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
       </div>
+
+      {/* More like this — full-width rail outside the constrained body */}
+      {(movie.similar?.length ?? 0) > 0 && (
+        <div className="mt-8">
+          <Rail
+            title="More like this"
+            items={movie.similar!.map((s) => ({
+              tmdb_id: s.tmdb_id,
+              title: s.title,
+              year: s.year ?? undefined,
+              poster_path: s.poster_path ?? undefined,
+              vote_average: s.vote_average ?? undefined,
+              media_type: s.media_type,
+            }))}
+          />
+        </div>
+      )}
 
       {showPlayer && id > 0 && (
         <FullScreenPlayer
@@ -371,6 +496,82 @@ export default function MovieDetail() {
           seasons={movie.seasons}
           onClose={() => setShowPlayer(false)}
         />
+      )}
+
+      {/* Trailer modal — YouTube embed */}
+      {showTrailer && movie.trailer_key && createPortal(
+        <div
+          role="dialog"
+          aria-modal="true"
+          onClick={(e) => { if (e.currentTarget === e.target) setShowTrailer(false) }}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 9999,
+            background: 'rgba(0,0,0,0.92)',
+            backdropFilter: 'blur(8px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '1rem',
+          }}
+        >
+          <button
+            onClick={() => setShowTrailer(false)}
+            aria-label="Close trailer"
+            style={{
+              position: 'absolute',
+              top: 'max(env(safe-area-inset-top, 0px), 1rem)',
+              right: '1rem',
+              width: 40,
+              height: 40,
+              borderRadius: '50%',
+              background: 'rgba(255,255,255,0.18)',
+              border: 'none',
+              color: '#fff',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            <X size={18} />
+          </button>
+          <div style={{ width: '100%', maxWidth: 960, aspectRatio: '16/9' }}>
+            <iframe
+              src={`https://www.youtube.com/embed/${movie.trailer_key}?autoplay=1&rel=0`}
+              title={`${movie.title} trailer`}
+              style={{ width: '100%', height: '100%', border: 'none', borderRadius: 12 }}
+              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+              allowFullScreen
+            />
+          </div>
+        </div>,
+        document.body,
+      )}
+
+      {/* Share toast */}
+      {shareToast && (
+        <div
+          role="status"
+          style={{
+            position: 'fixed',
+            bottom: 'calc(env(safe-area-inset-bottom, 0px) + 80px)',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            background: 'var(--bg-card)',
+            color: 'var(--text-primary)',
+            padding: '10px 16px',
+            borderRadius: 999,
+            border: '1px solid var(--border)',
+            fontSize: 12,
+            fontWeight: 600,
+            boxShadow: '0 12px 32px rgba(0,0,0,0.5)',
+            zIndex: 50,
+          }}
+        >
+          {shareToast}
+        </div>
       )}
     </div>
   )

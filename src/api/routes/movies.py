@@ -13,8 +13,15 @@ logger = get_logger(__name__)
 router = APIRouter(prefix="/movies", tags=["movies"])
 
 
-def _to_movie_response(movie) -> MovieResponse:
-    """Convert a domain movie/media object to API response shape."""
+def _to_movie_response(movie, extras: dict | None = None) -> MovieResponse:
+    """Convert a domain movie/media object to API response shape.
+
+    `extras` is the optional dict returned by MovieService.get_detail_extras —
+    only populated for the single-title detail endpoint. List endpoints
+    (trending, search, etc.) pass None and the trailer/cast/similar fields
+    stay at their defaults.
+    """
+    extras = extras or {}
     return MovieResponse(
         tmdb_id=int(movie.metadata.tmdb_id),
         title=movie.metadata.title,
@@ -25,6 +32,7 @@ def _to_movie_response(movie) -> MovieResponse:
         director=movie.metadata.director,
         creator=movie.metadata.creator,
         poster_path=movie.metadata.poster_path,
+        backdrop_path=movie.metadata.backdrop_path,
         runtime=movie.metadata.runtime,
         original_language=movie.metadata.original_language,
         media_type=movie.metadata.media_type,
@@ -40,6 +48,9 @@ def _to_movie_response(movie) -> MovieResponse:
             }
             for season in movie.metadata.seasons
         ],
+        trailer_key=extras.get("trailer_key"),
+        cast=extras.get("cast") or [],
+        similar=extras.get("similar") or [],
     )
 
 
@@ -423,7 +434,9 @@ async def get_movie_by_id(
                 detail=f"Movie {tmdb_id} not found",
             )
 
-        return _to_movie_response(movie)
+        # Detail-page enrichment: trailer + rich cast + similar titles.
+        extras = service.get_detail_extras(tmdb_id=tmdb_id, media_type=media_type)
+        return _to_movie_response(movie, extras=extras)
 
     except HTTPException:
         raise
