@@ -10,6 +10,8 @@ interface UserState {
   isOnboarded: boolean
   ratingCount: number
   hasSeenTour: boolean
+  /** Auto-play the next episode when the current one nears the end. Defaults to true. */
+  autoAdvance: boolean
   /** True once Zustand has finished reading from localStorage. Use to gate route rendering. */
   hasHydrated: boolean
   setUserId: (id: string) => void
@@ -18,6 +20,7 @@ interface UserState {
   setOnboarded: (v: boolean) => void
   setRatingCount: (n: number) => void
   setHasSeenTour: (v: boolean) => void
+  setAutoAdvance: (v: boolean) => void
   logout: () => void
 }
 
@@ -30,6 +33,7 @@ export const useUserStore = create<UserState>()(
       isOnboarded: false,
       ratingCount: 0,
       hasSeenTour: false,
+      autoAdvance: true,
       hasHydrated: false,
       setUserId: (id) => set({ userId: id }),
       setEmail: (email) => set({ email }),
@@ -37,12 +41,13 @@ export const useUserStore = create<UserState>()(
       setOnboarded: (v) => set({ isOnboarded: v }),
       setRatingCount: (n) => set({ ratingCount: n }),
       setHasSeenTour: (v) => set({ hasSeenTour: v }),
+      setAutoAdvance: (v) => set({ autoAdvance: v }),
       logout: () => {
         // Cascade-clear other persisted stores so private data does not leak
         // to the next user on a shared device.
         try { useWatchlistStore.getState().clear() } catch { /* ignore */ }
         try { useHistoryStore.getState().clear() } catch { /* ignore */ }
-        set({ userId: '', email: '', token: '', isOnboarded: false, ratingCount: 0, hasSeenTour: false })
+        set({ userId: '', email: '', token: '', isOnboarded: false, ratingCount: 0, hasSeenTour: false, autoAdvance: true })
       },
     }),
     {
@@ -56,6 +61,7 @@ export const useUserStore = create<UserState>()(
         isOnboarded: state.isOnboarded,
         ratingCount: state.ratingCount,
         hasSeenTour: state.hasSeenTour,
+        autoAdvance: state.autoAdvance,
       }),
       onRehydrateStorage: () => (state) => {
         if (state) state.hasHydrated = true

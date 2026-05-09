@@ -174,6 +174,26 @@ export interface Season {
   poster_path?: string
 }
 
+export interface Episode {
+  episode_number: number
+  name?: string | null
+  overview?: string | null
+  still_path?: string | null
+  air_date?: string | null
+  runtime?: number | null
+  vote_average?: number | null
+}
+
+export interface SeasonDetail {
+  tmdb_id: number
+  season_number: number
+  name?: string | null
+  overview?: string | null
+  poster_path?: string | null
+  air_date?: string | null
+  episodes: Episode[]
+}
+
 export interface CastMember {
   name: string
   character?: string | null
@@ -252,6 +272,18 @@ export interface AdminProfile {
   is_cold_start?: boolean
   avg_rating_given?: number
   profile_status?: string
+}
+
+export interface FavoriteItem {
+  tmdb_id: number
+  media_type: MediaType
+  title: string
+  poster_path?: string | null
+}
+
+export interface HeatmapData {
+  year: number
+  counts: Record<string, number>
 }
 
 export interface OnboardingMovie {
@@ -335,6 +367,12 @@ export async function getMediaDetails(tmdbId: number, mediaType: MediaType = 'mo
   return res.json()
 }
 
+export async function getSeasonEpisodes(tmdbId: number, seasonNumber: number): Promise<SeasonDetail | null> {
+  const res = await fetch(`${BASE}/movies/${tmdbId}/seasons/${seasonNumber}`)
+  if (!res.ok) return null
+  return res.json()
+}
+
 // ── Users ────────────────────────────────────────────────────────────────────
 
 export async function getUserProfile(userId: string): Promise<UserProfile | null> {
@@ -345,6 +383,36 @@ export async function getUserProfile(userId: string): Promise<UserProfile | null
 
 export async function getAdminProfile(userId: string): Promise<AdminProfile | null> {
   const res = handle401IfNeeded(await fetch(`${BASE}/admin/users/${userId}/profile`, { headers: authHeaders() }))
+  if (!res.ok) return null
+  return res.json()
+}
+
+export async function getFavorites(userId: string): Promise<FavoriteItem[]> {
+  const res = handle401IfNeeded(await fetch(`${BASE}/users/${userId}/favorites`, { headers: authHeaders() }))
+  if (!res.ok) return []
+  const data = await res.json()
+  return (data?.items ?? []) as FavoriteItem[]
+}
+
+export async function setFavorites(userId: string, items: FavoriteItem[]): Promise<FavoriteItem[]> {
+  const res = handle401IfNeeded(await fetch(`${BASE}/users/${userId}/favorites`, {
+    method: 'PUT',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ items }),
+  }))
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(`Save favorites failed: ${text}`)
+  }
+  const data = await res.json()
+  return (data?.items ?? []) as FavoriteItem[]
+}
+
+export async function getHeatmap(year?: number): Promise<HeatmapData | null> {
+  const params = new URLSearchParams()
+  if (year) params.set('year', String(year))
+  const qs = params.toString()
+  const res = handle401IfNeeded(await fetch(`${BASE}/history/heatmap${qs ? `?${qs}` : ''}`, { headers: authHeaders() }))
   if (!res.ok) return null
   return res.json()
 }

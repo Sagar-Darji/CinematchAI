@@ -4,7 +4,7 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query, status
 
-from src.api.schemas.response import ErrorResponse, MovieResponse
+from src.api.schemas.response import ErrorResponse, MovieResponse, SeasonDetailResponse
 from src.services.movie_service import get_movie_service
 from src.utils.logging import get_logger
 
@@ -445,4 +445,47 @@ async def get_movie_by_id(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to get movie {tmdb_id}",
+        )
+
+
+@router.get(
+    "/{tmdb_id}/seasons/{season_number}",
+    status_code=status.HTTP_200_OK,
+    response_model=SeasonDetailResponse,
+    responses={
+        404: {"model": ErrorResponse},
+        500: {"model": ErrorResponse},
+    },
+)
+async def get_season_episodes(tmdb_id: int, season_number: int):
+    """
+    Get the episode list for one season of a TV show.
+
+    Powers the in-player episode picker drawer — returns thumbnails, titles,
+    runtimes, and air dates per episode.
+    """
+    logger.info(f"GET /movies/{tmdb_id}/seasons/{season_number}")
+
+    if season_number < 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="season_number must be >= 0",
+        )
+
+    try:
+        service = get_movie_service()
+        result = service.get_season_episodes(tmdb_id=tmdb_id, season_number=season_number)
+        if not result:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Season {season_number} of TV {tmdb_id} not found",
+            )
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get season {tmdb_id}/{season_number}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get season {tmdb_id}/{season_number}",
         )

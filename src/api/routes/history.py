@@ -1,11 +1,13 @@
 """Watch history API routes — per-user 'continue watching' state."""
 
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from src.api.deps import get_current_user
+from src.api.schemas.response import HeatmapResponse
 from src.services.history_service import get_history_service
 from src.utils.logging import get_logger
 
@@ -76,3 +78,15 @@ async def remove_history(
 async def clear_history(current_user: str = Depends(get_current_user)):
     """Clear the current user's watch history entirely."""
     get_history_service().clear(current_user)
+
+
+@router.get("/heatmap", response_model=HeatmapResponse)
+async def get_heatmap(
+    year: Optional[int] = Query(default=None, ge=1990, le=2100),
+    current_user: str = Depends(get_current_user),
+):
+    """Return watch counts per day for the given calendar year — feeds the
+    diary heatmap. Defaults to the current year (UTC) when `year` is omitted."""
+    target_year = year or datetime.now(timezone.utc).year
+    counts = get_history_service().get_heatmap(current_user, target_year)
+    return {"year": target_year, "counts": counts}

@@ -1,4 +1,6 @@
-from src.services.movie_service import MovieService
+from unittest.mock import MagicMock, patch
+
+from src.services.movie_service import MovieService, cache
 
 
 def test_parse_tmdb_search_result_for_tv_uses_tv_fields():
@@ -87,3 +89,66 @@ def test_parse_tmdb_media_for_tv_includes_seasons_and_creator():
     assert len(result.metadata.seasons) == 2
     assert result.metadata.seasons[0].season_number == 1
     assert result.metadata.seasons[0].episode_count == 10
+
+
+def test_get_season_episodes_parses_episode_list():
+    """get_season_episodes hits TMDB /tv/{id}/season/{n} and returns episodes
+    with the fields the in-player drawer needs."""
+    service = MovieService()
+    cache_key = f"season_82856_1"
+    cache.delete(cache_key)
+
+    fake_response = MagicMock()
+    fake_response.status_code = 200
+    fake_response.json.return_value = {
+        "name": "Season 1",
+        "overview": "The Mandalorian S1.",
+        "poster_path": "/abc.jpg",
+        "air_date": "2019-11-12",
+        "episodes": [
+            {
+                "episode_number": 1,
+                "name": "Chapter 1: The Mandalorian",
+                "overview": "A lone gunfighter.",
+                "still_path": "/still1.jpg",
+                "air_date": "2019-11-12",
+                "runtime": 39,
+                "vote_average": 7.8,
+            },
+            {
+                "episode_number": 2,
+                "name": "Chapter 2: The Child",
+                "still_path": "/still2.jpg",
+                "runtime": 32,
+            },
+        ],
+    }
+
+    with patch.object(service._session, "get", return_value=fake_response):
+        result = service.get_season_episodes(tmdb_id=82856, season_number=1)
+
+    assert result is not None
+    assert result["tmdb_id"] == 82856
+    assert result["season_number"] == 1
+    assert result["name"] == "Season 1"
+    assert len(result["episodes"]) == 2
+    assert result["episodes"][0]["episode_number"] == 1
+    assert result["episodes"][0]["name"] == "Chapter 1: The Mandalorian"
+    assert result["episodes"][0]["runtime"] == 39
+    assert result["episodes"][1]["episode_number"] == 2
+    cache.delete(cache_key)
+
+
+def test_get_season_episodes_returns_none_on_failure():
+    service = MovieService()
+    cache_key = f"season_99999_99"
+    cache.delete(cache_key)
+
+    fake_response = MagicMock()
+    fake_response.status_code = 404
+
+    with patch.object(service._session, "get", return_value=fake_response):
+        result = service.get_season_episodes(tmdb_id=99999, season_number=99)
+
+    assert result is None
+    cache.delete(cache_key)

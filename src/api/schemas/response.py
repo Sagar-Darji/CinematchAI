@@ -15,6 +15,30 @@ class SeasonResponse(BaseModel):
     poster_path: Optional[str] = None
 
 
+class EpisodeResponse(BaseModel):
+    """One episode within a season."""
+
+    episode_number: int
+    name: Optional[str] = None
+    overview: Optional[str] = None
+    still_path: Optional[str] = None
+    air_date: Optional[str] = None
+    runtime: Optional[int] = None
+    vote_average: Optional[float] = None
+
+
+class SeasonDetailResponse(BaseModel):
+    """Full episode list for a season — used by the in-player episode picker."""
+
+    tmdb_id: int
+    season_number: int
+    name: Optional[str] = None
+    overview: Optional[str] = None
+    poster_path: Optional[str] = None
+    air_date: Optional[str] = None
+    episodes: List[EpisodeResponse] = Field(default_factory=list)
+
+
 class CastMember(BaseModel):
     """One cast member as returned by TMDB credits."""
 
@@ -203,6 +227,48 @@ class ErrorResponse(BaseModel):
     error: str = Field(..., description="Error message")
     detail: Optional[str] = Field(default=None, description="Detailed error information")
     request_id: Optional[str] = Field(default=None, description="Request ID for tracking")
+
+
+class FavoriteItem(BaseModel):
+    """One pinned favorite on a user's profile."""
+
+    tmdb_id: int = Field(..., ge=1)
+    media_type: str = Field(..., pattern=r"^(movie|tv)$")
+    title: str
+    poster_path: Optional[str] = None
+
+
+class FavoritesResponse(BaseModel):
+    """The current user's pinned favorites list."""
+
+    items: List[FavoriteItem] = Field(default_factory=list)
+
+
+class ReviewItem(BaseModel):
+    """A user review of a movie or TV show.
+
+    rating is on a 0.5–5.0 (half-star) scale; null if the user wrote text only.
+    review_text is null if the user only set a rating.
+    """
+
+    tmdb_id: int
+    media_type: str
+    rating: Optional[float] = None
+    review_text: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class ReviewsResponse(BaseModel):
+    items: List[ReviewItem] = Field(default_factory=list)
+    count: int = 0
+
+
+class HeatmapResponse(BaseModel):
+    """Watch counts per day in a calendar year — for the diary heatmap."""
+
+    year: int
+    counts: Dict[str, int] = Field(default_factory=dict, description="ISO date → count")
 
 
 class LetterboxdImportResponse(BaseModel):

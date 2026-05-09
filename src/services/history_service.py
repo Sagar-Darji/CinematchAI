@@ -105,3 +105,28 @@ class HistoryService:
     def clear(self, user_id: str) -> None:
         with self.db.connect() as conn:
             conn.execute("DELETE FROM watch_history WHERE user_id = ?", (user_id,))
+
+    def get_heatmap(self, user_id: str, year: int) -> dict:
+        """Return {ISO date: count} of watch events for the given calendar year.
+
+        Powers the diary heatmap. Days with zero watches are omitted — the
+        frontend fills them in.
+        """
+        start = f"{year:04d}-01-01 00:00:00"
+        end = f"{year + 1:04d}-01-01 00:00:00"
+        with self.db.connect() as conn:
+            rows = conn.execute(
+                "SELECT DATE(watched_at) AS day, COUNT(*) AS count "
+                "FROM watch_history "
+                "WHERE user_id = ? AND watched_at >= ? AND watched_at < ? "
+                "GROUP BY DATE(watched_at)",
+                (user_id, start, end),
+            ).fetchall()
+        result: dict = {}
+        for row in rows:
+            day = row["day"] if isinstance(row, dict) else row[0]
+            count = row["count"] if isinstance(row, dict) else row[1]
+            if day:
+                # Postgres returns date objects; SQLite returns strings.
+                result[str(day)] = int(count)
+        return result

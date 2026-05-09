@@ -230,6 +230,57 @@ class MovieService:
 
         return result
 
+    def get_season_episodes(self, tmdb_id: int, season_number: int) -> Optional[Dict[str, Any]]:
+        """Fetch a TV season's episode list from TMDB.
+
+        Used by the in-player episode picker to show thumbnails, titles, and
+        runtimes. Cached for 24h — episode lists for finished shows never
+        change, and even airing shows only get a new episode weekly.
+        """
+        cache_key = f"season_{tmdb_id}_{season_number}"
+        cached = cache.get(cache_key)
+        if cached:
+            return cached
+
+        try:
+            url = f"{self.base_url}/tv/{tmdb_id}/season/{season_number}"
+            params = {"api_key": self.api_key}
+            response = self._session.get(url, params=params, timeout=10)
+            if response.status_code != 200:
+                return None
+            data = response.json()
+
+            episodes = [
+                {
+                    "episode_number": ep["episode_number"],
+                    "name": ep.get("name"),
+                    "overview": ep.get("overview"),
+                    "still_path": ep.get("still_path"),
+                    "air_date": ep.get("air_date"),
+                    "runtime": ep.get("runtime"),
+                    "vote_average": ep.get("vote_average"),
+                }
+                for ep in data.get("episodes", [])
+                if ep.get("episode_number") is not None
+            ]
+
+            result = {
+                "tmdb_id": tmdb_id,
+                "season_number": season_number,
+                "name": data.get("name"),
+                "overview": data.get("overview"),
+                "poster_path": data.get("poster_path"),
+                "air_date": data.get("air_date"),
+                "episodes": episodes,
+            }
+
+            cache.set(cache_key, result, expire=86400)
+            return result
+
+        except Exception as e:
+            logger.warning(f"Failed to fetch season {tmdb_id}/{season_number}: {e}")
+            return None
+
     def get_movies_batch(
         self, tmdb_ids: List[int], max_workers: int = 5
     ) -> List[Optional["Movie"]]:

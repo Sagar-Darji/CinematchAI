@@ -1,12 +1,19 @@
 import { useState, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
-import { Star, Calendar, Clock, PlayCircle, X, ThumbsUp, ThumbsDown } from 'lucide-react'
-import { getMediaDetails, submitFeedback, recordInteraction } from '@/lib/api'
-import type { MediaType, Movie, Recommendation, Season } from '@/lib/api'
+import { Star, Calendar, Clock, PlayCircle, X, ThumbsUp, ThumbsDown, ChevronUp } from 'lucide-react'
+import { getMediaDetails, getSeasonEpisodes, submitFeedback, recordInteraction } from '@/lib/api'
+import type { MediaType, Movie, Recommendation, Season, Episode } from '@/lib/api'
 import { tmdbPoster, scoreColor, formatRuntime, cn } from '@/lib/utils'
 import { useUserStore } from '@/store/useUserStore'
 import { useHistoryStore } from '@/store/useHistoryStore'
+import { EpisodePickerDrawer } from '@/components/player/EpisodePickerDrawer'
+import {
+  getPlayableSeasons,
+  getDefaultSeasonNumber,
+  getNextEpisode,
+  getPrevEpisode,
+} from '@/components/player/playerHelpers'
 
 type EmbedSource = {
   name: string
@@ -59,16 +66,6 @@ const EMBED_SOURCES = [
   },
 ] satisfies EmbedSource[]
 
-function getPlayableSeasons(seasons?: Season[]) {
-  return (seasons ?? []).filter((season) => (season.episode_count ?? 0) > 0)
-}
-
-function getDefaultSeasonNumber(seasons?: Season[]) {
-  const playableSeasons = getPlayableSeasons(seasons)
-  const preferred = playableSeasons.find((season) => season.season_number > 0) ?? playableSeasons[0]
-  return preferred?.season_number ?? 1
-}
-
 function buildEmbedUrl(
   source: EmbedSource,
   mediaType: MediaType,
@@ -96,8 +93,16 @@ export function FullScreenPlayer({
   seasons?: Season[]
   onClose: () => void
 }) {
+  const autoAdvance = useUserStore((s) => s.autoAdvance)
+  const setAutoAdvance = useUserStore((s) => s.setAutoAdvance)
+
   const [adShield, setAdShield] = useState(true)
   const [srcIdx, setSrcIdx] = useState(0)
+  const [drawerOpen, setDrawerOpen] = useState(false)
+  const [currentSeasonEpisodes, setCurrentSeasonEpisodes] = useState<Episode[] | null>(null)
+  // Seconds remaining in the auto-advance countdown, or null when not armed.
+  const [pendingAdvance, setPendingAdvance] = useState<number | null>(null)
+
   // Resume the last season/episode the user navigated to last time, if any.
   const [selectedSeason, setSelectedSeason] = useState(() => {
     if (mediaType === 'tv') {
@@ -117,18 +122,54 @@ export function FullScreenPlayer({
     }
     return 1
   })
+
   const playableSeasons = getPlayableSeasons(seasons)
-  const selectedSeasonData = playableSeasons.find((season) => season.season_number === selectedSeason)
-  const episodeCount = Math.max(selectedSeasonData?.episode_count ?? 1, 1)
+  const fallbackEpisodeCount = playableSeasons.find((s) => s.season_number === selectedSeason)?.episode_count ?? 1
+  // Prefer the exact count from the fetched episode list once it lands; fall
+  // back to the season-level count in the meantime.
+  const episodeCount = Math.max(currentSeasonEpisodes?.length ?? fallbackEpisodeCount, 1)
+  const currentEpisodeData = currentSeasonEpisodes?.find((e) => e.episode_number === selectedEpisode)
+
+  const nextRef = mediaType === 'tv'
+    ? getNextEpisode(seasons, { season: selectedSeason, episode: selectedEpisode })
+    : null
+  const prevRef = mediaType === 'tv'
+    ? getPrevEpisode(seasons, { season: selectedSeason, episode: selectedEpisode })
+    : null
 
   const nextSource = () => setSrcIdx((i) => (i + 1) % EMBED_SOURCES.length)
 
+  const goNext = () => {
+    if (!nextRef) return
+    setSelectedSeason(nextRef.season)
+    setSelectedEpisode(nextRef.episode)
+  }
+  const goPrev = () => {
+    if (!prevRef) return
+    setSelectedSeason(prevRef.season)
+    setSelectedEpisode(prevRef.episode)
+  }
+
   useEffect(() => {
     setSrcIdx(0)
-    // Don't clobber resumed state when seasons reload — only reset on real
-    // mediaType change. The state initializers above already seeded from
-    // history; subsequent navigation drives setProgress.
   }, [mediaType])
+
+  // Fetch the current season's episode list — used to label the "now playing"
+  // pill, validate the episode count, and show the episode title in the top
+  // chrome. Server caches for 24h so re-opens are cheap.
+  useEffect(() => {
+    if (mediaType !== 'tv' || !tmdbId) {
+      setCurrentSeasonEpisodes(null)
+      return
+    }
+    let cancelled = false
+    setCurrentSeasonEpisodes(null)
+    getSeasonEpisodes(Number(tmdbId), selectedSeason).then((detail) => {
+      if (cancelled) return
+      setCurrentSeasonEpisodes(detail?.episodes ?? [])
+    })
+    return () => { cancelled = true }
+  }, [tmdbId, mediaType, selectedSeason])
 
   // Persist TV progress as the user navigates seasons/episodes inside the player.
   useEffect(() => {
@@ -147,8 +188,26 @@ export function FullScreenPlayer({
     }
   }, [selectedEpisode, episodeCount])
 
+  // Cancel a pending auto-advance whenever the episode/source changes from
+  // any source (manual nav, drawer pick, or the advance firing).
+  useEffect(() => { setPendingAdvance(null) }, [selectedSeason, selectedEpisode, srcIdx])
+
+  // Keyboard: Esc to close (unless drawer is up), n/p for next/prev episode.
   useEffect(() => {
-    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (!drawerOpen) onClose()
+        return
+      }
+      // Don't capture single-letter keys when typing in inputs.
+      const target = e.target as HTMLElement | null
+      const tag = target?.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || target?.isContentEditable) return
+      if (mediaType === 'tv') {
+        if (e.key === 'n' || e.key === 'N') goNext()
+        if (e.key === 'p' || e.key === 'P') goPrev()
+      }
+    }
     document.addEventListener('keydown', handler)
     document.body.style.overflow = 'hidden'
     // Block popups opened by the iframe
@@ -159,7 +218,46 @@ export function FullScreenPlayer({
       document.body.style.overflow = ''
       window.open = origOpen
     }
-  }, [onClose])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onClose, mediaType, drawerOpen, nextRef?.season, nextRef?.episode, prevRef?.season, prevRef?.episode])
+
+  // Auto-advance via embed postMessage. VidLink emits PLAYER_EVENT messages
+  // with currentTime / duration; we arm the countdown on `ended` or > 97%.
+  useEffect(() => {
+    if (mediaType !== 'tv' || !autoAdvance || !nextRef) return
+    let armed = false
+    const handler = (event: MessageEvent) => {
+      let payload: unknown = event.data
+      if (typeof payload === 'string') {
+        try { payload = JSON.parse(payload) } catch { return }
+      }
+      if (!payload || typeof payload !== 'object') return
+      const obj = payload as Record<string, unknown>
+      const evt = (obj.event ?? obj.type) as string | undefined
+      const data = (obj.data ?? obj) as Record<string, unknown>
+      const ct = Number(data.currentTime)
+      const dur = Number(data.duration)
+      const ended = evt === 'ended' || (Number.isFinite(ct) && Number.isFinite(dur) && dur > 0 && ct / dur > 0.97)
+      if (ended && !armed) {
+        armed = true
+        setPendingAdvance(10)
+      }
+    }
+    window.addEventListener('message', handler)
+    return () => window.removeEventListener('message', handler)
+  }, [mediaType, autoAdvance, nextRef, srcIdx])
+
+  // Tick the countdown; fire goNext when it hits 0.
+  useEffect(() => {
+    if (pendingAdvance === null) return
+    if (pendingAdvance <= 0) {
+      goNext()
+      return
+    }
+    const t = setTimeout(() => setPendingAdvance((p) => (p === null ? null : p - 1)), 1000)
+    return () => clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingAdvance])
 
   const src = buildEmbedUrl(
     EMBED_SOURCES[srcIdx],
@@ -168,6 +266,16 @@ export function FullScreenPlayer({
     mediaType === 'tv' && playableSeasons.length > 0 ? selectedSeason : undefined,
     mediaType === 'tv' && playableSeasons.length > 0 ? selectedEpisode : undefined,
   )
+
+  const episodeLabel = currentEpisodeData?.name
+    ? `S${selectedSeason} · E${selectedEpisode} · ${currentEpisodeData.name}`
+    : `S${selectedSeason} · E${selectedEpisode}`
+
+  const titleBarText = mediaType === 'tv'
+    ? (currentEpisodeData?.name
+        ? `${title} · S${selectedSeason} · E${selectedEpisode} — ${currentEpisodeData.name}`
+        : `${title} · S${selectedSeason} · E${selectedEpisode}`)
+    : title
 
   return createPortal(
     <div
@@ -181,7 +289,7 @@ export function FullScreenPlayer({
         background: '#000',
       }}
     >
-      {/* Top bar: source switcher + close */}
+      {/* Top bar: source switcher + title + close */}
       <div
         className="absolute top-0 inset-x-0 z-10 flex items-center justify-between gap-3"
         style={{
@@ -193,12 +301,6 @@ export function FullScreenPlayer({
         }}
       >
         <div className="flex items-center gap-2 min-w-0">
-          <span
-            className="hidden sm:inline-flex px-3 py-1.5 rounded-full text-[11px] font-bold uppercase tracking-wide flex-shrink-0"
-            style={{ background: 'rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.78)' }}
-          >
-            {mediaType === 'tv' ? 'Series' : 'Movie'}
-          </span>
           <button
             onClick={nextSource}
             title="Try next streaming source"
@@ -217,8 +319,8 @@ export function FullScreenPlayer({
             ⟳ {EMBED_SOURCES[srcIdx].name}
           </button>
         </div>
-        <span className="text-white text-sm font-semibold truncate flex-1 text-center opacity-70 hidden md:inline">
-          {title}
+        <span className="text-white text-sm font-semibold truncate flex-1 text-center opacity-80 hidden md:inline">
+          {titleBarText}
         </span>
         <button
           onClick={onClose}
@@ -235,66 +337,135 @@ export function FullScreenPlayer({
         </button>
       </div>
 
+      {/* Bottom chrome (TV only): episode pill + Prev/Next buttons */}
       {mediaType === 'tv' && playableSeasons.length > 0 && (
         <div
-          className="absolute z-10 flex items-center gap-2 flex-wrap"
+          className="absolute z-10 flex items-center justify-between gap-3"
           style={{
             pointerEvents: 'none',
-            top: 'calc(max(env(safe-area-inset-top, 0px), 0.75rem) + 3.5rem)',
             left: 'max(env(safe-area-inset-left, 0px), 1rem)',
             right: 'max(env(safe-area-inset-right, 0px), 1rem)',
+            bottom: 'calc(max(env(safe-area-inset-bottom, 0px), 0.75rem))',
           }}
         >
-          <div className="flex items-center gap-2 rounded-2xl px-3 py-2"
+          <button
+            onClick={() => setDrawerOpen(true)}
+            title="Browse episodes"
+            className="flex items-center gap-2 max-w-[60%] truncate"
             style={{
               pointerEvents: 'auto',
-              background: 'rgba(0,0,0,0.58)',
-              border: '1px solid rgba(255,255,255,0.12)',
+              padding: '8px 14px',
+              borderRadius: '14px',
+              background: 'rgba(0,0,0,0.62)',
               backdropFilter: 'blur(10px)',
-            }}>
-            <label className="text-[11px] font-bold uppercase tracking-wide" style={{ color: 'rgba(255,255,255,0.72)' }}>
-              Season
-            </label>
-            <select
-              value={selectedSeason}
-              onChange={(e) => {
-                setSelectedSeason(Number(e.target.value))
-                setSelectedEpisode(1)
-              }}
-              className="rounded-lg px-2.5 py-1.5 text-xs font-semibold outline-none"
-              style={{
-                background: 'rgba(255,255,255,0.08)',
-                color: '#fff',
-                border: '1px solid rgba(255,255,255,0.12)',
-              }}
-            >
-              {playableSeasons.map((season) => (
-                <option key={season.season_number} value={season.season_number}>
-                  {season.name || `Season ${season.season_number}`}
-                </option>
-              ))}
-            </select>
+              border: '1px solid rgba(255,255,255,0.14)',
+              color: '#fff',
+              fontSize: '12px',
+              fontWeight: 700,
+              cursor: 'pointer',
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+            }}
+          >
+            <span className="truncate">{episodeLabel}</span>
+            <ChevronUp size={14} className="flex-shrink-0" />
+          </button>
 
-            <label className="text-[11px] font-bold uppercase tracking-wide ml-1" style={{ color: 'rgba(255,255,255,0.72)' }}>
-              Episode
-            </label>
-            <select
-              value={selectedEpisode}
-              onChange={(e) => setSelectedEpisode(Number(e.target.value))}
-              className="rounded-lg px-2.5 py-1.5 text-xs font-semibold outline-none"
+          <div className="flex items-center gap-2" style={{ pointerEvents: 'auto' }}>
+            <button
+              onClick={goPrev}
+              disabled={!prevRef}
+              aria-label="Previous episode"
+              title="Previous episode (P)"
               style={{
-                background: 'rgba(255,255,255,0.08)',
-                color: '#fff',
-                border: '1px solid rgba(255,255,255,0.12)',
+                padding: '8px 14px',
+                borderRadius: '14px',
+                background: 'rgba(0,0,0,0.62)',
+                backdropFilter: 'blur(10px)',
+                border: '1px solid rgba(255,255,255,0.14)',
+                color: prevRef ? '#fff' : 'rgba(255,255,255,0.35)',
+                fontSize: '12px',
+                fontWeight: 700,
+                cursor: prevRef ? 'pointer' : 'not-allowed',
+                whiteSpace: 'nowrap',
               }}
             >
-              {Array.from({ length: episodeCount }, (_, index) => index + 1).map((episode) => (
-                <option key={episode} value={episode}>
-                  Episode {episode}
-                </option>
-              ))}
-            </select>
+              ‹ Prev
+            </button>
+            <button
+              onClick={goNext}
+              disabled={!nextRef}
+              aria-label="Next episode"
+              title="Next episode (N)"
+              style={{
+                padding: '8px 16px',
+                borderRadius: '14px',
+                background: nextRef ? 'var(--accent-gold)' : 'rgba(0,0,0,0.62)',
+                backdropFilter: nextRef ? 'none' : 'blur(10px)',
+                border: '1px solid ' + (nextRef ? 'transparent' : 'rgba(255,255,255,0.14)'),
+                color: nextRef ? '#0a0a0f' : 'rgba(255,255,255,0.35)',
+                fontSize: '12px',
+                fontWeight: 800,
+                cursor: nextRef ? 'pointer' : 'not-allowed',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              Next ›
+            </button>
           </div>
+        </div>
+      )}
+
+      {/* Auto-advance countdown toast */}
+      {pendingAdvance !== null && nextRef && (
+        <div
+          className="absolute z-20 flex items-center gap-3 animate-fade-in"
+          style={{
+            right: 'max(env(safe-area-inset-right, 0px), 1rem)',
+            bottom: 'calc(max(env(safe-area-inset-bottom, 0px), 0.75rem) + 4rem)',
+            padding: '10px 14px',
+            borderRadius: '14px',
+            background: 'rgba(12,12,16,0.94)',
+            border: '1px solid rgba(255,255,255,0.14)',
+            backdropFilter: 'blur(10px)',
+            color: '#fff',
+            fontSize: '12px',
+            fontWeight: 600,
+            maxWidth: '90vw',
+          }}
+        >
+          <span>Playing S{nextRef.season} · E{nextRef.episode} in {pendingAdvance}s</span>
+          <button
+            onClick={() => setPendingAdvance(null)}
+            style={{
+              padding: '4px 10px',
+              borderRadius: '8px',
+              background: 'rgba(255,255,255,0.1)',
+              border: '1px solid rgba(255,255,255,0.18)',
+              color: '#fff',
+              fontSize: '11px',
+              fontWeight: 700,
+              cursor: 'pointer',
+            }}
+          >
+            Cancel
+          </button>
+          <button
+            onClick={goNext}
+            style={{
+              padding: '4px 10px',
+              borderRadius: '8px',
+              background: 'var(--accent-gold)',
+              border: 'none',
+              color: '#0a0a0f',
+              fontSize: '11px',
+              fontWeight: 800,
+              cursor: 'pointer',
+            }}
+          >
+            Play now
+          </button>
         </div>
       )}
 
@@ -323,6 +494,23 @@ export function FullScreenPlayer({
         title={`Watch ${title}`}
         onError={nextSource}
       />
+
+      {mediaType === 'tv' && drawerOpen && (
+        <EpisodePickerDrawer
+          tmdbId={tmdbId}
+          seasons={seasons}
+          currentSeason={selectedSeason}
+          currentEpisode={selectedEpisode}
+          autoAdvance={autoAdvance}
+          onSelect={(season, episode) => {
+            setSelectedSeason(season)
+            setSelectedEpisode(episode)
+            setDrawerOpen(false)
+          }}
+          onClose={() => setDrawerOpen(false)}
+          onToggleAutoAdvance={setAutoAdvance}
+        />
+      )}
     </div>,
     document.body
   )

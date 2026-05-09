@@ -166,10 +166,15 @@ textarea:focus-visible {
   0%   { background-position: -200% 0; }
   100% { background-position: 200% 0; }
 }
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(24px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
 
 .animate-fade-in    { animation: fadeIn 0.4s ease both; }
 .animate-slide-in   { animation: slideInLeft 0.4s ease both; }
 .animate-pulse-glow { animation: pulseGlow 1.4s ease infinite; }
+.animate-slide-up   { animation: slideUp 0.28s cubic-bezier(0.4,0,0.2,1) both; }
 
 /* ── Skeleton loader ──────────────────────────────────────────────────────── */
 .skeleton {

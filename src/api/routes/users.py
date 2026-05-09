@@ -1,6 +1,9 @@
 """User Management API Routes."""
 
+from typing import List
+
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from pydantic import BaseModel, Field
 
 from src.api.deps import get_current_user
 from src.api.schemas.request import (
@@ -11,6 +14,8 @@ from src.api.schemas.request import (
 )
 from src.api.schemas.response import (
     ErrorResponse,
+    FavoriteItem,
+    FavoritesResponse,
     FeedbackResponse,
     LetterboxdImportResponse,
     OnboardingResponse,
@@ -257,6 +262,55 @@ async def get_user(user_id: str, current_user: str = Depends(get_current_user)):
         "embedding_ready": has_embedding,
         "is_cold_start": len(ratings) < 5,
     }
+
+
+class SetFavoritesRequest(BaseModel):
+    items: List[FavoriteItem] = Field(default_factory=list, max_length=4)
+
+
+@router.get(
+    "/{user_id}/favorites",
+    response_model=FavoritesResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def get_favorites(user_id: str, current_user: str = Depends(get_current_user)):
+    """Return the user's pinned favorites (up to 4 movies/TV shows)."""
+    if user_id != current_user:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only view your own favorites",
+        )
+    items = get_user_service().get_favorites(user_id)
+    return {"items": items}
+
+
+@router.put(
+    "/{user_id}/favorites",
+    response_model=FavoritesResponse,
+    status_code=status.HTTP_200_OK,
+    responses={
+        400: {"model": ErrorResponse},
+        403: {"model": ErrorResponse},
+    },
+)
+async def set_favorites(
+    user_id: str,
+    request: SetFavoritesRequest,
+    current_user: str = Depends(get_current_user),
+):
+    """Replace the user's pinned favorites list. Max 4 items."""
+    if user_id != current_user:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only update your own favorites",
+        )
+    try:
+        items = get_user_service().set_favorites(
+            user_id, [item.model_dump() for item in request.items]
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    return {"items": items}
 
 
 @router.put(

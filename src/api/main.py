@@ -16,7 +16,7 @@ import time
 import uuid
 
 from src.api.rate_limit import limiter
-from src.api.routes import admin, auth, groups, health, history, movie_web, movies, news, recommendations, users, watchlist
+from src.api.routes import admin, auth, groups, health, history, movie_web, movies, news, recommendations, reviews, users, watchlist
 from src.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -250,6 +250,7 @@ app.include_router(news.router, prefix="/api/v1")
 app.include_router(movie_web.router, prefix="/api/v1")
 app.include_router(watchlist.router, prefix="/api/v1")
 app.include_router(history.router, prefix="/api/v1")
+app.include_router(reviews.router, prefix="/api/v1")
 
 # ── Prometheus metrics endpoint at /metrics ───────────────────────────────────
 # Exposes: request count, latency histograms, in-flight requests, response sizes

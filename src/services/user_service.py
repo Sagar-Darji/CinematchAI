@@ -70,6 +70,7 @@ class UserService:
             ("google_id",               "TEXT"),
             ("reset_token",             "TEXT"),
             ("reset_token_expires",     "TEXT"),
+            ("favorite_tmdb_ids",       "TEXT"),
         ]:
             try:
                 if db.is_postgres:
@@ -268,6 +269,68 @@ class UserService:
             return False
         finally:
             conn.close()
+
+    MAX_FAVORITES = 4
+
+    def get_favorites(self, user_id: str) -> List[dict]:
+        """Return the user's pinned favorites (movies/TV).
+
+        Each item is a dict {tmdb_id, media_type, title, poster_path}. The
+        list preserves insertion order and is at most MAX_FAVORITES long.
+        """
+        conn = self._connect()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT favorite_tmdb_ids FROM users WHERE user_id = ?", (user_id,)
+        )
+        row = cursor.fetchone()
+        conn.close()
+        if not row:
+            return []
+        raw = row["favorite_tmdb_ids"] if isinstance(row, dict) else row[0]
+        if not raw:
+            return []
+        try:
+            data = json.loads(raw)
+            return data if isinstance(data, list) else []
+        except (json.JSONDecodeError, TypeError):
+            return []
+
+    def set_favorites(self, user_id: str, items: List[dict]) -> List[dict]:
+        """Replace the user's favorites list. Validates shape, dedupes, caps
+        at MAX_FAVORITES, and returns the canonical list that was stored."""
+        cleaned: List[dict] = []
+        seen: set = set()
+        for item in items[: self.MAX_FAVORITES]:
+            tmdb_id = item.get("tmdb_id")
+            media_type = item.get("media_type")
+            title = item.get("title")
+            if not isinstance(tmdb_id, int) or media_type not in ("movie", "tv") or not title:
+                raise ValueError(
+                    f"Invalid favorite item: tmdb_id (int), media_type (movie|tv), and title are required"
+                )
+            key = (tmdb_id, media_type)
+            if key in seen:
+                continue
+            seen.add(key)
+            cleaned.append({
+                "tmdb_id": tmdb_id,
+                "media_type": media_type,
+                "title": title,
+                "poster_path": item.get("poster_path"),
+            })
+
+        payload = json.dumps(cleaned)
+        conn = self._connect()
+        try:
+            conn.execute(
+                "UPDATE users SET favorite_tmdb_ids=?, updated_at=? WHERE user_id=?",
+                (payload, datetime.now(timezone.utc).isoformat(), user_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        return cleaned
 
     def set_auth_credentials(self, user_id: str, email: str,
                               password_hash: Optional[str],
