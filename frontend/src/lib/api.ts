@@ -250,7 +250,10 @@ export interface RecommendationResult {
 }
 
 export interface JobStatus {
-  status: 'pending' | 'running' | 'complete' | 'failed'
+  // 'timeout' is a frontend-only state for when our polling deadline runs
+  // out before the backend reports a terminal status — the job may still
+  // be running. Backend itself only emits the first four.
+  status: 'pending' | 'running' | 'complete' | 'failed' | 'timeout'
   steps: Array<{ step: string; detail: string; timestamp: number }>
   result?: RecommendationResult
   error?: string
@@ -378,6 +381,29 @@ export async function getMediaDetails(tmdbId: number, mediaType: MediaType = 'mo
 
 export async function getSeasonEpisodes(tmdbId: number, seasonNumber: number): Promise<SeasonDetail | null> {
   const res = await fetch(`${BASE}/movies/${tmdbId}/seasons/${seasonNumber}`)
+  if (!res.ok) return null
+  return res.json()
+}
+
+export interface MovieWebNode {
+  id: number
+  title: string
+  year?: number | null
+  poster_path?: string | null
+  vote_average?: number | null
+  score?: number
+}
+
+export interface MovieWebGraph {
+  seed: MovieWebNode
+  nodes: MovieWebNode[]
+  edges?: Array<{ source: number; target: number; type?: string; weight?: number }>
+  stats?: Record<string, number>
+}
+
+/** CineWeb similarity by TMDB id — used for the "More like this" rail. */
+export async function getMovieWebById(tmdbId: number, maxNodes = 12): Promise<MovieWebGraph | null> {
+  const res = await fetch(`${BASE}/movie-web/id/${tmdbId}?max_nodes=${maxNodes}`)
   if (!res.ok) return null
   return res.json()
 }

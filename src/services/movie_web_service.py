@@ -57,31 +57,53 @@ class MovieWebService:
             logger.info(f"[MovieWeb] Cache hit: '{movie_name}'")
             return cached
 
-        # 1 — Find seed
         seed = self._find_seed_movie(movie_name)
         if not seed:
             return None
+        return self._build_from_seed(seed, max_nodes, cache_key)
 
-        # 2 — Fetch candidates
+    def get_movie_web_by_id(self, tmdb_id: int, max_nodes: int = 12) -> Optional[Dict]:
+        """Same as get_movie_web but seeded by a TMDB id directly — used to
+        power the "More like this" rail on the movie detail page without an
+        extra search round-trip.
+
+        Defaults to a smaller graph (12) since the rail only renders ~10
+        items. Cached separately from the search-by-name path.
+        """
+        cache_key = f"web:byid:v1:{tmdb_id}:{max_nodes}"
+        cached = _web_cache.get(cache_key)
+        if cached:
+            logger.info(f"[MovieWeb] Cache hit: tmdb_id={tmdb_id}")
+            return cached
+
+        seed = self._fetch_full_movie(tmdb_id)
+        if not seed:
+            return None
+        return self._build_from_seed(seed, max_nodes, cache_key)
+
+    def _build_from_seed(self, seed: Dict, max_nodes: int, cache_key: str) -> Dict:
+        """Run the candidate retrieval + scoring + edge-build pipeline for a
+        fully-resolved seed movie. Cached under *cache_key* for 24 h."""
+        # 1 — Fetch candidates
         candidates, similar_ids, rec_ids = self._fetch_candidates(seed)
         logger.info(f"[MovieWeb] {len(candidates)} raw candidates for '{seed['title']}'")
 
-        # 3 — Structural scoring
+        # 2 — Structural scoring
         self._score_structural(seed, candidates, similar_ids, rec_ids)
 
-        # 4 — Take top-40 by structural score; LLM scores the top-25 of those
+        # 3 — Take top-40 by structural score; LLM scores the top-25 of those
         candidates.sort(key=lambda c: c["structural_score"], reverse=True)
         top_all = candidates[:40]
         top_llm = top_all[:25]  # LLM only re-ranks the cream of the crop
 
-        # 5 — LLM cinematic fingerprint re-scoring (graceful fallback)
+        # 4 — LLM cinematic fingerprint re-scoring (graceful fallback)
         try:
             llm_scores = self._llm_rescore(seed, top_llm)
         except Exception as exc:
             logger.warning(f"[MovieWeb] LLM rescore failed, using structural only: {exc}")
             llm_scores = {c["id"]: 0.5 for c in top_llm}
 
-        # 6 — Score fusion  (structural 40 % + vibe 60 %)
+        # 5 — Score fusion  (structural 40 % + vibe 60 %)
         #     Candidates outside top-25 get vibe=0.5 (neutral) as fallback
         for c in top_all:
             vibe = llm_scores.get(c["id"], 0.5)
@@ -90,7 +112,7 @@ class MovieWebService:
         top_all.sort(key=lambda c: c["final_score"], reverse=True)
         final_nodes = top_all[:max_nodes]
 
-        # 7 — Build edges
+        # 6 — Build edges
         edges = self._build_edges(seed, final_nodes)
 
         result = {

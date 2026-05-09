@@ -70,9 +70,16 @@ export default function Recommendations() {
       const jobId = await submitRecommendationJob(userId, buildContext(), k)
       setJobId(jobId)
 
-      const deadline = Date.now() + 120_000
+      // 4-minute deadline — cold-start Lambda + slow LLM/API can push the
+      // workflow past 90s, and the previous 120s window was timing out
+      // mid-run. We also back off the poll interval so we don't hammer the
+      // API after the first ~30s.
+      const start = Date.now()
+      const deadline = start + 240_000
       while (Date.now() < deadline) {
-        await new Promise((r) => setTimeout(r, 700))
+        const elapsed = Date.now() - start
+        const interval = elapsed < 30_000 ? 700 : elapsed < 90_000 ? 1500 : 3000
+        await new Promise((r) => setTimeout(r, interval))
         const data = await pollJobStatus(jobId)
         setSteps(data.steps ?? [])
         setJobStatus(data.status)
@@ -90,7 +97,11 @@ export default function Recommendations() {
           return
         }
       }
+      // Hit the deadline without seeing 'complete' or 'failed'. Don't claim
+      // failure — the job may still finish in the background. Surface a
+      // distinct status so the UI can show a "still working" message.
       setIsPolling(false)
+      setJobStatus('timeout')
     } catch (err) {
       console.error(err)
       setIsPolling(false)
@@ -183,7 +194,24 @@ export default function Recommendations() {
           {jobStatus === 'failed' && (
             <div className="rounded-xl p-4 mb-6 text-sm max-w-lg mx-auto"
               style={{ background: 'rgba(229,9,20,0.08)', border: '1px solid rgba(229,9,20,0.25)', color: '#ff6b6b' }}>
-              Pipeline failed. Check the API server is running on port 8000.
+              Recommendation pipeline failed. Try again — if it keeps failing, the AI service may be rate-limited.
+            </div>
+          )}
+
+          {/* Soft timeout — backend may still finish the job */}
+          {jobStatus === 'timeout' && (
+            <div className="rounded-xl p-4 mb-6 text-sm max-w-lg mx-auto flex items-center justify-between gap-3"
+              style={{ background: 'rgba(245,197,24,0.06)', border: '1px solid rgba(245,197,24,0.22)', color: '#fff' }}>
+              <span>
+                Still working — the recommendation engine is taking longer than usual. It may finish in the background; try again to refresh.
+              </span>
+              <button
+                onClick={startJob}
+                className="text-xs font-bold px-3 py-1.5 rounded-lg flex-shrink-0"
+                style={{ background: 'var(--accent-gold)', color: '#0a0a0f', border: 'none', cursor: 'pointer' }}
+              >
+                Try again
+              </button>
             </div>
           )}
 
@@ -192,7 +220,7 @@ export default function Recommendations() {
             <FilmStack recs={recommendations} />
           )}
 
-          {!isRunning && recommendations.length === 0 && jobStatus !== 'failed' && (
+          {!isRunning && recommendations.length === 0 && jobStatus !== 'failed' && jobStatus !== 'timeout' && (
             <div className="flex flex-col items-center justify-center py-32 text-center">
               <div className="text-6xl mb-5">{jobStatus === 'complete' ? '😕' : '🎬'}</div>
               <p className="text-lg font-bold text-white mb-1">

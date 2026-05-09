@@ -17,10 +17,12 @@ import {
 } from 'lucide-react'
 import {
   getMediaDetails,
+  getMovieWebById,
   submitFeedback,
   recordInteraction,
   type Movie,
   type MediaType,
+  type MovieWebGraph,
 } from '@/lib/api'
 import { tmdbPoster, scoreColor, formatRuntime } from '@/lib/utils'
 import { useUserStore } from '@/store/useUserStore'
@@ -46,6 +48,9 @@ export default function MovieDetail() {
   const [shareToast, setShareToast] = useState<string | null>(null)
   const [rated, setRated] = useState<'up' | 'down' | null>(null)
   const [overviewExpanded, setOverviewExpanded] = useState(false)
+  // CineWeb-scored similar titles. Replaces movie.similar (raw TMDB) for
+  // movies once it loads — TV stays on TMDB until CineWeb learns TV.
+  const [cineWebSimilar, setCineWebSimilar] = useState<MovieWebGraph | null>(null)
 
   const mt: MediaType = mediaType === 'tv' ? 'tv' : 'movie'
   const id = parseInt(tmdbId ?? '0', 10)
@@ -56,6 +61,7 @@ export default function MovieDetail() {
     setLoading(true)
     setError(false)
     setMovie(null)
+    setCineWebSimilar(null)
     getMediaDetails(id, mt)
       .then((m) => {
         if (cancelled) return
@@ -74,6 +80,18 @@ export default function MovieDetail() {
     return () => {
       cancelled = true
     }
+  }, [id, mt])
+
+  // Fetch CineWeb-scored similar in parallel — only for movies (the service
+  // doesn't index TV yet). Cached server-side 24h; first hit takes a few
+  // seconds, subsequent hits are instant.
+  useEffect(() => {
+    if (mt !== 'movie' || !id) return
+    let cancelled = false
+    getMovieWebById(id, 12)
+      .then((g) => { if (!cancelled && g) setCineWebSimilar(g) })
+      .catch(() => { /* fall through to movie.similar */ })
+    return () => { cancelled = true }
   }, [id, mt])
 
   const handleRate = async (v: 'up' | 'down') => {
@@ -482,22 +500,48 @@ export default function MovieDetail() {
         )}
       </div>
 
-      {/* More like this — full-width rail outside the constrained body */}
-      {(movie.similar?.length ?? 0) > 0 && (
-        <div className="mt-8">
-          <Rail
-            title="More like this"
-            items={movie.similar!.map((s) => ({
-              tmdb_id: s.tmdb_id,
-              title: s.title,
-              year: s.year ?? undefined,
-              poster_path: s.poster_path ?? undefined,
-              vote_average: s.vote_average ?? undefined,
-              media_type: s.media_type,
-            }))}
-          />
-        </div>
-      )}
+      {/* More like this — prefer CineWeb-scored results when available
+          (richer signal: keywords + director + actor + LLM vibe), fall
+          back to TMDB raw similar while it loads or for TV. */}
+      {(() => {
+        const cineWebItems = cineWebSimilar?.nodes ?? []
+        const useCineWeb = mt === 'movie' && cineWebItems.length > 0
+        if (useCineWeb) {
+          return (
+            <div className="mt-8">
+              <Rail
+                title="More like this"
+                items={cineWebItems.map((n) => ({
+                  tmdb_id: n.id,
+                  title: n.title,
+                  year: n.year ?? undefined,
+                  poster_path: n.poster_path ?? undefined,
+                  vote_average: n.vote_average ?? undefined,
+                  media_type: 'movie' as const,
+                }))}
+              />
+            </div>
+          )
+        }
+        if ((movie.similar?.length ?? 0) > 0) {
+          return (
+            <div className="mt-8">
+              <Rail
+                title="More like this"
+                items={movie.similar!.map((s) => ({
+                  tmdb_id: s.tmdb_id,
+                  title: s.title,
+                  year: s.year ?? undefined,
+                  poster_path: s.poster_path ?? undefined,
+                  vote_average: s.vote_average ?? undefined,
+                  media_type: s.media_type,
+                }))}
+              />
+            </div>
+          )
+        }
+        return null
+      })()}
 
       {showPlayer && id > 0 && (
         <FullScreenPlayer
