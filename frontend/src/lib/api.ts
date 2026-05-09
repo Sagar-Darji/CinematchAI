@@ -62,8 +62,9 @@ function isNetworkError(err: unknown): boolean {
 
 function toNetworkError(action: string, err: unknown): never {
   if (isNetworkError(err)) {
-    const target = API_URL || window.location.origin
-    throw new Error(`Cannot reach the API server at ${target}. Check VITE_API_URL or the /api proxy.`)
+    throw new Error(
+      "Couldn't connect to CineMatch. Check your internet and try again — if it keeps failing, please reach out.",
+    )
   }
   throw err instanceof Error ? err : new Error(action)
 }
@@ -80,7 +81,9 @@ async function authFetch(path: string, init: RequestInit): Promise<Response> {
       // it responds with index.html. Reject that instead of feeding HTML to res.json().
       const ct = res.headers.get('content-type') ?? ''
       if (!ct.includes('application/json')) {
-        throw new Error(`Cannot reach the API server at ${API_URL}. Check VITE_API_URL or the /api proxy.`)
+        throw new Error(
+          "Couldn't connect to CineMatch. Check your internet and try again — if it keeps failing, please reach out.",
+        )
       }
       return res
     }
@@ -388,9 +391,10 @@ export async function getSeasonEpisodes(tmdbId: number, seasonNumber: number): P
 export interface MovieWebNode {
   id: number
   title: string
-  // Backend ships year as a string ("1994"), poster as a fully-formed URL
-  // ("https://image.tmdb.org/t/p/w185/abc.jpg") rather than a tmdb path.
+  // Backend ships year as a string ("1994"). poster_path is the bare
+  // TMDB path; poster_url is the legacy fully-formed URL.
   year?: string | number | null
+  poster_path?: string | null
   poster_url?: string | null
   vote_average?: number | null
   score?: number

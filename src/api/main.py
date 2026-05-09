@@ -186,6 +186,25 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(SlowAPIMiddleware)
 
 
+# Strip absolute AWS hostnames from Location headers — FastAPI's
+# trailing-slash redirects (and any RedirectResponse built from request.url)
+# include the upstream API Gateway host, which leaks past the Amplify /api
+# proxy and hits cellular networks that block *.execute-api.amazonaws.com.
+# Make those redirects same-origin by emitting only the path+query.
+@app.middleware("http")
+async def relativize_redirect_location(request: Request, call_next):
+    response = await call_next(request)
+    loc = response.headers.get("location")
+    if loc and ("execute-api" in loc or "amazonaws.com" in loc):
+        from urllib.parse import urlparse
+        parsed = urlparse(loc)
+        relative = parsed.path or "/"
+        if parsed.query:
+            relative = f"{relative}?{parsed.query}"
+        response.headers["location"] = relative
+    return response
+
+
 # Request ID middleware
 @app.middleware("http")
 async def add_request_id(request: Request, call_next):

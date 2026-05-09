@@ -512,12 +512,13 @@ export default function MovieDetail() {
               <Rail
                 title="More like this"
                 items={cineWebItems.map((n) => {
-                  // Backend hands us a fully-formed image URL; Rail wants
-                  // the bare TMDB path so it can pick its own size. Strip
-                  // the prefix.
-                  const path = n.poster_url
-                    ? n.poster_url.replace(/^https:\/\/image\.tmdb\.org\/t\/p\/w\d+/, '')
-                    : undefined
+                  // Backend now ships poster_path directly; fall back to
+                  // stripping it out of poster_url for any cached
+                  // pre-fix responses.
+                  const path = n.poster_path
+                    ?? (n.poster_url
+                          ? n.poster_url.replace(/^https:\/\/image\.tmdb\.org\/t\/p\/w\d+/, '')
+                          : undefined)
                   const yearNum = typeof n.year === 'string'
                     ? parseInt(n.year, 10) || undefined
                     : n.year ?? undefined
@@ -525,7 +526,7 @@ export default function MovieDetail() {
                     tmdb_id: n.id,
                     title: n.title,
                     year: yearNum,
-                    poster_path: path,
+                    poster_path: path ?? undefined,
                     vote_average: n.vote_average ?? undefined,
                     media_type: 'movie' as const,
                   }

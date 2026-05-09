@@ -298,7 +298,8 @@ class UserService:
 
     def set_favorites(self, user_id: str, items: List[dict]) -> List[dict]:
         """Replace the user's favorites list. Validates shape, dedupes, caps
-        at MAX_FAVORITES, and returns the canonical list that was stored."""
+        at MAX_FAVORITES, ensures the user row exists, and returns the
+        canonical list that was stored."""
         cleaned: List[dict] = []
         seen: set = set()
         for item in items[: self.MAX_FAVORITES]:
@@ -321,15 +322,33 @@ class UserService:
             })
 
         payload = json.dumps(cleaned)
+        now = datetime.now(timezone.utc).isoformat()
+        # Ensure the user row exists — UPDATE silently no-ops on a missing
+        # row, which was eating saves for any user who hadn't yet had a
+        # profile_json row written.
+        stub = json.dumps({"user_id": user_id, "total_ratings": 0, "is_cold_start": True})
         conn = self._connect()
         try:
             conn.execute(
+                "INSERT OR IGNORE INTO users (user_id, created_at, updated_at, profile_json) "
+                "VALUES (?,?,?,?)",
+                (user_id, now, now, stub),
+            )
+            conn.execute(
                 "UPDATE users SET favorite_tmdb_ids=?, updated_at=? WHERE user_id=?",
-                (payload, datetime.now(timezone.utc).isoformat(), user_id),
+                (payload, now, user_id),
             )
             conn.commit()
         finally:
             conn.close()
+        # Read-back to confirm persistence — surfaces silent failures (cached
+        # connection holding stale schema, etc.) as a clear exception.
+        stored = self.get_favorites(user_id)
+        if len(stored) != len(cleaned):
+            logger.warning(
+                f"Favorites persistence mismatch for user_id={user_id}: "
+                f"wrote {len(cleaned)} read back {len(stored)}"
+            )
         return cleaned
 
     def set_auth_credentials(self, user_id: str, email: str,

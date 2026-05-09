@@ -477,6 +477,10 @@ class MovieWebService:
             "title": movie.get("title", "Unknown"),
             "year": movie.get("year"),
             "genres": movie.get("genres", []),
+            # Both forms — poster_url is the legacy field used by the
+            # CineWeb graph view, poster_path is the bare TMDB path used
+            # by the rest of the app's image helpers.
+            "poster_path": pp,
             "poster_url": f"{POSTER_BASE}{pp}" if pp else None,
             "vote_average": movie.get("vote_average"),
             "overview": movie.get("overview", ""),
