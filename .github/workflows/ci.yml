@@ -50,4 +50,6 @@ jobs:
         env:
           DEPLOYMENT_ENV: development
           JWT_SECRET: ci-test-secret-do-not-use-in-prod
-        run: pytest tests/test_smoke.py -q
+        # Override pyproject.toml addopts (which expects pytest-cov / html
+        # output) so smoke can run with the minimal install set above.
+        run: pytest tests/test_smoke.py -q -o addopts=""
