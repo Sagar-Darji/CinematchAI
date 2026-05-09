@@ -102,6 +102,10 @@ export function FullScreenPlayer({
   const [currentSeasonEpisodes, setCurrentSeasonEpisodes] = useState<Episode[] | null>(null)
   // Seconds remaining in the auto-advance countdown, or null when not armed.
   const [pendingAdvance, setPendingAdvance] = useState<number | null>(null)
+  // Chrome auto-hides after a few seconds of inactivity so it doesn't cover
+  // the iframe's own controls (fullscreen, seekbar). Stays visible while
+  // the drawer is open or while we're in the auto-advance countdown.
+  const [chromeVisible, setChromeVisible] = useState(true)
 
   // Resume the last season/episode the user navigated to last time, if any.
   const [selectedSeason, setSelectedSeason] = useState(() => {
@@ -247,6 +251,35 @@ export function FullScreenPlayer({
     return () => window.removeEventListener('message', handler)
   }, [mediaType, autoAdvance, nextRef, srcIdx])
 
+  // Auto-hide chrome on inactivity so it doesn't cover the iframe's
+  // fullscreen / seek / settings buttons. Reset on any user input on the
+  // document (mousemove, touch, keyboard).
+  useEffect(() => {
+    if (drawerOpen || pendingAdvance !== null) {
+      setChromeVisible(true)
+      return
+    }
+    let timer: ReturnType<typeof setTimeout>
+    const armHide = () => {
+      clearTimeout(timer)
+      timer = setTimeout(() => setChromeVisible(false), 3500)
+    }
+    const ping = () => {
+      setChromeVisible(true)
+      armHide()
+    }
+    armHide()
+    document.addEventListener('mousemove', ping)
+    document.addEventListener('touchstart', ping, { passive: true })
+    document.addEventListener('keydown', ping)
+    return () => {
+      clearTimeout(timer)
+      document.removeEventListener('mousemove', ping)
+      document.removeEventListener('touchstart', ping)
+      document.removeEventListener('keydown', ping)
+    }
+  }, [drawerOpen, pendingAdvance])
+
   // Tick the countdown; fire goNext when it hits 0.
   useEffect(() => {
     if (pendingAdvance === null) return
@@ -298,6 +331,9 @@ export function FullScreenPlayer({
           paddingBottom: '0.75rem',
           paddingLeft: 'max(env(safe-area-inset-left, 0px), 1rem)',
           paddingRight: 'max(env(safe-area-inset-right, 0px), 1rem)',
+          opacity: chromeVisible ? 1 : 0,
+          pointerEvents: chromeVisible ? 'auto' : 'none',
+          transition: 'opacity 0.25s ease',
         }}
       >
         <div className="flex items-center gap-2 min-w-0">
@@ -337,15 +373,23 @@ export function FullScreenPlayer({
         </button>
       </div>
 
-      {/* Bottom chrome (TV only): episode pill + Prev/Next buttons */}
+      {/* Bottom chrome (TV only): episode pill + Prev/Next buttons.
+          Sits ABOVE the iframe's own seekbar/fullscreen area to avoid
+          covering them, and inherits the auto-hide visibility. */}
       {mediaType === 'tv' && playableSeasons.length > 0 && (
         <div
           className="absolute z-10 flex items-center justify-between gap-3"
           style={{
+            // Outer container is click-through so the iframe behind always
+            // gets the click; child buttons set pointer-events:auto.
             pointerEvents: 'none',
             left: 'max(env(safe-area-inset-left, 0px), 1rem)',
             right: 'max(env(safe-area-inset-right, 0px), 1rem)',
-            bottom: 'calc(max(env(safe-area-inset-bottom, 0px), 0.75rem))',
+            // Push above the iframe's bottom controls (~3.5rem high) so we
+            // don't sit on top of seek / fullscreen / settings.
+            bottom: 'calc(max(env(safe-area-inset-bottom, 0px), 0.75rem) + 3.5rem)',
+            opacity: chromeVisible ? 1 : 0,
+            transition: 'opacity 0.25s ease',
           }}
         >
           <button
@@ -353,7 +397,7 @@ export function FullScreenPlayer({
             title="Browse episodes"
             className="flex items-center gap-2 max-w-[60%] truncate"
             style={{
-              pointerEvents: 'auto',
+              pointerEvents: chromeVisible ? 'auto' : 'none',
               padding: '8px 14px',
               borderRadius: '14px',
               background: 'rgba(0,0,0,0.62)',
@@ -372,7 +416,7 @@ export function FullScreenPlayer({
             <ChevronUp size={14} className="flex-shrink-0" />
           </button>
 
-          <div className="flex items-center gap-2" style={{ pointerEvents: 'auto' }}>
+          <div className="flex items-center gap-2" style={{ pointerEvents: chromeVisible ? 'auto' : 'none' }}>
             <button
               onClick={goPrev}
               disabled={!prevRef}
@@ -744,7 +788,9 @@ function MovieModal({ rec, onClose }: ModalProps) {
           {tmdbId && (
             <button onClick={() => {
               setShowPlayer(true)
-              if (!isTv && userId) recordInteraction(userId, tmdbId, 'clicked')
+              // Don't fire 'clicked' here — backend turns that into a 3.5
+              // implicit rating, which is hostile UX. Pressing Play isn't
+              // a rating signal.
             }}
               disabled={isTv && detailLoading}
               className="flex items-center gap-2 text-sm font-bold"

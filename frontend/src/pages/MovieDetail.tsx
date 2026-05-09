@@ -98,7 +98,10 @@ export default function MovieDetail() {
       })
     }
     setShowPlayer(true)
-    if (!isTv) recordInteraction(userId, id, 'clicked')
+    // Note: do NOT call recordInteraction(... 'clicked') here. The backend
+    // converts that into an implicit 3.5 rating, which is hostile UX —
+    // pressing Play is not a rating signal. Explicit ratings come from the
+    // ReviewEditor or thumb buttons.
   }
 
   const handleShare = async () => {
