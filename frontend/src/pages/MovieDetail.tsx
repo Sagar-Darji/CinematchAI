@@ -29,6 +29,7 @@ import { useHistoryStore } from '@/store/useHistoryStore'
 import { FullScreenPlayer } from '@/components/ui/MovieCard'
 import { PageLoader } from '@/components/ui/PageLoader'
 import { Rail } from '@/components/home/Rail'
+import { ReviewEditor } from '@/components/movie/ReviewEditor'
 
 export default function MovieDetail() {
   const { mediaType, tmdbId } = useParams<{ mediaType: string; tmdbId: string }>()
@@ -467,6 +468,13 @@ export default function MovieDetail() {
                 )
               })}
             </div>
+          </div>
+        )}
+
+        {/* Your review — only for authenticated users */}
+        {userId && id > 0 && (
+          <div className="max-w-5xl mx-auto mt-6">
+            <ReviewEditor tmdbId={id} mediaType={mt} />
           </div>
         )}
       </div>

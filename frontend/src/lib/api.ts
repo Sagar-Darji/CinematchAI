@@ -286,6 +286,15 @@ export interface HeatmapData {
   counts: Record<string, number>
 }
 
+export interface Review {
+  tmdb_id: number
+  media_type: MediaType
+  rating: number | null
+  review_text: string | null
+  created_at?: string | null
+  updated_at?: string | null
+}
+
 export interface OnboardingMovie {
   tmdb_id: number
   title: string
@@ -415,6 +424,56 @@ export async function getHeatmap(year?: number): Promise<HeatmapData | null> {
   const res = handle401IfNeeded(await fetch(`${BASE}/history/heatmap${qs ? `?${qs}` : ''}`, { headers: authHeaders() }))
   if (!res.ok) return null
   return res.json()
+}
+
+// ── Reviews ───────────────────────────────────────────────────────────────────
+
+export async function getMyReview(tmdbId: number, mediaType: MediaType): Promise<Review | null> {
+  const params = new URLSearchParams({ media_type: mediaType })
+  const res = handle401IfNeeded(await fetch(`${BASE}/reviews/movie/${tmdbId}?${params}`, { headers: authHeaders() }))
+  if (!res.ok) return null
+  // Backend returns null body when no review exists.
+  const text = await res.text()
+  if (!text || text === 'null') return null
+  try { return JSON.parse(text) } catch { return null }
+}
+
+export async function upsertReview(payload: {
+  tmdbId: number
+  mediaType: MediaType
+  rating?: number | null
+  reviewText?: string | null
+}): Promise<Review> {
+  const res = handle401IfNeeded(await fetch(`${BASE}/reviews`, {
+    method: 'POST',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({
+      tmdb_id: payload.tmdbId,
+      media_type: payload.mediaType,
+      rating: payload.rating ?? null,
+      review_text: payload.reviewText ?? null,
+    }),
+  }))
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(`Save review failed: ${text}`)
+  }
+  return res.json()
+}
+
+export async function deleteReview(tmdbId: number, mediaType: MediaType): Promise<void> {
+  handle401IfNeeded(await fetch(`${BASE}/reviews/${mediaType}/${tmdbId}`, {
+    method: 'DELETE',
+    headers: authHeaders(),
+  }))
+}
+
+export async function listUserReviews(userId: string, limit = 200): Promise<Review[]> {
+  const params = new URLSearchParams({ limit: String(limit) })
+  const res = handle401IfNeeded(await fetch(`${BASE}/reviews/user/${userId}?${params}`, { headers: authHeaders() }))
+  if (!res.ok) return []
+  const data = await res.json()
+  return (data?.items ?? []) as Review[]
 }
 
 export async function getSystemStats(): Promise<{ chromadb_count: number; total_users: number; total_ratings: number } | null> {

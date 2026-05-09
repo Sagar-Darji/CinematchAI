@@ -4,6 +4,7 @@ import { User, Film, Star, TrendingUp, Upload, Loader2, Check, X, Pencil, PlayCi
 import { useUserStore } from '@/store/useUserStore'
 import { useHistoryStore } from '@/store/useHistoryStore'
 import { useWatchlistStore } from '@/store/useWatchlistStore'
+import { useReviewsStore } from '@/store/useReviewsStore'
 import {
   getUserProfile,
   getAdminProfile,
@@ -358,6 +359,8 @@ export default function Profile() {
   const history = useHistoryStore((s) => s.items)
   const clearHistory = useHistoryStore((s) => s.clear)
   const watchlist = useWatchlistStore((s) => s.items)
+  const reviewsByKey = useReviewsStore((s) => s.byKey)
+  const hydrateReviews = useReviewsStore((s) => s.hydrate)
 
   const [profile, setProfile] = useState<UserProfile | null>(null)
   const [admin, setAdmin] = useState<AdminProfile | null>(null)
@@ -383,6 +386,7 @@ export default function Profile() {
         getAdminProfile(userId),
         getFavorites(userId),
         getHeatmap(currentYear),
+        hydrateReviews(userId),
       ]).then(([p, a, favs, h]) => {
         if (cancelled) return
         setProfile(p)
@@ -396,7 +400,7 @@ export default function Profile() {
       })
     })
     return () => { cancelled = true }
-  }, [userId, setRatingCount, currentYear])
+  }, [userId, setRatingCount, currentYear, hydrateReviews])
 
   const genres = useMemo(() => profile?.genres ?? {}, [profile])
   const topGenres = useMemo(
@@ -646,11 +650,17 @@ export default function Profile() {
                           {history.slice(0, 50).map((h) => {
                             const poster = tmdbPoster(h.posterPath, 'w185')
                             const date = new Date(h.watchedAt)
+                            const review = reviewsByKey[`${h.tmdbId}-${h.mediaType}`]
+                            const snippet = review?.review_text
+                              ? review.review_text.length > 90
+                                ? `${review.review_text.slice(0, 90)}…`
+                                : review.review_text
+                              : null
                             return (
                               <Link
                                 key={`${h.tmdbId}-${h.mediaType}`}
                                 to={`/title/${h.mediaType}/${h.tmdbId}`}
-                                className="flex items-center gap-3 p-2 rounded-lg"
+                                className="flex items-start gap-3 p-2 rounded-lg"
                                 style={{ background: 'transparent', textDecoration: 'none' }}
                               >
                                 <div className="w-10 flex-shrink-0 rounded overflow-hidden" style={{ aspectRatio: '2/3', background: 'var(--bg-overlay)' }}>
@@ -658,14 +668,29 @@ export default function Profile() {
                                     <img src={poster} alt="" className="w-full h-full object-cover" loading="lazy" />
                                   ) : null}
                                 </div>
-                                <div className="flex-1 min-w-0">
-                                  <p className="text-sm font-semibold text-white truncate">{h.title}</p>
+                                <div className="flex-1 min-w-0 py-0.5">
+                                  <div className="flex items-center gap-2">
+                                    <p className="text-sm font-semibold text-white truncate">{h.title}</p>
+                                    {review?.rating != null && (
+                                      <span className="flex items-center gap-0.5 flex-shrink-0">
+                                        <Star size={10} fill="currentColor" style={{ color: 'var(--accent-gold)' }} />
+                                        <span className="text-[11px] font-bold" style={{ color: 'var(--accent-gold)' }}>
+                                          {review.rating.toFixed(1)}
+                                        </span>
+                                      </span>
+                                    )}
+                                  </div>
                                   <p className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
                                     {date.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })}
                                     {h.mediaType === 'tv' && h.lastSeason && h.lastEpisode
                                       ? ` · S${h.lastSeason} · E${h.lastEpisode}`
                                       : ''}
                                   </p>
+                                  {snippet && (
+                                    <p className="text-[11px] italic mt-0.5 line-clamp-2" style={{ color: 'var(--text-muted)' }}>
+                                      “{snippet}”
+                                    </p>
+                                  )}
                                 </div>
                               </Link>
                             )
