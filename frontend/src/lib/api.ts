@@ -388,8 +388,10 @@ export async function getSeasonEpisodes(tmdbId: number, seasonNumber: number): P
 export interface MovieWebNode {
   id: number
   title: string
-  year?: number | null
-  poster_path?: string | null
+  // Backend ships year as a string ("1994"), poster as a fully-formed URL
+  // ("https://image.tmdb.org/t/p/w185/abc.jpg") rather than a tmdb path.
+  year?: string | number | null
+  poster_url?: string | null
   vote_average?: number | null
   score?: number
 }

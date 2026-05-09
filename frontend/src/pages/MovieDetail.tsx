@@ -511,14 +511,25 @@ export default function MovieDetail() {
             <div className="mt-8">
               <Rail
                 title="More like this"
-                items={cineWebItems.map((n) => ({
-                  tmdb_id: n.id,
-                  title: n.title,
-                  year: n.year ?? undefined,
-                  poster_path: n.poster_path ?? undefined,
-                  vote_average: n.vote_average ?? undefined,
-                  media_type: 'movie' as const,
-                }))}
+                items={cineWebItems.map((n) => {
+                  // Backend hands us a fully-formed image URL; Rail wants
+                  // the bare TMDB path so it can pick its own size. Strip
+                  // the prefix.
+                  const path = n.poster_url
+                    ? n.poster_url.replace(/^https:\/\/image\.tmdb\.org\/t\/p\/w\d+/, '')
+                    : undefined
+                  const yearNum = typeof n.year === 'string'
+                    ? parseInt(n.year, 10) || undefined
+                    : n.year ?? undefined
+                  return {
+                    tmdb_id: n.id,
+                    title: n.title,
+                    year: yearNum,
+                    poster_path: path,
+                    vote_average: n.vote_average ?? undefined,
+                    media_type: 'movie' as const,
+                  }
+                })}
               />
             </div>
           )
