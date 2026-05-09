@@ -102,10 +102,6 @@ export function FullScreenPlayer({
   const [currentSeasonEpisodes, setCurrentSeasonEpisodes] = useState<Episode[] | null>(null)
   // Seconds remaining in the auto-advance countdown, or null when not armed.
   const [pendingAdvance, setPendingAdvance] = useState<number | null>(null)
-  // Chrome auto-hides after a few seconds of inactivity so it doesn't cover
-  // the iframe's own controls (fullscreen, seekbar). Stays visible while
-  // the drawer is open or while we're in the auto-advance countdown.
-  const [chromeVisible, setChromeVisible] = useState(true)
 
   // Resume the last season/episode the user navigated to last time, if any.
   const [selectedSeason, setSelectedSeason] = useState(() => {
@@ -251,35 +247,6 @@ export function FullScreenPlayer({
     return () => window.removeEventListener('message', handler)
   }, [mediaType, autoAdvance, nextRef, srcIdx])
 
-  // Auto-hide chrome on inactivity so it doesn't cover the iframe's
-  // fullscreen / seek / settings buttons. Reset on any user input on the
-  // document (mousemove, touch, keyboard).
-  useEffect(() => {
-    if (drawerOpen || pendingAdvance !== null) {
-      setChromeVisible(true)
-      return
-    }
-    let timer: ReturnType<typeof setTimeout>
-    const armHide = () => {
-      clearTimeout(timer)
-      timer = setTimeout(() => setChromeVisible(false), 3500)
-    }
-    const ping = () => {
-      setChromeVisible(true)
-      armHide()
-    }
-    armHide()
-    document.addEventListener('mousemove', ping)
-    document.addEventListener('touchstart', ping, { passive: true })
-    document.addEventListener('keydown', ping)
-    return () => {
-      clearTimeout(timer)
-      document.removeEventListener('mousemove', ping)
-      document.removeEventListener('touchstart', ping)
-      document.removeEventListener('keydown', ping)
-    }
-  }, [drawerOpen, pendingAdvance])
-
   // Tick the countdown; fire goNext when it hits 0.
   useEffect(() => {
     if (pendingAdvance === null) return
@@ -331,9 +298,6 @@ export function FullScreenPlayer({
           paddingBottom: '0.75rem',
           paddingLeft: 'max(env(safe-area-inset-left, 0px), 1rem)',
           paddingRight: 'max(env(safe-area-inset-right, 0px), 1rem)',
-          opacity: chromeVisible ? 1 : 0,
-          pointerEvents: chromeVisible ? 'auto' : 'none',
-          transition: 'opacity 0.25s ease',
         }}
       >
         <div className="flex items-center gap-2 min-w-0">
@@ -373,23 +337,20 @@ export function FullScreenPlayer({
         </button>
       </div>
 
-      {/* Bottom chrome (TV only): episode pill + Prev/Next buttons.
-          Sits ABOVE the iframe's own seekbar/fullscreen area to avoid
-          covering them, and inherits the auto-hide visibility. */}
+      {/* Episode toolbar (TV only): sits in a second row right under the
+          top bar so it never covers the iframe's bottom controls
+          (fullscreen, seekbar, settings). */}
       {mediaType === 'tv' && playableSeasons.length > 0 && (
         <div
-          className="absolute z-10 flex items-center justify-between gap-3"
+          className="absolute z-10 flex items-center justify-between gap-3 flex-wrap"
           style={{
             // Outer container is click-through so the iframe behind always
             // gets the click; child buttons set pointer-events:auto.
             pointerEvents: 'none',
             left: 'max(env(safe-area-inset-left, 0px), 1rem)',
             right: 'max(env(safe-area-inset-right, 0px), 1rem)',
-            // Push above the iframe's bottom controls (~3.5rem high) so we
-            // don't sit on top of seek / fullscreen / settings.
-            bottom: 'calc(max(env(safe-area-inset-bottom, 0px), 0.75rem) + 3.5rem)',
-            opacity: chromeVisible ? 1 : 0,
-            transition: 'opacity 0.25s ease',
+            // Sit just below the top bar (top bar ~3.25rem tall + safe-area).
+            top: 'calc(max(env(safe-area-inset-top, 0px), 0.75rem) + 3.25rem)',
           }}
         >
           <button
@@ -397,7 +358,7 @@ export function FullScreenPlayer({
             title="Browse episodes"
             className="flex items-center gap-2 max-w-[60%] truncate"
             style={{
-              pointerEvents: chromeVisible ? 'auto' : 'none',
+              pointerEvents: 'auto',
               padding: '8px 14px',
               borderRadius: '14px',
               background: 'rgba(0,0,0,0.62)',
@@ -416,7 +377,7 @@ export function FullScreenPlayer({
             <ChevronUp size={14} className="flex-shrink-0" />
           </button>
 
-          <div className="flex items-center gap-2" style={{ pointerEvents: chromeVisible ? 'auto' : 'none' }}>
+          <div className="flex items-center gap-2" style={{ pointerEvents: 'auto' }}>
             <button
               onClick={goPrev}
               disabled={!prevRef}
@@ -529,7 +490,11 @@ export function FullScreenPlayer({
 
       <iframe
         key={`${mediaType}-${selectedSeason}-${selectedEpisode}-${srcIdx}`}
-        src={src}
+        // While the episode drawer is open, swap the iframe to about:blank
+        // so playback hard-stops — embed sources are cross-origin so we
+        // can't postMessage("pause") universally. When the drawer closes
+        // (with or without a new pick), src flips back to the real URL.
+        src={drawerOpen ? 'about:blank' : src}
         style={{ width: '100%', height: '100%', border: 'none', display: 'block' }}
         referrerPolicy="no-referrer"
         allow="autoplay; fullscreen; encrypted-media"
