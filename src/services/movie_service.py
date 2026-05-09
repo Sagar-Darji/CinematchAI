@@ -281,6 +281,38 @@ class MovieService:
             logger.warning(f"Failed to fetch season {tmdb_id}/{season_number}: {e}")
             return None
 
+    def get_media_auto_batch(
+        self, tmdb_ids: List[int], max_workers: int = 10
+    ) -> List[Optional["Movie"]]:
+        """Resolve TMDB ids that may be either movies OR tv shows.
+
+        Strategy: batch-fetch as movie first (the common case for ratings —
+        Letterboxd imports are all movies). Whatever didn't resolve, retry
+        as tv. Returns Movie objects in the same order; the caller can read
+        movie.metadata.media_type to discriminate.
+        """
+        movies = self.get_movies_batch(tmdb_ids, max_workers=max_workers)
+        unresolved = [(i, tid) for i, (m, tid) in enumerate(zip(movies, tmdb_ids)) if m is None]
+        if unresolved:
+            tv_ids = [tid for _, tid in unresolved]
+
+            def _fetch_tv(tid: int):
+                return tid, self.get_media_by_id(tmdb_id=tid, media_type="tv")
+
+            tv_results: dict = {}
+            with ThreadPoolExecutor(max_workers=max_workers) as pool:
+                futures = {pool.submit(_fetch_tv, tid): tid for tid in tv_ids}
+                for future in as_completed(futures):
+                    try:
+                        tid, movie = future.result(timeout=30)
+                        tv_results[tid] = movie
+                    except Exception as e:
+                        logger.warning(f"TV fallback failed for id {futures[future]}: {e}")
+                        tv_results[futures[future]] = None
+            for idx, tid in unresolved:
+                movies[idx] = tv_results.get(tid)
+        return movies
+
     def get_movies_batch(
         self, tmdb_ids: List[int], max_workers: int = 5
     ) -> List[Optional["Movie"]]:

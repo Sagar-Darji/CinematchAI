@@ -264,6 +264,104 @@ async def get_user(user_id: str, current_user: str = Depends(get_current_user)):
     }
 
 
+@router.get(
+    "/{user_id}/ratings",
+    status_code=status.HTTP_200_OK,
+)
+async def list_user_ratings(
+    user_id: str,
+    media_type: str = "all",
+    sort: str = "date_desc",
+    page: int = 1,
+    limit: int = 24,
+    current_user: str = Depends(get_current_user),
+):
+    """Paginated, sortable list of a user's ratings — Films + Series tabs.
+
+    Args:
+        media_type: "movie" | "tv" | "all".
+        sort: date_desc | date_asc | rating_desc | rating_asc | title_asc.
+        page: 1-based page index.
+        limit: page size (max 60).
+
+    Drives the Profile page's Films / Series tabs. Reuses the cached admin
+    profile response (30 min TTL) so repeated paging is instant — only the
+    first request after the cache expires does the DB + TMDB resolve.
+    """
+    if user_id != current_user:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only view your own ratings",
+        )
+    if media_type not in ("all", "movie", "tv"):
+        raise HTTPException(status_code=400, detail="media_type must be all|movie|tv")
+    if sort not in ("date_desc", "date_asc", "rating_desc", "rating_asc", "title_asc"):
+        raise HTTPException(status_code=400, detail="invalid sort")
+    if page < 1 or limit < 1 or limit > 60:
+        raise HTTPException(status_code=400, detail="invalid pagination")
+
+    # Reuse the admin profile cache so we don't pay for the DB query +
+    # TMDB resolve on every page change. Pull the resolved ratings from
+    # there (the admin endpoint's loop populates title / media_type /
+    # poster_path on each rating dict).
+    from src.api.routes.admin import _admin_profile_cache, _admin_cache_key
+    cached = _admin_profile_cache.get(_admin_cache_key(user_id))
+    if cached and "recent_ratings" in cached:
+        ratings = list(cached["recent_ratings"])
+    else:
+        # Fall back to building it inline — same logic as the admin
+        # endpoint, just inlined to avoid an HTTP self-call.
+        from src.services.user_service import get_user_service
+        from src.services.movie_service import get_movie_service
+        all_ratings = get_user_service().get_user_ratings(user_id)
+        head = all_ratings[:200]
+        try:
+            ids = [int(r["movie_id"]) for r in head]
+            movies = get_movie_service().get_media_auto_batch(ids, max_workers=10)
+            for r, movie in zip(head, movies):
+                if movie:
+                    r["title"] = movie.metadata.title
+                    r["year"] = movie.metadata.year
+                    r["media_type"] = movie.metadata.media_type or "movie"
+                    r["poster_path"] = movie.metadata.poster_path
+                else:
+                    r["title"] = f"Movie {r['movie_id']}"
+                    r["year"] = None
+                    r["media_type"] = "movie"
+                    r["poster_path"] = None
+        except Exception as exc:
+            logger.warning(f"Failed to resolve ratings for {user_id}: {exc}")
+        ratings = head
+
+    # Filter
+    if media_type != "all":
+        ratings = [r for r in ratings if r.get("media_type") == media_type]
+
+    # Sort
+    if sort == "date_desc":
+        ratings.sort(key=lambda r: r.get("timestamp") or "", reverse=True)
+    elif sort == "date_asc":
+        ratings.sort(key=lambda r: r.get("timestamp") or "")
+    elif sort == "rating_desc":
+        ratings.sort(key=lambda r: (r.get("rating") or 0), reverse=True)
+    elif sort == "rating_asc":
+        ratings.sort(key=lambda r: (r.get("rating") or 0))
+    elif sort == "title_asc":
+        ratings.sort(key=lambda r: (r.get("title") or "").lower())
+
+    total = len(ratings)
+    start = (page - 1) * limit
+    end = start + limit
+    items = ratings[start:end]
+    return {
+        "items": items,
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "has_more": end < total,
+    }
+
+
 class SetFavoritesRequest(BaseModel):
     items: List[FavoriteItem] = Field(default_factory=list, max_length=4)
 

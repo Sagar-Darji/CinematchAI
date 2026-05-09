@@ -24,6 +24,7 @@ import { RatingHistogram } from '@/components/profile/RatingHistogram'
 import { Heatmap } from '@/components/profile/Heatmap'
 import { YearInReview } from '@/components/profile/YearInReview'
 import { FavoritesEditor } from '@/components/profile/FavoritesEditor'
+import { RatedGrid } from '@/components/profile/RatedGrid'
 import {
   ratingHistogram,
   decadeBreakdown,
@@ -31,7 +32,7 @@ import {
   yearInReview,
 } from '@/lib/profileStats'
 
-type TabKey = 'overview' | 'diary' | 'films' | 'watchlist'
+type TabKey = 'overview' | 'diary' | 'films' | 'series' | 'watchlist'
 
 // ── Letterboxd Import Panel (unchanged from previous design) ──────────────────
 
@@ -438,8 +439,8 @@ export default function Profile() {
         </div>
       ) : (
         <>
-          {/* Header banner */}
-          <div className="relative" style={{ height: '180px', overflow: 'hidden' }}>
+          {/* Header banner — taller, more cinematic */}
+          <div className="relative" style={{ height: '240px', overflow: 'hidden' }}>
             {bannerUrl ? (
               <>
                 <div
@@ -447,15 +448,16 @@ export default function Profile() {
                   style={{
                     backgroundImage: `url(${bannerUrl})`,
                     backgroundSize: 'cover',
-                    backgroundPosition: 'center',
-                    filter: 'blur(12px) brightness(0.4)',
-                    transform: 'scale(1.1)',
+                    backgroundPosition: 'center 30%',
+                    filter: 'blur(14px) brightness(0.42)',
+                    transform: 'scale(1.12)',
                   }}
                 />
                 <div
                   className="absolute inset-0"
                   style={{
-                    background: 'linear-gradient(to bottom, transparent 30%, var(--bg-primary) 100%)',
+                    background:
+                      'linear-gradient(to bottom, rgba(10,10,15,0.2) 0%, rgba(10,10,15,0.5) 55%, var(--bg-primary) 100%)',
                   }}
                 />
               </>
@@ -464,31 +466,45 @@ export default function Profile() {
             )}
           </div>
 
-          <div className="p-5 md:p-8 max-w-4xl mx-auto -mt-20 relative">
+          <div className="p-5 md:p-8 max-w-4xl mx-auto -mt-24 relative">
             {loading && !admin ? (
               <SkeletonProfile />
             ) : (
-              <div className="space-y-5">
-                {/* Identity card (sits over the banner) */}
+              <div className="space-y-6">
+                {/* Identity card — bigger avatar, more breathing room */}
                 <div
-                  className="rounded-xl p-5 flex items-center gap-5 animate-fade-in"
-                  style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}
+                  className="rounded-2xl p-5 md:p-6 flex items-center gap-5 animate-fade-in"
+                  style={{
+                    background: 'var(--bg-card)',
+                    border: '1px solid var(--border)',
+                    boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
+                  }}
                 >
                   <div
-                    className="w-16 h-16 rounded-full flex items-center justify-center text-2xl font-black flex-shrink-0"
-                    style={{ background: 'var(--accent-gold)', color: '#0a0a0f' }}
+                    className="rounded-full flex items-center justify-center font-black flex-shrink-0"
+                    style={{
+                      width: '88px',
+                      height: '88px',
+                      background: 'linear-gradient(135deg, var(--accent-gold) 0%, #d4a813 100%)',
+                      color: '#0a0a0f',
+                      fontSize: '38px',
+                      boxShadow: '0 6px 20px rgba(245,197,24,0.32)',
+                    }}
                   >
                     {userId[0]?.toUpperCase() ?? '?'}
                   </div>
                   <div className="flex-1 min-w-0">
-                    <h1 className="text-xl md:text-2xl font-black text-white truncate">{userId}</h1>
-                    <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
-                      {totalRatings || 0} {totalRatings === 1 ? 'rating' : 'ratings'}
+                    <h1 className="text-2xl md:text-3xl font-black text-white truncate leading-tight tracking-tight">
+                      {userId}
+                    </h1>
+                    <p className="text-sm mt-1" style={{ color: 'var(--text-muted)' }}>
+                      {(totalRatings || 0).toLocaleString()} {totalRatings === 1 ? 'rating' : 'ratings'}
+                      {filmsYear ? ` · ${filmsYear} this year` : ''}
                     </p>
                   </div>
                   {admin?.profile_status && (
                     <span
-                      className="text-[10px] font-bold px-2 py-1 rounded-full flex-shrink-0"
+                      className="hidden sm:inline-flex text-[10px] font-bold px-2.5 py-1 rounded-full flex-shrink-0 uppercase tracking-wider"
                       style={{
                         background: admin.profile_status === 'active' ? 'rgba(245,197,24,0.15)' : 'var(--bg-overlay)',
                         color: admin.profile_status === 'active' ? 'var(--accent-gold)' : 'var(--text-muted)',
@@ -500,22 +516,32 @@ export default function Profile() {
                   )}
                 </div>
 
-                {/* Stats row — 4 cards */}
+                {/* Stats row — 4 cards with gold accent on the value */}
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                   {[
-                    { icon: Film, label: 'Films', value: totalRatings || '—' },
-                    { icon: Calendar, label: `In ${currentYear}`, value: filmsYear || '—' },
+                    { icon: Film, label: 'Films', value: totalRatings ? totalRatings.toLocaleString() : '—' },
+                    { icon: Calendar, label: `In ${currentYear}`, value: filmsYear ? filmsYear.toLocaleString() : '—' },
                     { icon: Star, label: 'Avg ★', value: avgRating ? avgRating.toFixed(1) : '—' },
-                    { icon: TrendingUp, label: 'Genres', value: Object.keys(genres).length || '—' },
+                    { icon: TrendingUp, label: 'Genres', value: Object.keys(genres).length ? Object.keys(genres).length.toLocaleString() : '—' },
                   ].map(({ icon: Icon, label, value }, i) => (
                     <div
                       key={label}
-                      className="rounded-xl p-4 flex flex-col items-center gap-1 text-center animate-fade-in"
-                      style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', animationDelay: `${i * 0.05}s` }}
+                      className="rounded-2xl p-4 flex flex-col items-start gap-1 animate-fade-in"
+                      style={{
+                        background: 'linear-gradient(180deg, var(--bg-card) 0%, rgba(18,18,26,0.7) 100%)',
+                        border: '1px solid var(--border)',
+                        animationDelay: `${i * 0.05}s`,
+                      }}
                     >
-                      <Icon size={16} style={{ color: 'var(--accent-gold)' }} />
-                      <span className="text-xl font-black text-white">{value}</span>
-                      <span className="text-[11px]" style={{ color: 'var(--text-muted)' }}>{label}</span>
+                      <div className="flex items-center gap-1.5">
+                        <Icon size={12} style={{ color: 'var(--accent-gold)' }} />
+                        <span className="text-[10px] font-bold uppercase tracking-widest" style={{ color: 'var(--text-muted)' }}>
+                          {label}
+                        </span>
+                      </div>
+                      <span className="text-2xl md:text-3xl font-black text-white leading-none mt-1">
+                        {value}
+                      </span>
                     </div>
                   ))}
                 </div>
@@ -530,7 +556,8 @@ export default function Profile() {
                   options={[
                     { value: 'overview', label: 'Overview' },
                     { value: 'diary', label: 'Diary', count: history.length },
-                    { value: 'films', label: 'Films', count: ratings?.length ?? 0 },
+                    { value: 'films', label: 'Films' },
+                    { value: 'series', label: 'Series' },
                     { value: 'watchlist', label: 'Watchlist', count: watchlist.length },
                   ]}
                 />
@@ -708,47 +735,11 @@ export default function Profile() {
                 )}
 
                 {tab === 'films' && (
-                  <div className="space-y-5">
-                    {ratings && ratings.length > 0 ? (
-                      <>
-                        <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                          Showing your {ratings.length} most recent ratings.
-                        </p>
-                        <div className="rounded-xl p-5" style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}>
-                          <div className="space-y-2">
-                            {ratings.map((r) => (
-                              <div
-                                key={r.movie_id}
-                                className="flex items-center gap-3 py-1.5 border-b last:border-0"
-                                style={{ borderColor: 'var(--border)' }}
-                              >
-                                <div className="flex-1 min-w-0">
-                                  <p className="text-sm font-medium text-white truncate">
-                                    {r.title ?? `Movie #${r.movie_id}`}
-                                  </p>
-                                  {r.year && (
-                                    <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{r.year}</p>
-                                  )}
-                                </div>
-                                <div className="flex items-center gap-1 flex-shrink-0">
-                                  <Star size={11} style={{ color: 'var(--accent-gold)' }} />
-                                  <span className="text-sm font-bold" style={{ color: 'var(--accent-gold)' }}>
-                                    {r.rating}
-                                  </span>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      </>
-                    ) : (
-                      <div className="rounded-xl p-8 text-center" style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}>
-                        <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
-                          No ratings yet. Rate films from the recommendations or import your Letterboxd CSV from the Overview tab.
-                        </p>
-                      </div>
-                    )}
-                  </div>
+                  <RatedGrid userId={userId} mediaType="movie" />
+                )}
+
+                {tab === 'series' && (
+                  <RatedGrid userId={userId} mediaType="tv" />
                 )}
 
                 {tab === 'watchlist' && (

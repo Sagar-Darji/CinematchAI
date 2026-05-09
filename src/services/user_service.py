@@ -446,6 +446,14 @@ class UserService:
 
         # Invalidate CF matrix cache so the next request uses updated ratings
         UserService._cf_matrix_cache.clear()
+        # Drop the cached /admin profile response so the Profile page picks
+        # up the new rating immediately on next refresh (otherwise the user
+        # waits up to 30 min for the cache TTL).
+        try:
+            from src.api.routes.admin import invalidate_admin_profile_cache
+            invalidate_admin_profile_cache(user_id)
+        except Exception:
+            pass
 
         logger.info(f"Added rating: user={user_id}, movie={movie_id}, rating={rating}")
 
@@ -500,6 +508,11 @@ class UserService:
         # Invalidate the CF matrix cache so the next recommendation request
         # benefits from this new signal immediately.
         UserService._cf_matrix_cache.clear()
+        try:
+            from src.api.routes.admin import invalidate_admin_profile_cache
+            invalidate_admin_profile_cache(user_id)
+        except Exception:
+            pass
 
     def get_user_ratings(self, user_id: str) -> List[Dict]:
         """

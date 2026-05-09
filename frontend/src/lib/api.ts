@@ -301,6 +301,27 @@ export interface Review {
   updated_at?: string | null
 }
 
+export interface RatedItem {
+  movie_id: string
+  rating: number
+  timestamp?: string | null
+  title?: string | null
+  year?: number | null
+  media_type?: MediaType
+  poster_path?: string | null
+  watched?: boolean
+}
+
+export type RatingSort = 'date_desc' | 'date_asc' | 'rating_desc' | 'rating_asc' | 'title_asc'
+
+export interface RatingsPage {
+  items: RatedItem[]
+  total: number
+  page: number
+  limit: number
+  has_more: boolean
+}
+
 export interface OnboardingMovie {
   tmdb_id: number
   title: string
@@ -424,6 +445,21 @@ export async function getUserProfile(userId: string): Promise<UserProfile | null
 
 export async function getAdminProfile(userId: string): Promise<AdminProfile | null> {
   const res = handle401IfNeeded(await fetch(`${BASE}/admin/users/${userId}/profile`, { headers: authHeaders() }))
+  if (!res.ok) return null
+  return res.json()
+}
+
+export async function getUserRatings(
+  userId: string,
+  opts: { mediaType?: 'movie' | 'tv' | 'all'; sort?: RatingSort; page?: number; limit?: number } = {},
+): Promise<RatingsPage | null> {
+  const params = new URLSearchParams({
+    media_type: opts.mediaType ?? 'all',
+    sort: opts.sort ?? 'date_desc',
+    page: String(opts.page ?? 1),
+    limit: String(opts.limit ?? 24),
+  })
+  const res = handle401IfNeeded(await fetch(`${BASE}/users/${userId}/ratings?${params}`, { headers: authHeaders() }))
   if (!res.ok) return null
   return res.json()
 }

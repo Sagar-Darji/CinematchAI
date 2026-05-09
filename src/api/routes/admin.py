@@ -1,7 +1,9 @@
 """Admin API routes - System monitoring and user inspection."""
 
+import os
 from typing import Optional
 
+from diskcache import Cache
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from src.api.deps import get_current_user
@@ -10,6 +12,27 @@ from src.utils.logging import get_logger
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/admin", tags=["admin"])
+
+# Cache the resolved admin profile per user. /tmp on Lambda, ./data otherwise.
+# 30 min TTL so a fresh rating shows up within reasonable time without a
+# manual invalidation; UserService.add_rating / record_feedback also clear
+# the cache (see below) for instant updates after explicit user actions.
+_admin_cache_dir = "/tmp/admin_profile" if os.environ.get("LAMBDA_TASK_ROOT") else "./data/cache/admin_profile"
+_admin_profile_cache = Cache(_admin_cache_dir)
+_ADMIN_PROFILE_TTL = 30 * 60  # 30 min
+
+
+def _admin_cache_key(user_id: str) -> str:
+    return f"admin:{user_id}:v1"
+
+
+def invalidate_admin_profile_cache(user_id: str) -> None:
+    """Drop the cached admin profile for a user. Called from UserService when
+    ratings change so the Profile page reflects new data immediately."""
+    try:
+        _admin_profile_cache.delete(_admin_cache_key(user_id))
+    except Exception:
+        pass
 
 
 @router.get("/stats")
@@ -79,13 +102,20 @@ async def get_trace(trace_id: str):
 async def get_user_profile(user_id: str, current_user: str = Depends(get_current_user)):
     """Get real user profile data: ratings, preferences, import history.
 
-    A user can only read their own profile via this endpoint.
+    A user can only read their own profile via this endpoint. Cached for
+    30 min per user; invalidated when the user adds a rating.
     """
     if user_id != current_user:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You can only view your own profile",
         )
+
+    # Cache hit — skip the DB query + 200 TMDB resolves entirely.
+    cached = _admin_profile_cache.get(_admin_cache_key(user_id))
+    if cached:
+        return cached
+
     from src.services.user_service import get_user_service
     from src.services.job_service import get_job_service
 
@@ -106,22 +136,29 @@ async def get_user_profile(user_id: str, current_user: str = Depends(get_current
         from src.services.movie_service import get_movie_service
         movie_service = get_movie_service()
         ids = [int(r["movie_id"]) for r in head]
-        # Parallel batch fetch — 10 workers ⇒ ~5× faster than sequential
-        # and resilient: failures return None and we just skip the title.
-        movies = movie_service.get_movies_batch(ids, max_workers=10)
+        # Parallel batch fetch with TV fallback — Letterboxd ratings are all
+        # movies, but recommendation feedback can be for either. media_type
+        # is captured per rating so the Films / Series tabs can split them.
+        movies = movie_service.get_media_auto_batch(ids, max_workers=10)
         for r, movie in zip(head, movies):
             if movie:
                 r["title"] = movie.metadata.title
                 r["year"] = movie.metadata.year
+                r["media_type"] = movie.metadata.media_type or "movie"
+                r["poster_path"] = movie.metadata.poster_path
             else:
                 r["title"] = f"Movie {r['movie_id']}"
                 r["year"] = None
+                r["media_type"] = "movie"
+                r["poster_path"] = None
     except Exception as e:
         logger.warning(f"Failed to resolve movie titles: {e}")
         # Soft-fail: return ratings without titles rather than 500-ing.
         for r in head:
             r.setdefault("title", f"Movie {r['movie_id']}")
             r.setdefault("year", None)
+            r.setdefault("media_type", "movie")
+            r.setdefault("poster_path", None)
 
     # Get import/job history
     jobs = job_service.get_user_jobs(user_id, limit=10)
@@ -152,4 +189,7 @@ async def get_user_profile(user_id: str, current_user: str = Depends(get_current
         result["is_cold_start"] = True
         result["avg_rating_given"] = None
 
+    _admin_profile_cache.set(
+        _admin_cache_key(user_id), result, expire=_ADMIN_PROFILE_TTL
+    )
     return result
