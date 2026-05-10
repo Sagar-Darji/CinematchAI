@@ -1,8 +1,8 @@
 """User Management API Routes."""
 
-from typing import List
+from typing import List, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile, status
 from pydantic import BaseModel, Field
 
 from src.api.deps import get_current_user
@@ -261,7 +261,54 @@ async def get_user(user_id: str, current_user: str = Depends(get_current_user)):
         "genres": genres,
         "embedding_ready": has_embedding,
         "is_cold_start": len(ratings) < 5,
+        "avatar_url": user_service.get_avatar_url(user_id),
     }
+
+
+@router.post("/{user_id}/avatar", status_code=status.HTTP_200_OK)
+async def upload_avatar(
+    user_id: str,
+    file: UploadFile = File(...),
+    current_user: str = Depends(get_current_user),
+):
+    """Upload a profile picture. Resized to 256×256 JPEG and stored in S3;
+    we persist a 7-day presigned URL on the user row."""
+    if user_id != current_user:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only update your own avatar",
+        )
+    if file.content_type and not file.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="File must be an image")
+
+    body = await file.read()
+    from src.services.avatar_service import get_avatar_service
+    try:
+        url = get_avatar_service().upload(user_id=current_user, image_bytes=body)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeError as e:
+        logger.error(f"Avatar upload failed for {current_user}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to upload avatar")
+
+    get_user_service().set_avatar_url(current_user, url)
+    return {"avatar_url": url}
+
+
+@router.delete("/{user_id}/avatar", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_avatar(
+    user_id: str,
+    current_user: str = Depends(get_current_user),
+):
+    """Remove the user's avatar (S3 object + DB column)."""
+    if user_id != current_user:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only update your own avatar",
+        )
+    from src.services.avatar_service import get_avatar_service
+    get_avatar_service().delete(current_user)
+    get_user_service().set_avatar_url(current_user, None)
 
 
 @router.get("/{user_id}/stats", status_code=status.HTTP_200_OK)
@@ -328,6 +375,7 @@ async def list_user_ratings(
     sort: str = "date_desc",
     page: int = 1,
     limit: int = 24,
+    q: Optional[str] = None,
     current_user: str = Depends(get_current_user),
 ):
     """Paginated, sortable list of a user's ratings — Films + Series tabs.
@@ -390,6 +438,15 @@ async def list_user_ratings(
     # Filter
     if media_type != "all":
         ratings = [r for r in ratings if r.get("media_type") == media_type]
+
+    # Search — case-insensitive substring on title.
+    if q:
+        needle = q.strip().lower()
+        if needle:
+            ratings = [
+                r for r in ratings
+                if needle in (r.get("title") or "").lower()
+            ]
 
     # Sort
     if sort == "date_desc":

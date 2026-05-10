@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Star, Loader2, ArrowDownUp } from 'lucide-react'
+import { Star, Loader2, ArrowDownUp, Search } from 'lucide-react'
 import { getUserRatings, type RatedItem, type RatingSort } from '@/lib/api'
 import { tmdbPoster } from '@/lib/utils'
 
@@ -30,25 +30,34 @@ export function RatedGrid({ userId, mediaType }: Props) {
   const [hasMore, setHasMore] = useState(false)
   const [total, setTotal] = useState(0)
   const [sort, setSort] = useState<RatingSort>('date_desc')
+  const [searchInput, setSearchInput] = useState('')
+  const [debouncedQuery, setDebouncedQuery] = useState('')
   const [loading, setLoading] = useState(false)
   const [appending, setAppending] = useState(false)
-  const seenSort = useRef<RatingSort>(sort)
+  const seenKey = useRef<string>('')
 
-  // Reset on sort change.
+  // Debounce the search input so we don't hammer the endpoint per keystroke.
   useEffect(() => {
-    if (seenSort.current === sort) return
-    seenSort.current = sort
+    const t = setTimeout(() => setDebouncedQuery(searchInput.trim()), 250)
+    return () => clearTimeout(t)
+  }, [searchInput])
+
+  // Reset to page 1 whenever the sort or search query changes.
+  useEffect(() => {
+    const k = `${sort}|${debouncedQuery}`
+    if (seenKey.current === k) return
+    seenKey.current = k
     setItems([])
     setPage(1)
-  }, [sort])
+  }, [sort, debouncedQuery])
 
-  // Fetch (or refetch) when page or sort changes.
+  // Fetch (or refetch) when page, sort, or query changes.
   useEffect(() => {
     let cancelled = false
     const isFirstPage = page === 1
     if (isFirstPage) setLoading(true)
     else setAppending(true)
-    getUserRatings(userId, { mediaType, sort, page, limit: PAGE_SIZE })
+    getUserRatings(userId, { mediaType, sort, page, limit: PAGE_SIZE, q: debouncedQuery })
       .then((data) => {
         if (cancelled || !data) return
         setItems((prev) => (isFirstPage ? data.items : [...prev, ...data.items]))
@@ -61,7 +70,7 @@ export function RatedGrid({ userId, mediaType }: Props) {
         setAppending(false)
       })
     return () => { cancelled = true }
-  }, [userId, mediaType, sort, page])
+  }, [userId, mediaType, sort, page, debouncedQuery])
 
   const headerLabel = mediaType === 'tv' ? 'Series' : 'Films'
   const skeletonCount = useMemo(() => Math.min(PAGE_SIZE, 12), [])
@@ -73,11 +82,32 @@ export function RatedGrid({ userId, mediaType }: Props) {
           <h3 className="text-lg font-black text-white">{headerLabel}</h3>
           {total > 0 && (
             <span className="text-xs font-semibold" style={{ color: 'var(--text-muted)' }}>
-              {total.toLocaleString()} rated
+              {total.toLocaleString()} {debouncedQuery ? 'match' : 'rated'}
             </span>
           )}
         </div>
-        <SortMenu value={sort} onChange={setSort} />
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="relative">
+            <Search size={12} className="absolute top-1/2 left-2.5 -translate-y-1/2"
+              style={{ color: 'var(--text-muted)' }} />
+            <input
+              type="text"
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              placeholder={`Search ${headerLabel.toLowerCase()}…`}
+              className="text-xs font-medium outline-none"
+              style={{
+                padding: '7px 10px 7px 26px',
+                borderRadius: '10px',
+                background: 'var(--bg-card)',
+                border: '1px solid var(--border)',
+                color: 'var(--text-primary)',
+                width: '170px',
+              }}
+            />
+          </div>
+          <SortMenu value={sort} onChange={setSort} />
+        </div>
       </div>
 
       {loading && items.length === 0 ? (
@@ -88,9 +118,11 @@ export function RatedGrid({ userId, mediaType }: Props) {
           style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}
         >
           <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
-            {mediaType === 'tv'
-              ? "No rated series yet — rate a show from its detail page and it'll show up here."
-              : "No rated films yet — rate films from the recommendations or import your Letterboxd CSV from the Overview tab."}
+            {debouncedQuery
+              ? `No ${headerLabel.toLowerCase()} match "${debouncedQuery}".`
+              : mediaType === 'tv'
+                ? "No rated series yet — rate a show from its detail page and it'll show up here."
+                : "No rated films yet — rate films from the recommendations or import your Letterboxd CSV from the Overview tab."}
           </p>
         </div>
       ) : (

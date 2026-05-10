@@ -10,12 +10,15 @@ import {
   getAdminProfile,
   getFavorites,
   getHeatmap,
+  getUserStats,
+  recomputeUserStats,
   importLetterboxd,
   pollImportJob,
   type UserProfile,
   type AdminProfile,
   type FavoriteItem,
   type HeatmapData,
+  type UserStatsResponse,
 } from '@/lib/api'
 import { tmdbPoster } from '@/lib/utils'
 import { PageLoader } from '@/components/ui/PageLoader'
@@ -25,6 +28,8 @@ import { Heatmap } from '@/components/profile/Heatmap'
 import { YearInReview } from '@/components/profile/YearInReview'
 import { FavoritesEditor } from '@/components/profile/FavoritesEditor'
 import { RatedGrid } from '@/components/profile/RatedGrid'
+import { InsightCards } from '@/components/profile/InsightCards'
+import { AvatarUploader } from '@/components/profile/AvatarUploader'
 import {
   ratingHistogram,
   decadeBreakdown,
@@ -367,9 +372,12 @@ export default function Profile() {
   const [admin, setAdmin] = useState<AdminProfile | null>(null)
   const [favorites, setFavoritesState] = useState<FavoriteItem[]>([])
   const [heatmap, setHeatmap] = useState<HeatmapData | null>(null)
+  const [statsResp, setStatsResp] = useState<UserStatsResponse | null>(null)
+  const [regenerating, setRegenerating] = useState(false)
   const [loading, setLoading] = useState(false)
   const [tab, setTab] = useState<TabKey>('overview')
   const [editingFavs, setEditingFavs] = useState(false)
+  const [editingAvatar, setEditingAvatar] = useState(false)
 
   const currentYear = useMemo(() => new Date().getFullYear(), [])
 
@@ -387,13 +395,15 @@ export default function Profile() {
         getAdminProfile(userId),
         getFavorites(userId),
         getHeatmap(currentYear),
+        getUserStats(userId),
         hydrateReviews(userId),
-      ]).then(([p, a, favs, h]) => {
+      ]).then(([p, a, favs, h, s]) => {
         if (cancelled) return
         setProfile(p)
         setAdmin(a)
         setFavoritesState(favs)
         setHeatmap(h)
+        setStatsResp(s)
         const total = p?.total_ratings ?? a?.total_ratings
         if (total) setRatingCount(total)
       }).finally(() => {
@@ -403,20 +413,61 @@ export default function Profile() {
     return () => { cancelled = true }
   }, [userId, setRatingCount, currentYear, hydrateReviews])
 
+  // Poll stats while a background recompute is running. Stops on success
+  // or after a 60s safety cap so we don't poll forever for a stuck job.
+  useEffect(() => {
+    if (!userId || !statsResp?.computing) return
+    let cancelled = false
+    const start = Date.now()
+    const tick = setInterval(async () => {
+      if (cancelled || Date.now() - start > 60_000) {
+        clearInterval(tick)
+        return
+      }
+      const fresh = await getUserStats(userId)
+      if (cancelled || !fresh) return
+      setStatsResp(fresh)
+      if (!fresh.computing) {
+        clearInterval(tick)
+        setRegenerating(false)
+      }
+    }, 4000)
+    return () => { cancelled = true; clearInterval(tick) }
+  }, [userId, statsResp?.computing])
+
   const genres = useMemo(() => profile?.genres ?? {}, [profile])
   const topGenres = useMemo(
     () => Object.entries(genres).sort((a, b) => b[1] - a[1]).slice(0, 8),
     [genres],
   )
   const maxGenreCount = topGenres[0]?.[1] ?? 1
-  const totalRatings = profile?.total_ratings ?? admin?.total_ratings ?? ratingCount
-  const avgRating = admin?.avg_rating_given
 
   const ratings = admin?.recent_ratings
-  const histogram = useMemo(() => ratingHistogram(ratings), [ratings])
-  const decades = useMemo(() => decadeBreakdown(ratings), [ratings])
+  const persistedStats = statsResp?.stats ?? null
+  const histogram = useMemo(
+    () =>
+      persistedStats?.rating_histogram?.length
+        ? persistedStats.rating_histogram
+        : ratingHistogram(ratings),
+    [persistedStats, ratings],
+  )
+  const decades = useMemo(
+    () =>
+      persistedStats?.decade_breakdown?.length
+        ? persistedStats.decade_breakdown
+        : decadeBreakdown(ratings),
+    [persistedStats, ratings],
+  )
   const yearStats = useMemo(() => yearInReview(ratings, genres, currentYear), [ratings, genres, currentYear])
-  const filmsYear = useMemo(() => filmsThisYear(ratings, currentYear), [ratings, currentYear])
+  const filmsYear = persistedStats
+    ? persistedStats.films_this_year
+    : filmsThisYear(ratings, currentYear)
+  const totalRatingsFromStats = persistedStats
+    ? persistedStats.total_films + persistedStats.total_series
+    : null
+  const totalRatings = totalRatingsFromStats ?? profile?.total_ratings ?? admin?.total_ratings ?? ratingCount
+  const avgRating = persistedStats?.avg_rating ?? admin?.avg_rating_given
+  const avatarUrl = profile?.avatar_url ?? null
 
   // Heuristic for the "watch dates missing" banner: a Letterboxd import done
   // before the date-preservation fix landed all share roughly one timestamp.
@@ -506,19 +557,44 @@ export default function Profile() {
                     boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
                   }}
                 >
-                  <div
-                    className="rounded-full flex items-center justify-center font-black flex-shrink-0"
+                  <button
+                    onClick={() => setEditingAvatar(true)}
+                    aria-label="Edit profile picture"
+                    title="Edit profile picture"
+                    className="rounded-full flex items-center justify-center font-black flex-shrink-0 overflow-hidden relative group"
                     style={{
                       width: '88px',
                       height: '88px',
-                      background: 'linear-gradient(135deg, var(--accent-gold) 0%, #d4a813 100%)',
+                      background: avatarUrl
+                        ? 'var(--bg-overlay)'
+                        : 'linear-gradient(135deg, var(--accent-gold) 0%, #d4a813 100%)',
                       color: '#0a0a0f',
                       fontSize: '38px',
                       boxShadow: '0 6px 20px rgba(245,197,24,0.32)',
+                      border: 'none',
+                      cursor: 'pointer',
+                      padding: 0,
                     }}
                   >
-                    {userId[0]?.toUpperCase() ?? '?'}
-                  </div>
+                    {avatarUrl ? (
+                      <img
+                        src={avatarUrl}
+                        alt=""
+                        style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                      />
+                    ) : (
+                      userId[0]?.toUpperCase() ?? '?'
+                    )}
+                    <span
+                      className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity text-[10px] font-bold uppercase tracking-widest"
+                      style={{
+                        background: 'rgba(0,0,0,0.55)',
+                        color: '#fff',
+                      }}
+                    >
+                      Edit
+                    </span>
+                  </button>
                   <div className="flex-1 min-w-0">
                     <h1 className="text-2xl md:text-3xl font-black text-white truncate leading-tight tracking-tight">
                       {userId}
@@ -631,6 +707,28 @@ export default function Profile() {
                 {/* Tab content */}
                 {tab === 'overview' && (
                   <div className="space-y-5">
+                    {/* Cinephile insights — derived from the user's full
+                        rated library by the persisted-stats compute job.
+                        Only render once we have a real payload. */}
+                    {persistedStats && (
+                      <InsightCards
+                        stats={persistedStats}
+                        regenerating={regenerating || statsResp?.computing}
+                        onRegenerate={async () => {
+                          if (!userId) return
+                          setRegenerating(true)
+                          try {
+                            await recomputeUserStats(userId)
+                            // Trigger the polling loop by marking computing.
+                            const fresh = await getUserStats(userId)
+                            if (fresh) setStatsResp(fresh)
+                          } catch {
+                            setRegenerating(false)
+                          }
+                        }}
+                      />
+                    )}
+
                     <YearInReview stats={yearStats} />
 
                     {/* Rating histogram */}
@@ -858,6 +956,19 @@ export default function Profile() {
               initial={favorites}
               onClose={() => setEditingFavs(false)}
               onSaved={(items) => setFavoritesState(items)}
+            />
+          )}
+
+          {editingAvatar && (
+            <AvatarUploader
+              userId={userId}
+              currentUrl={avatarUrl}
+              onClose={() => setEditingAvatar(false)}
+              onSaved={(url) => {
+                // Patch the local profile so the avatar updates immediately
+                // without waiting for the next /users/{id} fetch.
+                setProfile((p) => (p ? { ...p, avatar_url: url } : p))
+              }}
             />
           )}
         </>

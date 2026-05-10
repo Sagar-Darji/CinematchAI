@@ -268,6 +268,35 @@ export interface UserProfile {
   genres?: Record<string, number>
   embedding_ready?: boolean
   is_cold_start?: boolean
+  avatar_url?: string | null
+}
+
+export interface UserStats {
+  total_films: number
+  total_series: number
+  films_this_year: number
+  avg_rating: number | null
+  rating_histogram: Array<{ rating: number; count: number }>
+  year_breakdown: Record<string, number>
+  decade_breakdown: Array<{ decade: number; label: string; count: number }>
+  top_genres: Array<{ name: string; count: number }>
+  top_directors: Array<{ name: string; count: number; avg_rating: number | null }>
+  top_actors: Array<{ name: string; count: number }>
+  total_runtime_minutes: number | null
+  foreign_pct: number
+  hidden_gem_pct: number
+  generosity_score: number
+  insights_json: Array<{ type: string; title: string; value: string; context?: string }>
+  llm_personality: string | null
+  computed_at: string | null
+  stale: boolean
+}
+
+export interface UserStatsResponse {
+  user_id: string
+  computing: boolean
+  stats: UserStats | null
+  computed_at: string | null
 }
 
 export interface AdminProfile {
@@ -451,7 +480,7 @@ export async function getAdminProfile(userId: string): Promise<AdminProfile | nu
 
 export async function getUserRatings(
   userId: string,
-  opts: { mediaType?: 'movie' | 'tv' | 'all'; sort?: RatingSort; page?: number; limit?: number } = {},
+  opts: { mediaType?: 'movie' | 'tv' | 'all'; sort?: RatingSort; page?: number; limit?: number; q?: string } = {},
 ): Promise<RatingsPage | null> {
   const params = new URLSearchParams({
     media_type: opts.mediaType ?? 'all',
@@ -459,9 +488,46 @@ export async function getUserRatings(
     page: String(opts.page ?? 1),
     limit: String(opts.limit ?? 24),
   })
+  if (opts.q && opts.q.trim()) params.set('q', opts.q.trim())
   const res = handle401IfNeeded(await fetch(`${BASE}/users/${userId}/ratings?${params}`, { headers: authHeaders() }))
   if (!res.ok) return null
   return res.json()
+}
+
+export async function getUserStats(userId: string): Promise<UserStatsResponse | null> {
+  const res = handle401IfNeeded(await fetch(`${BASE}/users/${userId}/stats`, { headers: authHeaders() }))
+  if (!res.ok) return null
+  return res.json()
+}
+
+export async function recomputeUserStats(userId: string): Promise<void> {
+  handle401IfNeeded(await fetch(`${BASE}/users/${userId}/stats/recompute`, {
+    method: 'POST',
+    headers: authHeaders(),
+  }))
+}
+
+export async function uploadAvatar(userId: string, file: File): Promise<string | null> {
+  const form = new FormData()
+  form.append('file', file)
+  const res = handle401IfNeeded(await fetch(`${BASE}/users/${userId}/avatar`, {
+    method: 'POST',
+    headers: authHeaders(),  // multipart boundary set by browser
+    body: form,
+  }))
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(text || 'Upload failed')
+  }
+  const data = await res.json()
+  return data?.avatar_url ?? null
+}
+
+export async function deleteAvatar(userId: string): Promise<void> {
+  handle401IfNeeded(await fetch(`${BASE}/users/${userId}/avatar`, {
+    method: 'DELETE',
+    headers: authHeaders(),
+  }))
 }
 
 export async function getFavorites(userId: string): Promise<FavoriteItem[]> {

@@ -71,6 +71,7 @@ class UserService:
             ("reset_token",             "TEXT"),
             ("reset_token_expires",     "TEXT"),
             ("favorite_tmdb_ids",       "TEXT"),
+            ("avatar_url",              "TEXT"),
         ]:
             try:
                 if db.is_postgres:
@@ -271,6 +272,36 @@ class UserService:
             conn.close()
 
     MAX_FAVORITES = 4
+
+    def get_avatar_url(self, user_id: str) -> Optional[str]:
+        conn = self._connect()
+        cursor = conn.cursor()
+        cursor.execute("SELECT avatar_url FROM users WHERE user_id = ?", (user_id,))
+        row = cursor.fetchone()
+        conn.close()
+        if not row:
+            return None
+        return row["avatar_url"] if isinstance(row, dict) else row[0]
+
+    def set_avatar_url(self, user_id: str, url: Optional[str]) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        conn = self._connect()
+        try:
+            # Ensure the user row exists (mirrors set_favorites' belt-and-
+            # suspenders pattern — UPDATE silently no-ops on a missing row).
+            stub = json.dumps({"user_id": user_id, "total_ratings": 0, "is_cold_start": True})
+            conn.execute(
+                "INSERT OR IGNORE INTO users (user_id, created_at, updated_at, profile_json) "
+                "VALUES (?,?,?,?)",
+                (user_id, now, now, stub),
+            )
+            conn.execute(
+                "UPDATE users SET avatar_url=?, updated_at=? WHERE user_id=?",
+                (url, now, user_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
 
     def get_favorites(self, user_id: str) -> List[dict]:
         """Return the user's pinned favorites (movies/TV).
