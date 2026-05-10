@@ -418,6 +418,32 @@ export default function Profile() {
   const yearStats = useMemo(() => yearInReview(ratings, genres, currentYear), [ratings, genres, currentYear])
   const filmsYear = useMemo(() => filmsThisYear(ratings, currentYear), [ratings, currentYear])
 
+  // Heuristic for the "watch dates missing" banner: a Letterboxd import done
+  // before the date-preservation fix landed all share roughly one timestamp.
+  // If >50% of recent ratings fall inside a single 24h window AND the user
+  // has lots of ratings, surface a re-upload prompt.
+  const datesLikelyStale = useMemo(() => {
+    if (!ratings || ratings.length < 50) return false
+    const stamps = ratings
+      .map((r) => (r.timestamp ? new Date(r.timestamp).getTime() : 0))
+      .filter((t) => t > 0)
+      .sort()
+    if (stamps.length < 50) return false
+    // Find any 24h window containing >half the timestamps.
+    const windowMs = 24 * 60 * 60 * 1000
+    let i = 0
+    let best = 0
+    for (let j = 0; j < stamps.length; j++) {
+      while (stamps[j] - stamps[i] > windowMs) i++
+      best = Math.max(best, j - i + 1)
+    }
+    return best / stamps.length > 0.5
+  }, [ratings])
+  const [staleBannerDismissed, setStaleBannerDismissed] = useState(() => {
+    try { return localStorage.getItem('cinematch-stale-dates-dismissed') === '1' } catch { return false }
+  })
+  const showStaleBanner = datesLikelyStale && !staleBannerDismissed
+
   const maxDecade = decades.reduce((m, d) => Math.max(m, d.count), 1)
 
   // Banner backdrop URL — pulled from the user's #1 favorite if available.
@@ -545,6 +571,46 @@ export default function Profile() {
                     </div>
                   ))}
                 </div>
+
+                {/* "Watch dates missing" prompt for users whose Letterboxd
+                    import happened before we started preserving the Date
+                    column. Heuristic-based + dismissable. */}
+                {showStaleBanner && (
+                  <div
+                    className="rounded-2xl p-4 flex items-start gap-3 animate-fade-in"
+                    style={{
+                      background: 'rgba(245,197,24,0.07)',
+                      border: '1px solid rgba(245,197,24,0.28)',
+                    }}
+                  >
+                    <Calendar size={16} style={{ color: 'var(--accent-gold)', flexShrink: 0, marginTop: 2 }} />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-bold text-white">Watch dates missing</p>
+                      <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                        Your imported ratings are dated to the day you uploaded the CSV. Re-upload your
+                        Letterboxd <code style={{ color: 'var(--accent-gold)' }}>ratings.csv</code> from
+                        the Overview tab to fix yearly stats.
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => {
+                        setStaleBannerDismissed(true)
+                        try { localStorage.setItem('cinematch-stale-dates-dismissed', '1') } catch { /* ignore */ }
+                      }}
+                      aria-label="Dismiss"
+                      className="text-xs font-semibold flex-shrink-0"
+                      style={{
+                        background: 'none',
+                        border: 'none',
+                        color: 'var(--text-muted)',
+                        cursor: 'pointer',
+                        padding: '2px 4px',
+                      }}
+                    >
+                      Dismiss
+                    </button>
+                  </div>
+                )}
 
                 {/* Favorites */}
                 <FavoritesStrip items={favorites} onEdit={() => setEditingFavs(true)} />

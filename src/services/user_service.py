@@ -408,7 +408,12 @@ class UserService:
         logger.info(f"Saved profile for user_id={user_id}")
 
     def add_rating(
-        self, user_id: str, movie_id: str, rating: float, watched: bool = True
+        self,
+        user_id: str,
+        movie_id: str,
+        rating: float,
+        watched: bool = True,
+        timestamp: Optional[str] = None,
     ):
         """
         Add or update a rating.
@@ -418,11 +423,15 @@ class UserService:
             movie_id: Movie TMDB ID.
             rating: Rating value (0.5-5.0).
             watched: Whether the user watched the movie.
+            timestamp: ISO timestamp of when the rating was made (e.g.
+                Letterboxd's "Date" column). Falls back to "now" so callers
+                that don't know the original date still work.
         """
         conn = self._connect()
         cursor = conn.cursor()
 
         now = datetime.utcnow().isoformat()
+        ts = timestamp if timestamp else now
 
         # Ensure the user row exists so the user is visible in CLI/admin tools
         cursor.execute(
@@ -438,7 +447,7 @@ class UserService:
             INSERT OR REPLACE INTO ratings (user_id, movie_id, rating, watched, timestamp)
             VALUES (?, ?, ?, ?, ?)
         """,
-            (user_id, movie_id, rating, watched, now),
+            (user_id, movie_id, rating, watched, ts),
         )
 
         conn.commit()

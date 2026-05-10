@@ -5,13 +5,13 @@ type Rating = AdminProfile['recent_ratings'][number]
 /** Half-star buckets from 0.5 to 5.0 — matches Letterboxd's distribution chart. */
 const HALF_STAR_BUCKETS = [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0]
 
-/** Convert the user's stored rating (1–10 scale on this backend) to a 0.5–5
- * half-star bucket. Anything below 1 floors to 0.5 to keep the histogram sane. */
+/** Snap the stored rating (Letterboxd 0.5–5.0 half-star scale) to its
+ * matching half-star bucket. Backend stores the value verbatim — do NOT
+ * divide by 2. */
 function toHalfStar(rating: number): number {
   if (rating <= 0) return 0.5
-  // Backend stores 1–10. Compress to 0.5 steps in 0.5–5 range.
-  const compressed = Math.max(0.5, Math.min(5, rating / 2))
-  return Math.round(compressed * 2) / 2
+  const clamped = Math.max(0.5, Math.min(5, rating))
+  return Math.round(clamped * 2) / 2
 }
 
 export interface HistogramBucket {

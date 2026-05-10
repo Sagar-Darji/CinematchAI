@@ -57,7 +57,11 @@ class LetterboxdService:
             rated_df = df[df["Rating"].notna()].copy()
 
             total = len(rated_df)
-            logger.info(f"Found {total} rated movies in CSV")
+            has_date_col = "Date" in df.columns
+            logger.info(
+                f"Found {total} rated movies in CSV"
+                + (" (with watch dates)" if has_date_col else " (no Date column — using import time)")
+            )
 
             # Import ratings
             imported = 0
@@ -69,6 +73,20 @@ class LetterboxdService:
                 year = row["Year"]
                 rating = float(row["Rating"])
 
+                # Preserve the original Letterboxd watch/log date so the
+                # Profile's "In <year>" stat reflects when the user actually
+                # watched the film, not when they imported the CSV.
+                ts: Optional[str] = None
+                if has_date_col:
+                    raw_date = row.get("Date")
+                    if pd.notna(raw_date):
+                        try:
+                            parsed = pd.to_datetime(raw_date, errors="coerce")
+                            if pd.notna(parsed):
+                                ts = parsed.isoformat()
+                        except Exception:
+                            ts = None
+
                 # Search TMDB for movie
                 tmdb_id = self._search_tmdb_movie(title, year)
 
@@ -79,6 +97,7 @@ class LetterboxdService:
                         movie_id=str(tmdb_id),
                         rating=rating,
                         watched=True,
+                        timestamp=ts,
                     )
                     tmdb_mapping[title] = tmdb_id
                     imported += 1

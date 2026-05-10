@@ -131,8 +131,9 @@ function PosterCard({ item }: { item: RatedItem }) {
   const poster = tmdbPoster(item.poster_path ?? undefined, 'w300')
   const mt = item.media_type ?? 'movie'
   const rating = item.rating
-  // Backend stores a 1–10 scale; display as half-stars 0.5–5.0.
-  const starValue = rating != null ? Math.max(0.5, Math.min(5, rating / 2)) : null
+  // Backend stores Letterboxd's 0.5–5.0 half-star scale verbatim — clamp,
+  // do NOT divide by 2.
+  const starValue = rating != null ? Math.max(0.5, Math.min(5, rating)) : null
   return (
     <Link
       to={`/title/${mt}/${item.movie_id}`}
