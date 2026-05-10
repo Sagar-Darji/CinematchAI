@@ -264,6 +264,60 @@ async def get_user(user_id: str, current_user: str = Depends(get_current_user)):
     }
 
 
+@router.get("/{user_id}/stats", status_code=status.HTTP_200_OK)
+async def get_user_stats(user_id: str, current_user: str = Depends(get_current_user)):
+    """Persisted analytics for the Profile page.
+
+    Pure DB read — no compute, no TMDB resolves. The compute pipeline runs
+    asynchronously via Lambda self-invoke. If the row doesn't exist yet OR
+    is marked stale, fire a recompute and return whatever is currently
+    stored (or an empty placeholder + computing=true).
+    """
+    if user_id != current_user:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only view your own stats",
+        )
+    from src.services.stats_service import get_stats_service, invoke_stats_worker
+
+    svc = get_stats_service()
+    row = svc.get(user_id)
+    if row is None:
+        # First request — kick off compute, return placeholder.
+        invoke_stats_worker(user_id)
+        return {
+            "user_id": user_id,
+            "computing": True,
+            "stats": None,
+            "computed_at": None,
+        }
+
+    if row.get("stale"):
+        invoke_stats_worker(user_id)
+
+    return {
+        "user_id": user_id,
+        "computing": bool(row.get("stale")),
+        "stats": row,
+        "computed_at": row.get("computed_at"),
+    }
+
+
+@router.post("/{user_id}/stats/recompute", status_code=status.HTTP_202_ACCEPTED)
+async def recompute_user_stats(user_id: str, current_user: str = Depends(get_current_user)):
+    """Mark stats as stale and dispatch a fresh compute job. Returns 202."""
+    if user_id != current_user:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only recompute your own stats",
+        )
+    from src.services.stats_service import get_stats_service, invoke_stats_worker
+
+    get_stats_service().mark_stale(user_id)
+    invoke_stats_worker(user_id)
+    return {"status": "queued", "user_id": user_id}
+
+
 @router.get(
     "/{user_id}/ratings",
     status_code=status.HTTP_200_OK,
@@ -575,6 +629,15 @@ def _import_letterboxd_background(job_id: str, user_id: str, csv_content: str):
             logger.info(f"✅ Profile regenerated for user {user_id}")
         except Exception as e:
             logger.warning(f"⚠️ Profile regeneration failed (non-critical): {e}")
+
+        # Persisted analytics — mark stale and dispatch a background
+        # recompute so the Profile page picks up the import.
+        try:
+            from src.services.stats_service import get_stats_service, invoke_stats_worker
+            get_stats_service().mark_stale(user_id)
+            invoke_stats_worker(user_id)
+        except Exception as e:
+            logger.warning(f"⚠️ Stats recompute dispatch failed (non-critical): {e}")
 
         # Update result
         job_service.update_job_result(job_id, result)

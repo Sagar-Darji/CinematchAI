@@ -12,12 +12,16 @@ _mangum_handler = Mangum(app, lifespan="off")
 def handler(event, context):
     """Lambda entry point.
 
-    Handles two event types:
+    Handles three event types:
     1. HTTP (API Gateway) — forwarded to FastAPI via Mangum
     2. Background job (source='recommendation-worker') — runs recommendation workflow
+    3. Background job (source='stats-worker') — recomputes a user's persisted stats
     """
-    if event.get("source") == "recommendation-worker":
+    src = event.get("source")
+    if src == "recommendation-worker":
         return _run_background_recommendation(event)
+    if src == "stats-worker":
+        return _run_background_stats(event)
     return _mangum_handler(event, context)
 
 
@@ -32,3 +36,12 @@ def _run_background_recommendation(event: dict) -> dict:
 
     execute_recommendation_job(job_id, user_id, rec_context, k)
     return {"status": "ok", "job_id": job_id}
+
+
+def _run_background_stats(event: dict) -> dict:
+    """Recompute persisted user stats triggered by async Lambda self-invocation."""
+    from src.services.stats_service import get_stats_service
+
+    user_id = event["user_id"]
+    get_stats_service().compute(user_id)
+    return {"status": "ok", "user_id": user_id}

@@ -463,6 +463,14 @@ class UserService:
             invalidate_admin_profile_cache(user_id)
         except Exception:
             pass
+        # Mark persisted stats stale so the next Profile load triggers a
+        # background recompute (we don't recompute synchronously here —
+        # add_rating runs in the request thread and shouldn't block).
+        try:
+            from src.services.stats_service import get_stats_service
+            get_stats_service().mark_stale(user_id)
+        except Exception:
+            pass
 
         logger.info(f"Added rating: user={user_id}, movie={movie_id}, rating={rating}")
 
@@ -520,6 +528,11 @@ class UserService:
         try:
             from src.api.routes.admin import invalidate_admin_profile_cache
             invalidate_admin_profile_cache(user_id)
+        except Exception:
+            pass
+        try:
+            from src.services.stats_service import get_stats_service
+            get_stats_service().mark_stale(user_id)
         except Exception:
             pass
 
