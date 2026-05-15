@@ -5,6 +5,29 @@ interface Props {
   stats: UserStats
 }
 
+export function YearChartSkeleton() {
+  return (
+    <div
+      className="rounded-2xl p-5"
+      style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}
+    >
+      <div className="flex items-center gap-2 mb-4">
+        <Calendar size={14} style={{ color: 'var(--text-muted)' }} />
+        <div className="skeleton-text w-28" style={{ opacity: 0.5 }} />
+      </div>
+      <div className="flex items-end gap-1.5" style={{ height: '120px' }}>
+        {[60, 35, 80, 50, 90, 45, 70, 30, 55, 85].map((pct, i) => (
+          <div
+            key={i}
+            className="flex-1 skeleton rounded-t-sm"
+            style={{ height: `${pct}%`, minWidth: '14px' }}
+          />
+        ))}
+      </div>
+    </div>
+  )
+}
+
 /** Year-by-year activity chart. Renders one bar per year that appears in
  * stats.year_breakdown (which counts ratings by their *watch* timestamp,
  * not film release year). The current year sits at the right and gets

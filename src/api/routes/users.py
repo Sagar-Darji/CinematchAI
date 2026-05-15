@@ -315,23 +315,35 @@ async def delete_avatar(
 async def get_user_stats(user_id: str, current_user: str = Depends(get_current_user)):
     """Persisted analytics for the Profile page.
 
-    Pure DB read — no compute, no TMDB resolves. The compute pipeline runs
-    asynchronously via Lambda self-invoke. If the row doesn't exist yet OR
-    is marked stale, fire a recompute and return whatever is currently
-    stored (or an empty placeholder + computing=true).
+    Pure DB read — no compute, no TMDB resolves. If the row is missing or
+    stale we kick off a background recompute via Lambda self-invoke and
+    return whatever's currently stored (or a placeholder if nothing yet).
+
+    Throttled: we never dispatch a worker more than once per
+    STATS_TRIGGER_THROTTLE_SEC per user. Polling the endpoint at 4s
+    intervals previously triggered a thundering-herd of overlapping
+    workers all racing to write the same row.
     """
     if user_id != current_user:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You can only view your own stats",
         )
-    from src.services.stats_service import get_stats_service, invoke_stats_worker
+    from src.services.stats_service import (
+        get_stats_service,
+        invoke_stats_worker,
+        should_throttle_trigger,
+        mark_trigger,
+    )
 
     svc = get_stats_service()
     row = svc.get(user_id)
     if row is None:
-        # First request — kick off compute, return placeholder.
-        invoke_stats_worker(user_id)
+        # First request — kick off compute (subject to throttle), return
+        # placeholder.
+        if not should_throttle_trigger(user_id):
+            mark_trigger(user_id)
+            invoke_stats_worker(user_id)
         return {
             "user_id": user_id,
             "computing": True,
@@ -339,7 +351,8 @@ async def get_user_stats(user_id: str, current_user: str = Depends(get_current_u
             "computed_at": None,
         }
 
-    if row.get("stale"):
+    if row.get("stale") and not should_throttle_trigger(user_id):
+        mark_trigger(user_id)
         invoke_stats_worker(user_id)
 
     return {

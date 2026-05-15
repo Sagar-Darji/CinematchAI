@@ -5,6 +5,26 @@ interface Props {
   stats: UserStats
 }
 
+/** Shimmer placeholder shown while the stats compute is still running.
+ * Matches the final card layout so the page doesn't reflow on load. */
+export function TasteSignalsSkeleton() {
+  return (
+    <div className="grid grid-cols-3 gap-3">
+      {[0, 1, 2].map((i) => (
+        <div
+          key={i}
+          className="rounded-2xl p-4"
+          style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}
+        >
+          <div className="skeleton-text w-16" style={{ opacity: 0.6 }} />
+          <div className="skeleton-text mt-2.5 w-12" style={{ height: '20px' }} />
+          <div className="skeleton-text mt-2 w-24" style={{ opacity: 0.45 }} />
+        </div>
+      ))}
+    </div>
+  )
+}
+
 /**
  * Compact strip of numeric "taste signals" — total runtime in hours, foreign
  * cinema %, and how generous the user rates compared to the TMDB crowd.

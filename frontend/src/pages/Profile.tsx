@@ -28,11 +28,11 @@ import { Heatmap } from '@/components/profile/Heatmap'
 import { YearInReview } from '@/components/profile/YearInReview'
 import { FavoritesEditor } from '@/components/profile/FavoritesEditor'
 import { RatedGrid } from '@/components/profile/RatedGrid'
-import { InsightCards } from '@/components/profile/InsightCards'
+import { InsightCards, InsightCardsSkeleton } from '@/components/profile/InsightCards'
 import { AvatarUploader } from '@/components/profile/AvatarUploader'
-import { TasteSignals } from '@/components/profile/TasteSignals'
-import { PeopleLists } from '@/components/profile/PeopleLists'
-import { YearChart } from '@/components/profile/YearChart'
+import { TasteSignals, TasteSignalsSkeleton } from '@/components/profile/TasteSignals'
+import { PeopleLists, PeopleListsSkeleton } from '@/components/profile/PeopleLists'
+import { YearChart, YearChartSkeleton } from '@/components/profile/YearChart'
 import {
   ratingHistogram,
   decadeBreakdown,
@@ -402,31 +402,37 @@ export default function Profile() {
   useEffect(() => {
     if (!userId) return
     let cancelled = false
-    // Defer to a microtask so the lint rule against synchronous setState in
-    // effects doesn't fire — it's a real concern in larger trees but here
-    // we just want to flip a loading flag and run network calls.
+    // Fire each fetch independently so the page renders progressively —
+    // identity card lands instantly, history is already in the store,
+    // favorites and heatmap pop in as they arrive, and the slow stats
+    // compute keeps its own skeleton without blocking anything else.
     Promise.resolve().then(() => {
       if (cancelled) return
       setLoading(true)
-      Promise.all([
-        getUserProfile(userId),
-        getAdminProfile(userId),
-        getFavorites(userId),
-        getHeatmap(currentYear),
-        getUserStats(userId),
-        hydrateReviews(userId),
-      ]).then(([p, a, favs, h, s]) => {
-        if (cancelled) return
-        setProfile(p)
-        setAdmin(a)
-        setFavoritesState(favs)
-        setHeatmap(h)
-        setStatsResp(s)
-        const total = p?.total_ratings ?? a?.total_ratings
-        if (total) setRatingCount(total)
-      }).finally(() => {
-        if (!cancelled) setLoading(false)
-      })
+      let pending = 5
+      const done = () => {
+        pending -= 1
+        if (pending <= 0 && !cancelled) setLoading(false)
+      }
+      getUserProfile(userId)
+        .then((p) => {
+          if (cancelled) return
+          setProfile(p)
+          if (p?.total_ratings) setRatingCount(p.total_ratings)
+        })
+        .finally(done)
+      getAdminProfile(userId)
+        .then((a) => {
+          if (cancelled) return
+          setAdmin(a)
+          if (a?.total_ratings) setRatingCount(a.total_ratings)
+        })
+        .finally(done)
+      getFavorites(userId).then((favs) => { if (!cancelled) setFavoritesState(favs) }).finally(done)
+      getHeatmap(currentYear).then((h) => { if (!cancelled) setHeatmap(h) }).finally(done)
+      getUserStats(userId).then((s) => { if (!cancelled) setStatsResp(s) }).finally(done)
+      // Reviews hydrate side-effects into a Zustand store; no setState needed here.
+      hydrateReviews(userId)
     })
     return () => { cancelled = true }
   }, [userId, setRatingCount, currentYear, hydrateReviews])
@@ -562,10 +568,10 @@ export default function Profile() {
           </div>
 
           <div className="p-5 md:p-8 max-w-4xl mx-auto -mt-24 relative">
-            {loading && !admin ? (
-              <SkeletonProfile />
-            ) : (
-              <div className="space-y-6">
+            {/* No global skeleton — every section below renders progressively
+                based on its own slice of state, so the page paints quickly
+                and each component swaps from skeleton → real as it arrives. */}
+            <div className="space-y-6">
                 {/* Identity card — bigger avatar, more breathing room */}
                 <div
                   className="rounded-2xl p-5 md:p-6 flex items-center gap-5 animate-fade-in"
@@ -727,8 +733,9 @@ export default function Profile() {
                   <div className="space-y-5">
                     {/* Cinephile insights — derived from the user's full
                         rated library by the persisted-stats compute job.
-                        Only render once we have a real payload. */}
-                    {persistedStats && (
+                        Show skeleton while the worker is still computing
+                        so the page doesn't reflow on arrival. */}
+                    {persistedStats ? (
                       <InsightCards
                         stats={persistedStats}
                         regenerating={regenerating || statsResp?.computing}
@@ -737,7 +744,6 @@ export default function Profile() {
                           setRegenerating(true)
                           try {
                             await recomputeUserStats(userId)
-                            // Trigger the polling loop by marking computing.
                             const fresh = await getUserStats(userId)
                             if (fresh) setStatsResp(fresh)
                           } catch {
@@ -745,14 +751,24 @@ export default function Profile() {
                           }
                         }}
                       />
+                    ) : (
+                      <InsightCardsSkeleton />
                     )}
 
                     {/* Numeric "taste signals" — total runtime, foreign %,
                         generosity vs the TMDB crowd. */}
-                    {persistedStats && <TasteSignals stats={persistedStats} />}
+                    {persistedStats ? (
+                      <TasteSignals stats={persistedStats} />
+                    ) : (
+                      <TasteSignalsSkeleton />
+                    )}
 
                     {/* Top directors + actors derived from the full library. */}
-                    {persistedStats && <PeopleLists stats={persistedStats} />}
+                    {persistedStats ? (
+                      <PeopleLists stats={persistedStats} />
+                    ) : (
+                      <PeopleListsSkeleton />
+                    )}
 
                     <YearInReview stats={yearStats} />
 
@@ -837,7 +853,11 @@ export default function Profile() {
                     {/* Year-by-year activity chart pulls from the persisted
                         stats so it covers the user's *entire* rated
                         timeline, not just the heatmap's current year. */}
-                    {persistedStats && <YearChart stats={persistedStats} />}
+                    {persistedStats ? (
+                      <YearChart stats={persistedStats} />
+                    ) : (
+                      <YearChartSkeleton />
+                    )}
 
                     <div className="rounded-xl p-5" style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}>
                       <h3 className="text-xs font-bold uppercase tracking-widest mb-4" style={{ color: 'var(--text-muted)' }}>
@@ -977,7 +997,6 @@ export default function Profile() {
                   </div>
                 )}
               </div>
-            )}
           </div>
 
           {editingFavs && (

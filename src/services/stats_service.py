@@ -529,6 +529,35 @@ class StatsService:
             return None
 
 
+# ── Trigger throttle ──────────────────────────────────────────────────────
+#
+# When the Profile page polls /stats every 4 seconds, naive "fire a worker
+# every time the row is stale" turns into a thundering herd: a single user
+# loading the page can dispatch 8-10 overlapping workers within ~30 seconds
+# while the first one is still running. They all hit Postgres + TMDB + LLM,
+# burn cost, and stomp each other's writes.
+#
+# This dict (one per Lambda container) records the last time we triggered a
+# worker per user. The GET route consults `should_throttle_trigger` before
+# dispatching. The value is short-lived — 90 seconds is enough to outlast a
+# typical compute on a warm cache, and on a cold cache the user just waits
+# the same 30s they would have anyway.
+
+_TRIGGER_THROTTLE_SEC = 90
+_last_triggered: Dict[str, float] = {}
+
+
+def should_throttle_trigger(user_id: str) -> bool:
+    last = _last_triggered.get(user_id)
+    if last is None:
+        return False
+    return (time.time() - last) < _TRIGGER_THROTTLE_SEC
+
+
+def mark_trigger(user_id: str) -> None:
+    _last_triggered[user_id] = time.time()
+
+
 # ── Lambda self-invoke worker dispatch ───────────────────────────────────
 
 

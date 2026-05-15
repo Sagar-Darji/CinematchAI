@@ -5,6 +5,34 @@ interface Props {
   stats: UserStats
 }
 
+export function PeopleListsSkeleton() {
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+      {[Film, User].map((Icon, panelIdx) => (
+        <div
+          key={panelIdx}
+          className="rounded-2xl p-5"
+          style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}
+        >
+          <div className="flex items-center gap-2 mb-4">
+            <Icon size={14} style={{ color: 'var(--text-muted)' }} />
+            <div className="skeleton-text w-20" style={{ opacity: 0.5 }} />
+          </div>
+          <div className="space-y-2.5">
+            {[0, 1, 2, 3, 4].map((i) => (
+              <div key={i} className="flex items-center gap-3">
+                <div className="skeleton-text w-3" style={{ opacity: 0.4 }} />
+                <div className="skeleton-text flex-1" style={{ opacity: 0.55 }} />
+                <div className="skeleton-text w-6" style={{ opacity: 0.4 }} />
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 /** Side-by-side Top Directors + Top Actors panels, surfaced from
  * stats.top_directors / stats.top_actors which the compute pipeline
  * builds over the user's entire library. */
