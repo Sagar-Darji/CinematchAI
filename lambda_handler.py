@@ -12,16 +12,19 @@ _mangum_handler = Mangum(app, lifespan="off")
 def handler(event, context):
     """Lambda entry point.
 
-    Handles three event types:
+    Handles four event types:
     1. HTTP (API Gateway) — forwarded to FastAPI via Mangum
     2. Background job (source='recommendation-worker') — runs recommendation workflow
     3. Background job (source='stats-worker') — recomputes a user's persisted stats
+    4. Background job (source='letterboxd-worker') — runs a Letterboxd CSV import
     """
     src = event.get("source")
     if src == "recommendation-worker":
         return _run_background_recommendation(event)
     if src == "stats-worker":
         return _run_background_stats(event)
+    if src == "letterboxd-worker":
+        return _run_background_letterboxd(event)
     return _mangum_handler(event, context)
 
 
@@ -45,3 +48,15 @@ def _run_background_stats(event: dict) -> dict:
     user_id = event["user_id"]
     get_stats_service().compute(user_id)
     return {"status": "ok", "user_id": user_id}
+
+
+def _run_background_letterboxd(event: dict) -> dict:
+    """Run a Letterboxd CSV import on its own Lambda container so it doesn't
+    block the HTTP request handler for the duration of the import."""
+    from src.api.routes.users import _import_letterboxd_background
+
+    job_id = event["job_id"]
+    user_id = event["user_id"]
+    csv_content = event["csv_content"]
+    _import_letterboxd_background(job_id, user_id, csv_content)
+    return {"status": "ok", "job_id": job_id}

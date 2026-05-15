@@ -625,13 +625,26 @@ async def import_letterboxd(
             total=total_movies,
         )
 
-        # Run import in background
-        background_tasks.add_task(
-            _import_letterboxd_background,
-            job_id=job_id,
-            user_id=current_user,
-            csv_content=request.csv_content,
-        )
+        # Dispatch the import to a separate Lambda container (event-style
+        # self-invoke). Previously this used FastAPI BackgroundTasks, which
+        # holds the request Lambda for the entire ~3-minute import — every
+        # subsequent client request to the same warm container then hit the
+        # API Gateway 30s integration timeout and returned 503 "Service
+        # Unavailable". Self-invoke gives the worker its own container so
+        # the request handler returns in <200ms.
+        from src.api.routes.users import _dispatch_letterboxd_worker  # local helper, see below
+        try:
+            _dispatch_letterboxd_worker(job_id, current_user, request.csv_content)
+        except Exception as e:
+            # Local dev or missing IAM: fall back to FastAPI BackgroundTasks so
+            # imports still work outside Lambda.
+            logger.warning(f"Lambda self-invoke unavailable ({e}); falling back to BackgroundTasks")
+            background_tasks.add_task(
+                _import_letterboxd_background,
+                job_id=job_id,
+                user_id=current_user,
+                csv_content=request.csv_content,
+            )
 
         logger.info(f"Created Letterboxd import job {job_id} for user {current_user} ({total_movies} movies)")
 
@@ -656,6 +669,36 @@ async def import_letterboxd(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to start import",
         )
+
+
+def _dispatch_letterboxd_worker(job_id: str, user_id: str, csv_content: str) -> None:
+    """Fire-and-forget Lambda Event invocation that runs the import on a
+    fresh container. Raises if AWS credentials / LAMBDA_DEPLOYMENT aren't
+    set so the caller can fall back to in-process execution for local dev.
+    """
+    import json
+    import os
+
+    if not os.environ.get("LAMBDA_DEPLOYMENT"):
+        raise RuntimeError("Not running on Lambda — skipping self-invoke")
+
+    import boto3
+    lambda_name = os.environ.get("AWS_LAMBDA_FUNCTION_NAME") or os.environ.get(
+        "LAMBDA_FUNCTION_NAME", "cinematch-api"
+    )
+    client = boto3.client("lambda", region_name=os.environ.get("AWS_DEFAULT_REGION", "us-east-1"))
+    payload = {
+        "source": "letterboxd-worker",
+        "job_id": job_id,
+        "user_id": user_id,
+        "csv_content": csv_content,
+    }
+    client.invoke(
+        FunctionName=lambda_name,
+        InvocationType="Event",
+        Payload=json.dumps(payload).encode(),
+    )
+    logger.info(f"Dispatched letterboxd-worker for job {job_id}")
 
 
 def _import_letterboxd_background(job_id: str, user_id: str, csv_content: str):
