@@ -96,9 +96,15 @@ function LetterboxdImport({ userId, onComplete }: { userId: string; onComplete: 
 
   useEffect(() => {
     if (status !== 'importing' || !jobId) return
+    // Tolerate transient blips (cold starts, ~3s Lambda init, token
+    // refreshes). Only declare "lost connection" after several consecutive
+    // failed polls.
+    let consecutiveErrors = 0
+    const MAX_ERRORS = 5
     pollRef.current = setInterval(async () => {
       try {
         const data = await pollImportJob(jobId)
+        consecutiveErrors = 0
         setProgress(data.progress ?? 0)
         if (data.status === 'completed') {
           clearInterval(pollRef.current!)
@@ -110,11 +116,14 @@ function LetterboxdImport({ userId, onComplete }: { userId: string; onComplete: 
           setError('Import failed. Please try again.')
         }
       } catch {
-        clearInterval(pollRef.current!)
-        setStatus('error')
-        setError('Lost connection to import job.')
+        consecutiveErrors += 1
+        if (consecutiveErrors >= MAX_ERRORS) {
+          clearInterval(pollRef.current!)
+          setStatus('error')
+          setError('Lost connection to import job. Refresh to keep watching progress.')
+        }
       }
-    }, 2000)
+    }, 3000)
     return () => clearInterval(pollRef.current!)
   }, [status, jobId, total, onComplete])
 

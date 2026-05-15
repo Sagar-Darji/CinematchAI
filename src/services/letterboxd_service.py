@@ -1,9 +1,10 @@
 """Letterboxd Import Service - Import ratings from Letterboxd CSV export."""
 
 import csv
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from io import StringIO
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Tuple
 
 import pandas as pd
 import requests
@@ -63,53 +64,84 @@ class LetterboxdService:
                 + (" (with watch dates)" if has_date_col else " (no Date column — using import time)")
             )
 
-            # Import ratings
+            # Build a list of (title, year, rating, timestamp) per row first,
+            # then do TMDB search in parallel — sequential per-row search was
+            # taking 1-2s × 800+ rows, blowing past the 5-min Lambda timeout.
+
+            def _row_ts(row) -> Optional[str]:
+                """Preserve the original Letterboxd watch/log date when present."""
+                if not has_date_col:
+                    return None
+                raw_date = row.get("Date")
+                if not pd.notna(raw_date):
+                    return None
+                try:
+                    parsed = pd.to_datetime(raw_date, errors="coerce")
+                    if pd.notna(parsed):
+                        return parsed.isoformat()
+                except Exception:
+                    pass
+                return None
+
+            tasks: List[Tuple[int, str, float, float, Optional[str]]] = []
+            for _, row in rated_df.iterrows():
+                tasks.append((
+                    len(tasks),                # stable index
+                    str(row["Name"]),          # title
+                    float(row["Rating"]),      # rating
+                    row["Year"],                # year (may be NaN)
+                    _row_ts(row),
+                ))
+
+            tmdb_results: Dict[int, Optional[int]] = {}
+
+            def _resolve(idx: int, title: str, year: float) -> Tuple[int, Optional[int]]:
+                try:
+                    tid = self._search_tmdb_movie(title, year)
+                except Exception as exc:
+                    logger.warning(f"TMDB search threw for {title!r}: {exc}")
+                    tid = None
+                return idx, tid
+
+            # Parallel resolve. 20 workers ≈ TMDB friendly + cuts wall-clock
+            # from ~20min for 800 rows to ~30-60s on a warm cache.
+            completed = 0
+            with ThreadPoolExecutor(max_workers=20) as pool:
+                futures = [
+                    pool.submit(_resolve, idx, title, year)
+                    for idx, title, _rating, year, _ts in tasks
+                ]
+                for fut in as_completed(futures):
+                    idx, tid = fut.result()
+                    tmdb_results[idx] = tid
+                    completed += 1
+                    if progress_callback and (completed % 25 == 0 or completed == total):
+                        # First half of progress is dedicated to TMDB resolve.
+                        progress_callback(completed // 2, total)
+
+            # Now write all the ratings (sequential — fast against Postgres).
             imported = 0
             failed = 0
-            tmdb_mapping = {}
-
-            for idx, row in rated_df.iterrows():
-                title = row["Name"]
-                year = row["Year"]
-                rating = float(row["Rating"])
-
-                # Preserve the original Letterboxd watch/log date so the
-                # Profile's "In <year>" stat reflects when the user actually
-                # watched the film, not when they imported the CSV.
-                ts: Optional[str] = None
-                if has_date_col:
-                    raw_date = row.get("Date")
-                    if pd.notna(raw_date):
-                        try:
-                            parsed = pd.to_datetime(raw_date, errors="coerce")
-                            if pd.notna(parsed):
-                                ts = parsed.isoformat()
-                        except Exception:
-                            ts = None
-
-                # Search TMDB for movie
-                tmdb_id = self._search_tmdb_movie(title, year)
-
-                if tmdb_id:
-                    # Save rating
+            tmdb_mapping: Dict[str, int] = {}
+            for idx, title, rating, year, ts in tasks:
+                tid = tmdb_results.get(idx)
+                if tid:
                     self.user_service.add_rating(
                         user_id=user_id,
-                        movie_id=str(tmdb_id),
+                        movie_id=str(tid),
                         rating=rating,
                         watched=True,
                         timestamp=ts,
                     )
-                    tmdb_mapping[title] = tmdb_id
+                    tmdb_mapping[title] = tid
                     imported += 1
                 else:
                     logger.warning(f"Could not find TMDB match for: {title} ({year})")
                     failed += 1
-
-                # Report progress every 10 movies or on last movie
-                current = imported + failed
-                if progress_callback and (current % 10 == 0 or current == total):
-                    progress_callback(current, total)
-                    logger.debug(f"Progress: {current}/{total} ({current/total*100:.1f}%)")
+                done = imported + failed
+                if progress_callback and (done % 25 == 0 or done == total):
+                    # Second half of progress for DB writes.
+                    progress_callback(total // 2 + done // 2, total)
 
             logger.info(
                 f"Import complete: {imported} imported, {failed} failed"
