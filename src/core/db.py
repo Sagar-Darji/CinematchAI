@@ -15,7 +15,7 @@ The adapter normalises SQLite-flavoured SQL for PostgreSQL automatically:
 
 import re
 import sqlite3
-from typing import Any, Optional
+from typing import Any, Dict, List, Optional
 
 
 class _DualAccessRow(dict):
@@ -52,6 +52,31 @@ _RE_INSERT_COLS = re.compile(
     r"INSERT\s+INTO\s+\w+\s*\(([^)]+)\)\s*VALUES",
     re.IGNORECASE,
 )
+# Matches: INSERT INTO <table> — captures table name only.
+_RE_INSERT_TABLE = re.compile(r"INSERT\s+INTO\s+(\w+)", re.IGNORECASE)
+
+
+# ── Per-table PK registry ──────────────────────────────────────────────────────
+#
+# Postgres needs an explicit conflict target on ON CONFLICT DO UPDATE — but
+# our SQLite-flavored `INSERT OR REPLACE` doesn't carry that information.
+# Services teach the adapter their primary keys at schema-init time via
+# `register_pk`. `_build_upsert_suffix` then generates the right
+# `ON CONFLICT (col1, col2, ...) DO UPDATE SET col_a=EXCLUDED.col_a, ...`
+# regardless of how many columns the PK has.
+#
+# The old behaviour hardcoded `(user_id, movie_id)` for the ratings table and
+# silently emitted `ON CONFLICT (<first column>)` for everything else, which
+# raised psycopg2.errors.InvalidColumnReference on any multi-column PK
+# (watch_history, watchlist, reviews — all (user_id, tmdb_id, media_type)).
+
+_PK_REGISTRY: Dict[str, List[str]] = {}
+
+
+def register_pk(table: str, cols: List[str]) -> None:
+    """Tell the DB adapter which columns make up a table's primary key.
+    Call from each service's `_ensure_schema` right after CREATE TABLE."""
+    _PK_REGISTRY[table.lower()] = list(cols)
 
 
 def _to_pg(sql: str) -> str:
@@ -69,20 +94,40 @@ def _is_replace(sql: str) -> bool:
 
 
 def _build_upsert_suffix(sql: str, original_sql: str = "") -> str:
-    """For INSERT OR REPLACE, build ON CONFLICT DO UPDATE SET clause."""
-    m = _RE_INSERT_COLS.search(sql)
-    if not m:
+    """For INSERT OR REPLACE, build ON CONFLICT DO UPDATE SET clause.
+
+    Looks up the target table's primary key from the registry. Falls back
+    to a safe `ON CONFLICT DO NOTHING` if the table never registered its
+    PK — better than guessing and emitting an invalid conflict target.
+    """
+    m_cols = _RE_INSERT_COLS.search(sql)
+    if not m_cols:
         return " ON CONFLICT DO NOTHING"
-    cols = [c.strip() for c in m.group(1).split(",")]
-    if len(cols) < 2:
+    cols = [c.strip() for c in m_cols.group(1).split(",")]
+    if not cols:
         return " ON CONFLICT DO NOTHING"
-    # ratings table uses composite unique key (user_id, movie_id)
-    if len(cols) >= 2 and cols[0] == "user_id" and cols[1] == "movie_id":
-        conflict_target = "(user_id, movie_id)"
-        update_cols = cols[2:]
-    else:
-        conflict_target = f"({cols[0]})"
-        update_cols = cols[1:]
+
+    m_table = _RE_INSERT_TABLE.search(sql)
+    table = m_table.group(1).lower() if m_table else None
+    pk_cols = _PK_REGISTRY.get(table, []) if table else []
+
+    if not pk_cols:
+        # Legacy heuristic for ratings — services that haven't called
+        # register_pk yet still need to work. (user_id, movie_id) is the
+        # only multi-col PK we used to special-case.
+        if len(cols) >= 2 and cols[0] == "user_id" and cols[1] == "movie_id":
+            pk_cols = ["user_id", "movie_id"]
+        elif len(cols) >= 1 and cols[0] in ("user_id", "key"):
+            # Single-col PK is the common case for the rest.
+            pk_cols = [cols[0]]
+        else:
+            # Don't guess — emit DO NOTHING. That's safer than emitting
+            # `ON CONFLICT (col) DO UPDATE` with a column that may not
+            # actually be unique, which is the bug we just fixed.
+            return " ON CONFLICT DO NOTHING"
+
+    conflict_target = "(" + ", ".join(pk_cols) + ")"
+    update_cols = [c for c in cols if c not in pk_cols]
     if not update_cols:
         return f" ON CONFLICT {conflict_target} DO NOTHING"
     updates = ", ".join(f"{c}=EXCLUDED.{c}" for c in update_cols)

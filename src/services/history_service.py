@@ -6,7 +6,7 @@ resume at the right episode. For movies these are NULL.
 
 from typing import List, Optional
 
-from src.core.db import get_db
+from src.core.db import get_db, register_pk
 from src.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -49,6 +49,7 @@ class HistoryService:
                     "CREATE INDEX IF NOT EXISTS watch_history_user_watched "
                     "ON watch_history(user_id, watched_at DESC)"
                 )
+            register_pk("watch_history", ["user_id", "tmdb_id", "media_type"])
         except Exception as exc:
             logger.warning(f"Watch history schema init: {exc}")
 

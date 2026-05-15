@@ -21,7 +21,7 @@ from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from src.core.db import get_db
+from src.core.db import get_db, register_pk
 from src.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -75,6 +75,7 @@ class StatsService:
                     )
                     """
                 )
+            register_pk("user_stats", ["user_id"])
         except Exception as exc:
             logger.warning(f"user_stats schema init: {exc}")
 

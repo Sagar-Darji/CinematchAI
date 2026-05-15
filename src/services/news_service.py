@@ -64,7 +64,7 @@ FETCH_TIMEOUT = 10
 
 def _init_db() -> None:
     """Create news tables if they don't exist."""
-    from src.core.db import get_db
+    from src.core.db import get_db, register_pk
     with get_db().connect() as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS news_items (
@@ -88,6 +88,8 @@ def _init_db() -> None:
                 value TEXT
             )
         """)
+    register_pk("news_items", ["id"])
+    register_pk("news_meta", ["key"])
 
 
 @contextmanager

@@ -10,7 +10,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 
 from config.settings import get_settings
-from src.core.db import get_db
+from src.core.db import get_db, register_pk
 from src.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -110,6 +110,14 @@ class UserService:
 
         conn.commit()
         conn.close()
+
+        # Tell the DB adapter what each table's PK looks like so
+        # INSERT OR REPLACE generates a correct ON CONFLICT clause under
+        # Postgres. Without this the (user_id, movie_id) hardcode was
+        # masking everything else.
+        register_pk("users", ["user_id"])
+        register_pk("ratings", ["user_id", "movie_id"])
+        register_pk("contexts", ["user_id"])
 
         logger.info(f"Database initialised ({'PostgreSQL' if db.is_postgres else self.db_path})")
 

@@ -6,7 +6,7 @@ pattern from user_service.py rather than introducing Alembic in this phase.
 
 from typing import List, Optional
 
-from src.core.db import get_db
+from src.core.db import get_db, register_pk
 from src.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -47,6 +47,7 @@ class WatchlistService:
                     "CREATE INDEX IF NOT EXISTS watchlist_user_added "
                     "ON watchlist(user_id, added_at DESC)"
                 )
+            register_pk("watchlist", ["user_id", "tmdb_id", "media_type"])
         except Exception as exc:
             logger.warning(f"Watchlist schema init: {exc}")
 

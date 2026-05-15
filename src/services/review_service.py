@@ -8,7 +8,7 @@ must be set.
 
 from typing import List, Optional
 
-from src.core.db import get_db
+from src.core.db import get_db, register_pk
 from src.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -52,6 +52,7 @@ class ReviewService:
                     "CREATE INDEX IF NOT EXISTS reviews_user_updated "
                     "ON reviews(user_id, updated_at DESC)"
                 )
+            register_pk("reviews", ["user_id", "tmdb_id", "media_type"])
         except Exception as exc:
             logger.warning(f"Reviews schema init: {exc}")
 
