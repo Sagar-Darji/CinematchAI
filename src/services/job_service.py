@@ -6,7 +6,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, Optional
 
-from src.core.db import get_db
+from src.core.db import get_db, register_pk
 from src.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -50,18 +50,55 @@ class JobService:
                     error_message TEXT
                 )
             """)
+            # Chunked-import additions. Live jobs read these to resume after
+            # a Lambda timeout: the next worker invocation reads
+            # next_chunk_index, processes that chunk's slice of the S3
+            # CSV, and atomically advances the counter.
+            for col, definition in [
+                ("chunk_size",       "INTEGER DEFAULT 50"),
+                ("next_chunk_index", "INTEGER DEFAULT 0"),
+                ("s3_key",           "TEXT"),
+            ]:
+                try:
+                    conn.execute(f"ALTER TABLE jobs ADD COLUMN {col} {definition}")
+                except Exception:
+                    pass  # column already exists — idempotent
+        register_pk("jobs", ["job_id"])
         logger.info("Job database initialized")
 
-    def create_job(self, job_type: JobType, user_id: str, total: int = 100) -> str:
+    def create_job(
+        self,
+        job_type: JobType,
+        user_id: str,
+        total: int = 100,
+        s3_key: Optional[str] = None,
+        chunk_size: Optional[int] = None,
+    ) -> str:
         job_id = str(uuid.uuid4())
         now = datetime.utcnow().isoformat()
         with get_db().connect() as conn:
             conn.execute(
-                "INSERT INTO jobs (job_id, job_type, user_id, status, created_at, total) VALUES (?, ?, ?, ?, ?, ?)",
-                (job_id, job_type.value, user_id, JobStatus.PENDING.value, now, total),
+                "INSERT INTO jobs (job_id, job_type, user_id, status, created_at, total, "
+                "s3_key, chunk_size, next_chunk_index) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    job_id, job_type.value, user_id, JobStatus.PENDING.value, now, total,
+                    s3_key, chunk_size or 50, 0,
+                ),
             )
         logger.info(f"Created job {job_id}: type={job_type}, user={user_id}")
         return job_id
+
+    def advance_chunk(self, job_id: str, new_index: int, progress: int) -> None:
+        """Atomically advance the chunk counter and progress in one UPDATE
+        so concurrent workers don't double-process. Used by the chunked
+        Letterboxd import worker after each chunk finishes."""
+        with get_db().connect() as conn:
+            conn.execute(
+                "UPDATE jobs SET next_chunk_index = ?, progress = ?, "
+                "status = ? WHERE job_id = ?",
+                (new_index, progress, JobStatus.RUNNING.value, job_id),
+            )
 
     def update_job_status(self, job_id: str, status: JobStatus, progress: Optional[int] = None, error_message: Optional[str] = None):
         now = datetime.utcnow().isoformat()
@@ -95,7 +132,10 @@ class JobService:
     def get_job_status(self, job_id: str) -> Optional[Dict[str, Any]]:
         with get_db().connect() as conn:
             row = conn.execute(
-                "SELECT job_id, job_type, user_id, status, created_at, started_at, completed_at, progress, total, result_json, error_message FROM jobs WHERE job_id = ?",
+                "SELECT job_id, job_type, user_id, status, created_at, started_at, completed_at, "
+                "progress, total, result_json, error_message, "
+                "s3_key, chunk_size, next_chunk_index "
+                "FROM jobs WHERE job_id = ?",
                 (job_id,),
             ).fetchone()
         if not row:
@@ -106,6 +146,7 @@ class JobService:
             "completed_at": row[6], "progress": row[7], "total": row[8],
             "result": json.loads(row[9]) if row[9] else None,
             "error_message": row[10],
+            "s3_key": row[11], "chunk_size": row[12], "next_chunk_index": row[13],
         }
 
     def get_user_jobs(self, user_id: str, job_type: Optional[JobType] = None, limit: int = 10) -> list:

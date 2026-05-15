@@ -12,17 +12,22 @@ _mangum_handler = Mangum(app, lifespan="off")
 def handler(event, context):
     """Lambda entry point.
 
-    Handles four event types:
+    Handles five event types:
     1. HTTP (API Gateway) — forwarded to FastAPI via Mangum
     2. Background job (source='recommendation-worker') — runs recommendation workflow
     3. Background job (source='stats-worker') — recomputes a user's persisted stats
-    4. Background job (source='letterboxd-worker') — runs a Letterboxd CSV import
+    4. Background job (source='letterboxd-chunk') — processes one chunk of a CSV import
+    5. Background job (source='letterboxd-worker') — legacy monolithic Letterboxd import
+       (kept for back-compat with in-flight jobs at deploy time; can be removed
+       after the queue drains)
     """
     src = event.get("source")
     if src == "recommendation-worker":
         return _run_background_recommendation(event)
     if src == "stats-worker":
         return _run_background_stats(event)
+    if src == "letterboxd-chunk":
+        return _run_letterboxd_chunk(event)
     if src == "letterboxd-worker":
         return _run_background_letterboxd(event)
     return _mangum_handler(event, context)
@@ -51,12 +56,26 @@ def _run_background_stats(event: dict) -> dict:
 
 
 def _run_background_letterboxd(event: dict) -> dict:
-    """Run a Letterboxd CSV import on its own Lambda container so it doesn't
-    block the HTTP request handler for the duration of the import."""
+    """Legacy Letterboxd worker (monolithic, single Lambda invocation does
+    the whole CSV). Kept for back-compat with in-flight jobs from before
+    the chunked design landed; new jobs always use letterboxd-chunk."""
     from src.api.routes.users import _import_letterboxd_background
 
     job_id = event["job_id"]
     user_id = event["user_id"]
     csv_content = event["csv_content"]
     _import_letterboxd_background(job_id, user_id, csv_content)
+    return {"status": "ok", "job_id": job_id}
+
+
+def _run_letterboxd_chunk(event: dict) -> dict:
+    """Process ONE chunk of a Letterboxd import. The worker reads the CSV
+    from S3, processes its assigned slice, atomically advances the chunk
+    pointer, and self-dispatches the next chunk. Each invocation finishes
+    in 5-30 seconds (vs the monolithic worker's 5+ minutes that kept
+    blowing past Lambda's 300s timeout)."""
+    from src.api.routes.users import process_letterboxd_chunk
+
+    job_id = event["job_id"]
+    process_letterboxd_chunk(job_id)
     return {"status": "ok", "job_id": job_id}

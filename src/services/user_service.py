@@ -453,6 +453,7 @@ class UserService:
         rating: float,
         watched: bool = True,
         timestamp: Optional[str] = None,
+        skip_if_unchanged: bool = False,
     ):
         """
         Add or update a rating.
@@ -465,7 +466,32 @@ class UserService:
             timestamp: ISO timestamp of when the rating was made (e.g.
                 Letterboxd's "Date" column). Falls back to "now" so callers
                 that don't know the original date still work.
+            skip_if_unchanged: If True and a rating with the same value
+                already exists, return immediately without writing or
+                invalidating any caches. Letterboxd re-imports of the same
+                library become near-instant (~99% of rows are unchanged).
         """
+        # Idempotent path: skip the UPSERT + cache invalidation when the
+        # incoming value matches what's already on disk. Avoids hammering
+        # Postgres + the CF matrix + stats stale flag on a re-import.
+        if skip_if_unchanged:
+            existing = self._connect()
+            try:
+                cur = existing.cursor()
+                cur.execute(
+                    "SELECT rating FROM ratings WHERE user_id=? AND movie_id=?",
+                    (user_id, movie_id),
+                )
+                row = cur.fetchone()
+            finally:
+                existing.close()
+            if row is not None:
+                old_rating = row["rating"] if isinstance(row, dict) else row[0]
+                # 0.01 tolerance handles float-precision quirks across
+                # SQLite/Postgres without missing a real change.
+                if old_rating is not None and abs(float(old_rating) - float(rating)) < 0.01:
+                    return
+
         conn = self._connect()
         cursor = conn.cursor()
 

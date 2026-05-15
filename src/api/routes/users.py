@@ -2,7 +2,7 @@
 
 from typing import List, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from pydantic import BaseModel, Field
 
 from src.api.deps import get_current_user
@@ -589,7 +589,6 @@ async def update_context(
 )
 async def import_letterboxd(
     request: LetterboxdImportRequest,
-    background_tasks: BackgroundTasks,
     current_user: str = Depends(get_current_user),
 ):
     """
@@ -617,19 +616,19 @@ async def import_letterboxd(
         df = pd.read_csv(StringIO(request.csv_content))
         rated_df = df[df["Rating"].notna()]
         total_movies = len(rated_df)
+        if total_movies == 0:
+            raise ValueError("CSV has no rated rows. Make sure you uploaded ratings.csv, not the diary or watchlist.")
 
-        # If a Letterboxd import for this user is already in flight, return
-        # its job_id instead of spawning a duplicate. Concurrent imports
-        # fight TMDB rate limits and slow each other to a crawl.
+        # Single-flight guard: if a Letterboxd import for this user is
+        # already in flight (or recently stuck), return its job_id and
+        # re-dispatch a chunk worker so it resumes from where it stopped.
+        # No new job, no duplicate workers, no TMDB rate-limit fights.
         job_service = get_job_service()
         recent = job_service.get_user_jobs(
             current_user, job_type=JobType.LETTERBOXD_IMPORT, limit=5
         )
         for j in recent:
             if j.get("status") in ("pending", "running"):
-                # Treat anything started in the last 10 min as still alive —
-                # the Lambda 300s timeout + retry would have resolved older
-                # stuck jobs by then.
                 started = j.get("created_at")
                 if started:
                     try:
@@ -639,46 +638,69 @@ async def import_letterboxd(
                     if age < 600:
                         logger.info(
                             f"Letterboxd import already running for user {current_user} "
-                            f"(job {j['job_id']}, age {int(age)}s) — returning existing job"
+                            f"(job {j['job_id']}, age {int(age)}s) — resuming existing job"
                         )
+                        # Re-poke the worker so a stuck job picks up again
+                        # from next_chunk_index. Lambda Event invokes are
+                        # cheap (~30 ms); the chunk worker is idempotent and
+                        # will exit immediately if the job is already done.
+                        try:
+                            _dispatch_letterboxd_chunk_worker(j["job_id"])
+                        except Exception as e:
+                            logger.warning(f"Resume self-invoke failed ({e}); will rely on existing worker")
                         return {
                             "job_id": j["job_id"],
                             "user_id": current_user,
                             "total_movies": j.get("total", total_movies),
                             "status": j.get("status", "running"),
-                            "message": f"Existing import in progress. Poll GET /api/v1/users/jobs/{j['job_id']}.",
+                            "message": f"Resumed in-progress import. Poll GET /api/v1/users/jobs/{j['job_id']}.",
                             "poll_url": f"/api/v1/users/jobs/{j['job_id']}",
                         }
 
-        # Create job
+        # Stage the CSV in S3 so each chunk worker can stream just its slice
+        # — keeps Lambda Event payloads tiny (under 1 KB) and lets workers
+        # process any library size without blowing the 256 KB event limit.
+        chunk_size = 50
+        from src.services.import_staging_service import get_import_staging_service
+        import uuid as _uuid
+        # Pre-generate the job_id so the S3 key can use it. JobService will
+        # accept it via create_job's return value.
+        pre_job_id = str(_uuid.uuid4())
+        try:
+            staging = get_import_staging_service()
+            s3_key = staging.put_csv(current_user, pre_job_id, request.csv_content)
+        except Exception as e:
+            logger.error(f"S3 staging upload failed: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Could not stage your CSV for processing. Please try again in a moment.",
+            )
+
         job_id = job_service.create_job(
             job_type=JobType.LETTERBOXD_IMPORT,
             user_id=current_user,
             total=total_movies,
+            s3_key=s3_key,
+            chunk_size=chunk_size,
         )
 
-        # Dispatch the import to a separate Lambda container (event-style
-        # self-invoke). Previously this used FastAPI BackgroundTasks, which
-        # holds the request Lambda for the entire ~3-minute import — every
-        # subsequent client request to the same warm container then hit the
-        # API Gateway 30s integration timeout and returned 503 "Service
-        # Unavailable". Self-invoke gives the worker its own container so
-        # the request handler returns in <200ms.
-        from src.api.routes.users import _dispatch_letterboxd_worker  # local helper, see below
         try:
-            _dispatch_letterboxd_worker(job_id, current_user, request.csv_content)
+            _dispatch_letterboxd_chunk_worker(job_id)
         except Exception as e:
-            # Local dev or missing IAM: fall back to FastAPI BackgroundTasks so
-            # imports still work outside Lambda.
-            logger.warning(f"Lambda self-invoke unavailable ({e}); falling back to BackgroundTasks")
-            background_tasks.add_task(
-                _import_letterboxd_background,
-                job_id=job_id,
-                user_id=current_user,
-                csv_content=request.csv_content,
-            )
+            # Local dev or missing IAM: run the chunks in a daemon thread
+            # instead of spinning a Lambda. Same code path, just in-process.
+            logger.warning(f"Lambda self-invoke unavailable ({e}); running chunks in a thread")
+            import threading
+            threading.Thread(
+                target=_run_chunk_loop_in_thread,
+                args=(job_id,),
+                daemon=True,
+            ).start()
 
-        logger.info(f"Created Letterboxd import job {job_id} for user {current_user} ({total_movies} movies)")
+        logger.info(
+            f"Created Letterboxd import job {job_id} for user {current_user} "
+            f"({total_movies} movies, chunk_size={chunk_size}, s3_key={s3_key})"
+        )
 
         return {
             "job_id": job_id,
@@ -695,6 +717,8 @@ async def import_letterboxd(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e),
         )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to start Letterboxd import: {e}")
         raise HTTPException(
@@ -703,10 +727,15 @@ async def import_letterboxd(
         )
 
 
-def _dispatch_letterboxd_worker(job_id: str, user_id: str, csv_content: str) -> None:
-    """Fire-and-forget Lambda Event invocation that runs the import on a
-    fresh container. Raises if AWS credentials / LAMBDA_DEPLOYMENT aren't
-    set so the caller can fall back to in-process execution for local dev.
+def _dispatch_letterboxd_chunk_worker(job_id: str) -> None:
+    """Fire-and-forget Lambda Event invocation that processes ONE chunk of
+    a Letterboxd import. Payload is just `{source, job_id}` (< 1 KB) — the
+    worker reads the CSV from S3 and the chunk position from the jobs
+    table. Each chunk runs in well under the 300s Lambda ceiling; the
+    chunk worker self-dispatches the next chunk on completion.
+
+    Raises if not running on Lambda so the caller can fall back to the
+    in-process daemon-thread loop for local dev.
     """
     import json
     import os
@@ -719,18 +748,146 @@ def _dispatch_letterboxd_worker(job_id: str, user_id: str, csv_content: str) -> 
         "LAMBDA_FUNCTION_NAME", "cinematch-api"
     )
     client = boto3.client("lambda", region_name=os.environ.get("AWS_DEFAULT_REGION", "us-east-1"))
-    payload = {
-        "source": "letterboxd-worker",
-        "job_id": job_id,
-        "user_id": user_id,
-        "csv_content": csv_content,
-    }
+    payload = {"source": "letterboxd-chunk", "job_id": job_id}
     client.invoke(
         FunctionName=lambda_name,
         InvocationType="Event",
         Payload=json.dumps(payload).encode(),
     )
-    logger.info(f"Dispatched letterboxd-worker for job {job_id}")
+    logger.info(f"Dispatched letterboxd-chunk for job {job_id}")
+
+
+def process_letterboxd_chunk(job_id: str) -> None:
+    """Process ONE chunk of a Letterboxd import, then either:
+      - self-dispatch the next chunk (more rows remain), or
+      - mark the job complete + kick off the stats recompute.
+
+    Idempotent: if the job is already completed/failed, returns immediately.
+    Safe to invoke twice for the same job_id concurrently — both will
+    advance `next_chunk_index` past the row they processed.
+    """
+    from src.services.letterboxd_service import get_letterboxd_service
+    from src.services.import_staging_service import get_import_staging_service
+
+    job_service = get_job_service()
+    job = job_service.get_job_status(job_id)
+    if not job:
+        logger.warning(f"chunk worker: job {job_id} not found, exiting")
+        return
+    if job["status"] in ("completed", "failed", "cancelled"):
+        logger.info(f"chunk worker: job {job_id} already {job['status']}, no-op")
+        return
+
+    user_id = job["user_id"]
+    s3_key = job.get("s3_key")
+    chunk_size = job.get("chunk_size") or 50
+    start = job.get("next_chunk_index") or 0
+    total = job.get("total") or 0
+
+    if not s3_key:
+        logger.error(f"chunk worker: job {job_id} has no s3_key, marking failed")
+        job_service.update_job_status(job_id, JobStatus.FAILED, error_message="Missing s3_key")
+        return
+
+    # Mark as running on first chunk so the UI flips from "pending" promptly.
+    if job["status"] == "pending":
+        job_service.update_job_status(job_id, JobStatus.RUNNING, progress=0)
+
+    # Pull the CSV once per chunk. ~80 KB for an 800-row library, no big
+    # deal; for larger libraries we could Range-read but it's not worth
+    # the complexity yet.
+    try:
+        csv_content = get_import_staging_service().get_csv(s3_key)
+    except Exception as e:
+        logger.error(f"chunk worker: S3 fetch failed for job {job_id}: {e}")
+        job_service.update_job_status(
+            job_id, JobStatus.FAILED, error_message="Could not read staged CSV from S3"
+        )
+        return
+
+    end = min(start + chunk_size, total) if total else start + chunk_size
+
+    try:
+        stats = get_letterboxd_service().import_chunk(
+            user_id=user_id,
+            csv_content=csv_content,
+            start_row=start,
+            end_row=end,
+            skip_if_unchanged=True,
+        )
+    except Exception as e:
+        logger.exception(f"chunk worker: chunk {start}-{end} for job {job_id} failed: {e}")
+        # Don't mark the whole job FAILED on a single chunk error — the
+        # next dispatch will retry. Only fail terminally if the same chunk
+        # has failed twice in a row (would need DB tracking; skip for now).
+        return
+
+    processed = stats.get("processed", 0)
+    if processed == 0:
+        # Nothing left to process — wrap up.
+        _mark_letterboxd_complete(job_id, user_id, s3_key)
+        return
+
+    new_next = start + processed
+    progress = int(min(100, (new_next / total) * 100)) if total else 0
+    job_service.advance_chunk(job_id, new_next, progress)
+    logger.info(
+        f"chunk worker: job {job_id} chunk {start}-{end} done "
+        f"({stats['imported']} ok / {stats['failed']} miss); next_chunk_index={new_next}/{total}"
+    )
+
+    if new_next >= total:
+        _mark_letterboxd_complete(job_id, user_id, s3_key)
+        return
+
+    # Self-chain. If this self-invoke fails (e.g. IAM blip), the job stays
+    # at status=running with the advanced next_chunk_index — the next user
+    # upload will trip the single-flight guard and re-dispatch from here.
+    try:
+        _dispatch_letterboxd_chunk_worker(job_id)
+    except Exception as e:
+        logger.warning(f"chunk worker: self-chain failed for job {job_id}: {e}")
+
+
+def _mark_letterboxd_complete(job_id: str, user_id: str, s3_key: Optional[str]) -> None:
+    """Wrap up a finished import: mark COMPLETED, store result, fire stats
+    recompute, delete the staged CSV from S3."""
+    job_service = get_job_service()
+    job_service.update_job_status(job_id, JobStatus.COMPLETED, progress=100)
+    job_service.update_job_result(job_id, {"status": "completed", "user_id": user_id})
+    logger.info(f"chunk worker: job {job_id} COMPLETED")
+    # Tell the stats job to recompute on next profile load.
+    try:
+        from src.services.stats_service import get_stats_service, invoke_stats_worker
+        get_stats_service().mark_stale(user_id)
+        invoke_stats_worker(user_id)
+    except Exception as e:
+        logger.warning(f"chunk worker: stats recompute trigger failed: {e}")
+    # Best-effort cleanup of the staged CSV — the 7-day S3 lifecycle rule
+    # is the backstop.
+    if s3_key:
+        try:
+            from src.services.import_staging_service import get_import_staging_service
+            get_import_staging_service().delete(s3_key)
+        except Exception as e:
+            logger.warning(f"chunk worker: S3 cleanup failed: {e}")
+
+
+def _run_chunk_loop_in_thread(job_id: str) -> None:
+    """Local-dev fallback: run the chunk loop sequentially in a daemon
+    thread so imports work without Lambda. Loops until status terminal."""
+    while True:
+        try:
+            job = get_job_service().get_job_status(job_id)
+        except Exception:
+            return
+        if not job or job["status"] in ("completed", "failed", "cancelled"):
+            return
+        try:
+            process_letterboxd_chunk(job_id)
+        except Exception as e:
+            logger.warning(f"local chunk loop: {e}")
+            return
 
 
 def _import_letterboxd_background(job_id: str, user_id: str, csv_content: str):

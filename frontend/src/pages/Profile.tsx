@@ -96,35 +96,56 @@ function LetterboxdImport({ userId, onComplete }: { userId: string; onComplete: 
 
   useEffect(() => {
     if (status !== 'importing' || !jobId) return
-    // Tolerate transient blips (cold starts, ~3s Lambda init, token
-    // refreshes). Only declare "lost connection" after several consecutive
-    // failed polls.
-    let consecutiveErrors = 0
+    // Exponential-ish backoff: a healthy poll comes back in <200ms, but a
+    // cold-start Lambda + Postgres handshake can spike to 3-5s on first
+    // hit. The old fixed-3s interval was tripping the "5 errors → give
+    // up" guard purely on cold-start jitter. With backoff (2-3-5-8-12s)
+    // we tolerate ~30 seconds of real outage instead of ~15.
+    const BACKOFF_MS = [2000, 3000, 5000, 8000, 12000]
     const MAX_ERRORS = 5
-    pollRef.current = setInterval(async () => {
+    let consecutiveErrors = 0
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout> | null = null
+
+    const tick = async () => {
+      if (cancelled) return
       try {
         const data = await pollImportJob(jobId)
+        if (cancelled) return
         consecutiveErrors = 0
         setProgress(data.progress ?? 0)
         if (data.status === 'completed') {
-          clearInterval(pollRef.current!)
           setStatus('done')
           onComplete(total)
-        } else if (data.status === 'failed') {
-          clearInterval(pollRef.current!)
+          return  // stop scheduling
+        }
+        if (data.status === 'failed') {
           setStatus('error')
           setError('Import failed. Please try again.')
+          return
         }
       } catch {
         consecutiveErrors += 1
         if (consecutiveErrors >= MAX_ERRORS) {
-          clearInterval(pollRef.current!)
+          if (cancelled) return
           setStatus('error')
           setError('Lost connection to import job. Refresh to keep watching progress.')
+          return
         }
       }
-    }, 3000)
-    return () => clearInterval(pollRef.current!)
+      // Schedule next poll. Healthy: 2s. After errors: ramp up.
+      const delay =
+        consecutiveErrors === 0
+          ? BACKOFF_MS[0]
+          : BACKOFF_MS[Math.min(consecutiveErrors, BACKOFF_MS.length - 1)]
+      timer = setTimeout(tick, delay)
+    }
+
+    timer = setTimeout(tick, BACKOFF_MS[0])
+    return () => {
+      cancelled = true
+      if (timer) clearTimeout(timer)
+    }
   }, [status, jobId, total, onComplete])
 
   if (!open) {

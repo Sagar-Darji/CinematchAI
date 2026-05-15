@@ -161,6 +161,96 @@ class LetterboxdService:
             logger.error(f"Failed to import Letterboxd CSV: {e}")
             raise
 
+    def import_chunk(
+        self,
+        user_id: str,
+        csv_content: str,
+        start_row: int,
+        end_row: int,
+        skip_if_unchanged: bool = True,
+    ) -> Dict[str, int]:
+        """Import a slice [start_row, end_row) of an already-parsed
+        Letterboxd CSV. Designed for the chunked Lambda worker — each
+        chunk runs in well under the 300s Lambda timeout.
+
+        Returns: {imported, failed, processed} for this chunk.
+        """
+        df = pd.read_csv(StringIO(csv_content))
+        if not all(c in df.columns for c in ("Name", "Year", "Rating")):
+            raise ValueError("CSV must contain Name, Year, Rating columns")
+        rated_df = df[df["Rating"].notna()].copy()
+        chunk_df = rated_df.iloc[start_row:end_row]
+        if chunk_df.empty:
+            return {"imported": 0, "failed": 0, "processed": 0}
+
+        has_date_col = "Date" in df.columns
+
+        def _row_ts(row) -> Optional[str]:
+            if not has_date_col:
+                return None
+            raw_date = row.get("Date")
+            if not pd.notna(raw_date):
+                return None
+            try:
+                parsed = pd.to_datetime(raw_date, errors="coerce")
+                if pd.notna(parsed):
+                    return parsed.isoformat()
+            except Exception:
+                pass
+            return None
+
+        tasks: List[Tuple[int, str, float, float, Optional[str]]] = []
+        for _, row in chunk_df.iterrows():
+            tasks.append((
+                len(tasks),
+                str(row["Name"]),
+                float(row["Rating"]),
+                row["Year"],
+                _row_ts(row),
+            ))
+
+        # Parallel TMDB resolves over the chunk only. 8 workers stays well
+        # under the 40-req/10s TMDB rate limit even with one other user
+        # importing concurrently.
+        tmdb_results: Dict[int, Optional[int]] = {}
+
+        def _resolve(idx: int, title: str, year: float) -> Tuple[int, Optional[int]]:
+            try:
+                tid = self._search_tmdb_movie(title, year)
+            except Exception as exc:
+                logger.warning(f"TMDB search threw for {title!r}: {exc}")
+                tid = None
+            return idx, tid
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            futures = [
+                pool.submit(_resolve, idx, title, year)
+                for idx, title, _rating, year, _ts in tasks
+            ]
+            for fut in as_completed(futures):
+                idx, tid = fut.result()
+                tmdb_results[idx] = tid
+
+        imported = 0
+        failed = 0
+        for idx, title, rating, year, ts in tasks:
+            tid = tmdb_results.get(idx)
+            if tid:
+                self.user_service.add_rating(
+                    user_id=user_id,
+                    movie_id=str(tid),
+                    rating=rating,
+                    watched=True,
+                    timestamp=ts,
+                    skip_if_unchanged=skip_if_unchanged,
+                )
+                imported += 1
+            else:
+                logger.warning(f"Could not find TMDB match for: {title} ({year})")
+                failed += 1
+
+        return {"imported": imported, "failed": failed, "processed": len(tasks)}
+
     def _search_tmdb_movie(
         self, title: str, year: Optional[int] = None
     ) -> Optional[int]:
@@ -173,14 +263,36 @@ class LetterboxdService:
 
         Returns:
             TMDB movie ID or None if not found.
+
+        Cached on /tmp (Lambda) or ./data/cache (local) by
+        (normalized_title, year). Titles don't change, so a 30-day TTL is
+        plenty. Letterboxd re-imports of the same library become near
+        instant — every search after the first is < 1ms.
         """
         from config.settings import get_settings
+        from src.services.movie_service import cache as _tmdb_cache
 
         settings = get_settings()
 
         if not settings.tmdb_api_key:
             logger.warning("TMDB API key not set, cannot search movies")
             return None
+
+        # Cache lookup — same diskcache instance the rest of the TMDB code
+        # uses, so we don't add a second cache dir on Lambda /tmp.
+        try:
+            year_part = int(year) if year and (isinstance(year, int) or float(year).is_integer()) else ""
+        except (TypeError, ValueError):
+            year_part = ""
+        cache_key = f"lb_search:{(title or '').strip().lower()}:{year_part}"
+        try:
+            cached = _tmdb_cache.get(cache_key)
+            if cached is not None:
+                # Sentinel `0` means "previously searched, no match" — also
+                # cacheable so we don't re-hit TMDB for known-misses.
+                return int(cached) if cached else None
+        except Exception:
+            pass  # cache miss / bad pickle — fall through and hit TMDB
 
         try:
             # Search TMDB
@@ -195,15 +307,21 @@ class LetterboxdService:
 
             response = requests.get(url, params=params, timeout=10)
 
+            tmdb_id: Optional[int] = None
             if response.status_code == 200:
                 data = response.json()
                 results = data.get("results", [])
-
                 if results:
-                    # Return first result (best match)
-                    return results[0]["id"]
+                    tmdb_id = int(results[0]["id"])
 
-            return None
+            # Persist outcome (hit OR miss) so repeat imports skip TMDB.
+            # Misses cache as 0; hits cache the int id. 30 days is far
+            # longer than any reasonable user re-import cadence.
+            try:
+                _tmdb_cache.set(cache_key, tmdb_id or 0, expire=30 * 24 * 3600)
+            except Exception:
+                pass
+            return tmdb_id
 
         except Exception as e:
             logger.warning(f"TMDB search failed for {title}: {e}")

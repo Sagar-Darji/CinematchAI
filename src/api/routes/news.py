@@ -1,8 +1,9 @@
 """CineDigest API routes — movie news aggregator."""
 
+import threading
 from typing import Literal, Optional
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, status
+from fastapi import APIRouter, HTTPException, Query, status
 
 from src.services import news_service
 from src.utils.logging import get_logger
@@ -37,9 +38,16 @@ async def get_digest(
 
 
 @router.post("/refresh", status_code=status.HTTP_202_ACCEPTED)
-async def trigger_refresh(background_tasks: BackgroundTasks):
-    """Manually trigger a news refresh (runs in background)."""
-    background_tasks.add_task(_do_refresh)
+async def trigger_refresh():
+    """Manually trigger a news refresh (runs in a daemon thread).
+
+    NOTE: FastAPI BackgroundTasks holds the Lambda container thread for
+    the entire task duration on AWS Lambda, which causes the 30s API
+    Gateway timeout to fire on subsequent requests. A plain daemon
+    thread doesn't have that problem because it doesn't block the
+    request handler's return.
+    """
+    threading.Thread(target=_do_refresh, daemon=True).start()
     return {"status": "refresh_started"}
 
 
