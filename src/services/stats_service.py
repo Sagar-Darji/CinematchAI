@@ -46,6 +46,10 @@ class StatsService:
     def _ensure_schema(self) -> None:
         try:
             with self.db.connect() as conn:
+                # Use TRUE/FALSE (not 1/0) because Postgres rejects integer
+                # defaults on BOOLEAN columns ("column 'stale' is of type
+                # boolean but default expression is of type integer").
+                # SQLite accepts TRUE/FALSE as boolean literals too.
                 conn.execute(
                     """
                     CREATE TABLE IF NOT EXISTS user_stats (
@@ -67,7 +71,7 @@ class StatsService:
                         insights_json TEXT,
                         llm_personality TEXT,
                         computed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        stale BOOLEAN DEFAULT 1
+                        stale BOOLEAN DEFAULT TRUE
                     )
                     """
                 )
@@ -113,13 +117,15 @@ class StatsService:
     def mark_stale(self, user_id: str) -> None:
         try:
             with self.db.connect() as conn:
+                # Use real booleans — Postgres rejects integer-typed values
+                # on BOOLEAN columns.
                 conn.execute(
-                    "INSERT OR IGNORE INTO user_stats (user_id, stale) VALUES (?, 1)",
-                    (user_id,),
+                    "INSERT OR IGNORE INTO user_stats (user_id, stale) VALUES (?, ?)",
+                    (user_id, True),
                 )
                 conn.execute(
-                    "UPDATE user_stats SET stale = 1 WHERE user_id = ?",
-                    (user_id,),
+                    "UPDATE user_stats SET stale = ? WHERE user_id = ?",
+                    (True, user_id),
                 )
         except Exception as exc:
             logger.warning(f"mark_stale failed for {user_id}: {exc}")
@@ -166,7 +172,7 @@ class StatsService:
             json.dumps(payload.get("insights") or []),
             payload.get("llm_personality"),
             datetime.now(timezone.utc).isoformat(),
-            0,
+            False,  # stale — real bool so Postgres BOOLEAN column accepts it
         )
         placeholders = ",".join(["?"] * len(cols))
         with self.db.connect() as conn:

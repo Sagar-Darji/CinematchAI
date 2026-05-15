@@ -72,8 +72,23 @@ function LetterboxdImport({ userId, onComplete }: { userId: string; onComplete: 
       setJobId(result.job_id)
       setTotal(result.total_movies)
       setStatus('importing')
-    } catch {
-      setError('Failed to start import. Please try again.')
+    } catch (err) {
+      // Surface whatever the backend told us — usually the actual reason
+      // (missing column, malformed CSV, auth, etc.) — instead of a
+      // generic "try again" that hides the cause.
+      let msg = 'Could not start the import.'
+      if (err instanceof Error && err.message) {
+        const raw = err.message.trim()
+        try {
+          const parsed = JSON.parse(raw)
+          if (parsed?.detail) msg = String(parsed.detail)
+          else if (parsed?.error) msg = String(parsed.error)
+          else msg = raw.slice(0, 300)
+        } catch {
+          msg = raw.slice(0, 300)
+        }
+      }
+      setError(msg)
     } finally {
       setSubmitting(false)
     }
