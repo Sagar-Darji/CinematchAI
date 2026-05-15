@@ -210,10 +210,28 @@ class StatsService:
             self.upsert(user_id, payload)
             return payload
 
-        # Resolve movies (parallel, with TV fallback). Cached on /tmp so this
-        # is fast on subsequent runs.
+        # Resolve movies in 200-row batches with parallel TMDB fetches per
+        # batch. Batching keeps memory + Lambda-time bounded for users with
+        # large libraries (5000+ ratings) and means a per-batch TMDB failure
+        # doesn't wipe out the whole compute — surviving batches still feed
+        # the aggregator. Cached on /tmp so subsequent runs are fast.
         ids = [int(r["movie_id"]) for r in ratings]
-        movies = get_movie_service().get_media_auto_batch(ids, max_workers=20)
+        batch_size = 200
+        movies: List[Any] = [None] * len(ids)
+        for start in range(0, len(ids), batch_size):
+            end = min(start + batch_size, len(ids))
+            chunk = ids[start:end]
+            try:
+                resolved = get_movie_service().get_media_auto_batch(chunk, max_workers=20)
+                for i, m in enumerate(resolved):
+                    movies[start + i] = m
+                logger.info(
+                    f"[stats] resolved batch {start}-{end} of {len(ids)} "
+                    f"({sum(1 for m in resolved if m)}/{len(chunk)} hits)"
+                )
+            except Exception as exc:
+                logger.warning(f"[stats] batch {start}-{end} failed entirely: {exc}")
+                # Leave that batch as Nones — aggregator handles missing data.
 
         # Per-rating enrichment — keep ratings & movies aligned.
         enriched: List[dict] = []

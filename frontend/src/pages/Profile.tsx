@@ -30,6 +30,9 @@ import { FavoritesEditor } from '@/components/profile/FavoritesEditor'
 import { RatedGrid } from '@/components/profile/RatedGrid'
 import { InsightCards } from '@/components/profile/InsightCards'
 import { AvatarUploader } from '@/components/profile/AvatarUploader'
+import { TasteSignals } from '@/components/profile/TasteSignals'
+import { PeopleLists } from '@/components/profile/PeopleLists'
+import { YearChart } from '@/components/profile/YearChart'
 import {
   ratingHistogram,
   decadeBreakdown,
@@ -729,6 +732,13 @@ export default function Profile() {
                       />
                     )}
 
+                    {/* Numeric "taste signals" — total runtime, foreign %,
+                        generosity vs the TMDB crowd. */}
+                    {persistedStats && <TasteSignals stats={persistedStats} />}
+
+                    {/* Top directors + actors derived from the full library. */}
+                    {persistedStats && <PeopleLists stats={persistedStats} />}
+
                     <YearInReview stats={yearStats} />
 
                     {/* Rating histogram */}
@@ -809,6 +819,11 @@ export default function Profile() {
 
                 {tab === 'diary' && (
                   <div className="space-y-5">
+                    {/* Year-by-year activity chart pulls from the persisted
+                        stats so it covers the user's *entire* rated
+                        timeline, not just the heatmap's current year. */}
+                    {persistedStats && <YearChart stats={persistedStats} />}
+
                     <div className="rounded-xl p-5" style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}>
                       <h3 className="text-xs font-bold uppercase tracking-widest mb-4" style={{ color: 'var(--text-muted)' }}>
                         Activity in {heatmap?.year ?? currentYear}
