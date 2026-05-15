@@ -103,10 +103,12 @@ class LetterboxdService:
                     tid = None
                 return idx, tid
 
-            # Parallel resolve. 20 workers ≈ TMDB friendly + cuts wall-clock
-            # from ~20min for 800 rows to ~30-60s on a warm cache.
+            # Parallel resolve. TMDB allows 40 req/10s globally; 8 workers
+            # keeps us comfortably under that even if another worker is
+            # warming a different user. Cuts wall-clock from ~20min for
+            # 800 rows to ~90-120s on a warm cache.
             completed = 0
-            with ThreadPoolExecutor(max_workers=20) as pool:
+            with ThreadPoolExecutor(max_workers=8) as pool:
                 futures = [
                     pool.submit(_resolve, idx, title, year)
                     for idx, title, _rating, year, _ts in tasks

@@ -611,14 +611,46 @@ async def import_letterboxd(
     try:
         import pandas as pd
         from io import StringIO
+        from datetime import datetime as _dt
 
         # Parse CSV to get total count
         df = pd.read_csv(StringIO(request.csv_content))
         rated_df = df[df["Rating"].notna()]
         total_movies = len(rated_df)
 
-        # Create job
+        # If a Letterboxd import for this user is already in flight, return
+        # its job_id instead of spawning a duplicate. Concurrent imports
+        # fight TMDB rate limits and slow each other to a crawl.
         job_service = get_job_service()
+        recent = job_service.get_user_jobs(
+            current_user, job_type=JobType.LETTERBOXD_IMPORT, limit=5
+        )
+        for j in recent:
+            if j.get("status") in ("pending", "running"):
+                # Treat anything started in the last 10 min as still alive —
+                # the Lambda 300s timeout + retry would have resolved older
+                # stuck jobs by then.
+                started = j.get("created_at")
+                if started:
+                    try:
+                        age = (_dt.utcnow() - _dt.fromisoformat(started.replace("Z", ""))).total_seconds()
+                    except Exception:
+                        age = 0
+                    if age < 600:
+                        logger.info(
+                            f"Letterboxd import already running for user {current_user} "
+                            f"(job {j['job_id']}, age {int(age)}s) — returning existing job"
+                        )
+                        return {
+                            "job_id": j["job_id"],
+                            "user_id": current_user,
+                            "total_movies": j.get("total", total_movies),
+                            "status": j.get("status", "running"),
+                            "message": f"Existing import in progress. Poll GET /api/v1/users/jobs/{j['job_id']}.",
+                            "poll_url": f"/api/v1/users/jobs/{j['job_id']}",
+                        }
+
+        # Create job
         job_id = job_service.create_job(
             job_type=JobType.LETTERBOXD_IMPORT,
             user_id=current_user,
