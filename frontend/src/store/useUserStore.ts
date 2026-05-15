@@ -3,6 +3,7 @@ import { persist } from 'zustand/middleware'
 import { useWatchlistStore } from './useWatchlistStore'
 import { useHistoryStore } from './useHistoryStore'
 import { useReviewsStore } from './useReviewsStore'
+import { clearAllCache } from '@/lib/cache'
 
 interface UserState {
   userId: string
@@ -44,11 +45,12 @@ export const useUserStore = create<UserState>()(
       setHasSeenTour: (v) => set({ hasSeenTour: v }),
       setAutoAdvance: (v) => set({ autoAdvance: v }),
       logout: () => {
-        // Cascade-clear other persisted stores so private data does not leak
-        // to the next user on a shared device.
+        // Cascade-clear other persisted stores + the SWR cache so private
+        // data does not leak to the next user on a shared device.
         try { useWatchlistStore.getState().clear() } catch { /* ignore */ }
         try { useHistoryStore.getState().clear() } catch { /* ignore */ }
         try { useReviewsStore.getState().reset() } catch { /* ignore */ }
+        try { clearAllCache() } catch { /* ignore */ }
         set({ userId: '', email: '', token: '', isOnboarded: false, ratingCount: 0, hasSeenTour: false, autoAdvance: true })
       },
     }),

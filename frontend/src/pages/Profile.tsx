@@ -21,6 +21,7 @@ import {
   type UserStatsResponse,
 } from '@/lib/api'
 import { tmdbPoster } from '@/lib/utils'
+import { readCache, writeCache } from '@/lib/cache'
 import { PageLoader } from '@/components/ui/PageLoader'
 import { Tabs } from '@/components/profile/Tabs'
 import { RatingHistogram } from '@/components/profile/RatingHistogram'
@@ -416,11 +417,25 @@ export default function Profile() {
   const reviewsByKey = useReviewsStore((s) => s.byKey)
   const hydrateReviews = useReviewsStore((s) => s.hydrate)
 
-  const [profile, setProfile] = useState<UserProfile | null>(null)
-  const [admin, setAdmin] = useState<AdminProfile | null>(null)
-  const [favorites, setFavoritesState] = useState<FavoriteItem[]>([])
-  const [heatmap, setHeatmap] = useState<HeatmapData | null>(null)
-  const [statsResp, setStatsResp] = useState<UserStatsResponse | null>(null)
+  // Lazy-init from the SWR localStorage cache so a hard refresh paints
+  // every section instantly with the data we had last time. The fresh
+  // API calls in the effect below still run and update state silently
+  // when they return — stale-while-revalidate.
+  const [profile, setProfile] = useState<UserProfile | null>(
+    () => (userId ? readCache<UserProfile>(`profile-${userId}`) : null),
+  )
+  const [admin, setAdmin] = useState<AdminProfile | null>(
+    () => (userId ? readCache<AdminProfile>(`admin-${userId}`) : null),
+  )
+  const [favorites, setFavoritesState] = useState<FavoriteItem[]>(
+    () => (userId ? readCache<FavoriteItem[]>(`favorites-${userId}`) ?? [] : []),
+  )
+  const [heatmap, setHeatmap] = useState<HeatmapData | null>(
+    () => (userId ? readCache<HeatmapData>(`heatmap-${userId}`) : null),
+  )
+  const [statsResp, setStatsResp] = useState<UserStatsResponse | null>(
+    () => (userId ? readCache<UserStatsResponse>(`stats-${userId}`) : null),
+  )
   const [regenerating, setRegenerating] = useState(false)
   const [loading, setLoading] = useState(false)
   const [tab, setTab] = useState<TabKey>('overview')
@@ -444,10 +459,14 @@ export default function Profile() {
         pending -= 1
         if (pending <= 0 && !cancelled) setLoading(false)
       }
+      // Each fetch is independent; success path also writes to the SWR
+      // cache so the next refresh paints instantly. Empty/null responses
+      // are NOT cached so we keep the last-known-good payload around.
       getUserProfile(userId)
         .then((p) => {
           if (cancelled) return
           setProfile(p)
+          if (p) writeCache(`profile-${userId}`, p)
           if (p?.total_ratings) setRatingCount(p.total_ratings)
         })
         .finally(done)
@@ -455,12 +474,32 @@ export default function Profile() {
         .then((a) => {
           if (cancelled) return
           setAdmin(a)
+          if (a) writeCache(`admin-${userId}`, a)
           if (a?.total_ratings) setRatingCount(a.total_ratings)
         })
         .finally(done)
-      getFavorites(userId).then((favs) => { if (!cancelled) setFavoritesState(favs) }).finally(done)
-      getHeatmap(currentYear).then((h) => { if (!cancelled) setHeatmap(h) }).finally(done)
-      getUserStats(userId).then((s) => { if (!cancelled) setStatsResp(s) }).finally(done)
+      getFavorites(userId)
+        .then((favs) => {
+          if (cancelled) return
+          setFavoritesState(favs)
+          // Always cache favorites — an empty array is meaningful state.
+          writeCache(`favorites-${userId}`, favs)
+        })
+        .finally(done)
+      getHeatmap(currentYear)
+        .then((h) => {
+          if (cancelled) return
+          setHeatmap(h)
+          if (h) writeCache(`heatmap-${userId}`, h)
+        })
+        .finally(done)
+      getUserStats(userId)
+        .then((s) => {
+          if (cancelled) return
+          setStatsResp(s)
+          if (s) writeCache(`stats-${userId}`, s)
+        })
+        .finally(done)
       // Reviews hydrate side-effects into a Zustand store; no setState needed here.
       hydrateReviews(userId)
     })
@@ -481,6 +520,7 @@ export default function Profile() {
       const fresh = await getUserStats(userId)
       if (cancelled || !fresh) return
       setStatsResp(fresh)
+      writeCache(`stats-${userId}`, fresh)
       if (!fresh.computing) {
         clearInterval(tick)
         setRegenerating(false)
@@ -775,7 +815,10 @@ export default function Profile() {
                           try {
                             await recomputeUserStats(userId)
                             const fresh = await getUserStats(userId)
-                            if (fresh) setStatsResp(fresh)
+                            if (fresh) {
+                              setStatsResp(fresh)
+                              writeCache(`stats-${userId}`, fresh)
+                            }
                           } catch {
                             setRegenerating(false)
                           }
@@ -1034,7 +1077,10 @@ export default function Profile() {
               userId={userId}
               initial={favorites}
               onClose={() => setEditingFavs(false)}
-              onSaved={(items) => setFavoritesState(items)}
+              onSaved={(items) => {
+                setFavoritesState(items)
+                writeCache(`favorites-${userId}`, items)
+              }}
             />
           )}
 
@@ -1046,7 +1092,11 @@ export default function Profile() {
               onSaved={(url) => {
                 // Patch the local profile so the avatar updates immediately
                 // without waiting for the next /users/{id} fetch.
-                setProfile((p) => (p ? { ...p, avatar_url: url } : p))
+                setProfile((p) => {
+                  const next = p ? { ...p, avatar_url: url } : p
+                  if (next) writeCache(`profile-${userId}`, next)
+                  return next
+                })
               }}
             />
           )}
