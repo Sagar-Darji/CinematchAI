@@ -55,6 +55,37 @@ class ImportStagingService:
         safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in user_id)
         return f"{safe}/{job_id}_extras.json"
 
+    @staticmethod
+    def raw_key_for(user_id: str, job_id: str, suffix: str) -> str:
+        """Key for the user's raw upload (ZIP or CSV) BEFORE any parsing
+        happens. The upload endpoint writes here in <1 second so it can
+        return 202 immediately; the letterboxd-prep worker reads from
+        this key, does the heavy ZIP/pandas work, and stages the
+        downstream merged CSV + extras JSON. `suffix` is '.zip' or '.csv'
+        (no leading dot needed)."""
+        safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in user_id)
+        s = suffix.lstrip(".")
+        return f"{safe}/{job_id}_raw.{s}"
+
+    def put_raw(self, user_id: str, job_id: str, body_bytes: bytes, suffix: str) -> str:
+        """Stage the unprocessed upload bytes. Used by the import endpoint
+        so the heavy parsing happens off the request thread."""
+        key = self.raw_key_for(user_id, job_id, suffix)
+        content_type = "application/zip" if suffix.lstrip(".").lower() == "zip" else "text/csv"
+        self._s3().put_object(
+            Bucket=BUCKET,
+            Key=key,
+            Body=body_bytes,
+            ContentType=content_type,
+            ServerSideEncryption="AES256",
+        )
+        logger.info(f"Staged raw import upload at s3://{BUCKET}/{key} ({len(body_bytes)} bytes)")
+        return key
+
+    def get_raw(self, s3_key: str) -> bytes:
+        obj = self._s3().get_object(Bucket=BUCKET, Key=s3_key)
+        return obj["Body"].read()
+
     def put_extras(self, user_id: str, job_id: str, extras_payload: dict) -> str:
         """Persist the non-ratings ZIP sections (reviews, watchlist, likes,
         watched) so the chunk worker can ingest them after the ratings

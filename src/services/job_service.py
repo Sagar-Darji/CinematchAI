@@ -4,7 +4,7 @@ import json
 import uuid
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from src.core.db import get_db, register_pk
 from src.utils.logging import get_logger
@@ -62,6 +62,11 @@ class JobService:
                 # watched extracted from the Letterboxd ZIP. NULL when the
                 # upload was a bare ratings.csv (legacy path).
                 ("extras_s3_key",    "TEXT"),
+                # raw_s3_key holds the user's raw upload (ZIP or CSV) BEFORE
+                # parsing. Set by the import endpoint, consumed once by the
+                # letterboxd-prep worker. Lets the endpoint return 202 in
+                # <2s no matter how heavy the parse path is.
+                ("raw_s3_key",       "TEXT"),
             ]:
                 try:
                     conn.execute(f"ALTER TABLE jobs ADD COLUMN {col} {definition}")
@@ -78,21 +83,53 @@ class JobService:
         s3_key: Optional[str] = None,
         chunk_size: Optional[int] = None,
         extras_s3_key: Optional[str] = None,
+        raw_s3_key: Optional[str] = None,
     ) -> str:
         job_id = str(uuid.uuid4())
         now = datetime.utcnow().isoformat()
         with get_db().connect() as conn:
             conn.execute(
                 "INSERT INTO jobs (job_id, job_type, user_id, status, created_at, total, "
-                "s3_key, chunk_size, next_chunk_index, extras_s3_key) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "s3_key, chunk_size, next_chunk_index, extras_s3_key, raw_s3_key) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     job_id, job_type.value, user_id, JobStatus.PENDING.value, now, total,
-                    s3_key, chunk_size or 50, 0, extras_s3_key,
+                    s3_key, chunk_size or 50, 0, extras_s3_key, raw_s3_key,
                 ),
             )
         logger.info(f"Created job {job_id}: type={job_type}, user={user_id}")
         return job_id
+
+    def update_job_fields(
+        self,
+        job_id: str,
+        *,
+        s3_key: Optional[str] = None,
+        extras_s3_key: Optional[str] = None,
+        total: Optional[int] = None,
+    ) -> None:
+        """Patch a subset of job fields. Used by the letterboxd-prep worker
+        once preprocessing has produced the merged CSV + extras + row
+        count; the chunk worker then reads these to start processing."""
+        sets: List[str] = []
+        params: List[Any] = []
+        if s3_key is not None:
+            sets.append("s3_key = ?")
+            params.append(s3_key)
+        if extras_s3_key is not None:
+            sets.append("extras_s3_key = ?")
+            params.append(extras_s3_key)
+        if total is not None:
+            sets.append("total = ?")
+            params.append(total)
+        if not sets:
+            return
+        params.append(job_id)
+        with get_db().connect() as conn:
+            conn.execute(
+                f"UPDATE jobs SET {', '.join(sets)} WHERE job_id = ?",
+                tuple(params),
+            )
 
     def advance_chunk(self, job_id: str, new_index: int, progress: int) -> None:
         """Atomically advance the chunk counter and progress in one UPDATE
@@ -139,7 +176,7 @@ class JobService:
             row = conn.execute(
                 "SELECT job_id, job_type, user_id, status, created_at, started_at, completed_at, "
                 "progress, total, result_json, error_message, "
-                "s3_key, chunk_size, next_chunk_index, extras_s3_key "
+                "s3_key, chunk_size, next_chunk_index, extras_s3_key, raw_s3_key "
                 "FROM jobs WHERE job_id = ?",
                 (job_id,),
             ).fetchone()
@@ -152,7 +189,7 @@ class JobService:
             "result": json.loads(row[9]) if row[9] else None,
             "error_message": row[10],
             "s3_key": row[11], "chunk_size": row[12], "next_chunk_index": row[13],
-            "extras_s3_key": row[14],
+            "extras_s3_key": row[14], "raw_s3_key": row[15],
         }
 
     def get_user_jobs(self, user_id: str, job_type: Optional[JobType] = None, limit: int = 10) -> list:

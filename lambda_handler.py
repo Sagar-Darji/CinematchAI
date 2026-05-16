@@ -26,6 +26,8 @@ def handler(event, context):
         return _run_background_recommendation(event)
     if src == "stats-worker":
         return _run_background_stats(event)
+    if src == "letterboxd-prep":
+        return _run_letterboxd_prep(event)
     if src == "letterboxd-chunk":
         return _run_letterboxd_chunk(event)
     if src == "letterboxd-worker":
@@ -65,6 +67,23 @@ def _run_background_letterboxd(event: dict) -> dict:
     user_id = event["user_id"]
     csv_content = event["csv_content"]
     _import_letterboxd_background(job_id, user_id, csv_content)
+    return {"status": "ok", "job_id": job_id}
+
+
+def _run_letterboxd_prep(event: dict) -> dict:
+    """Preprocess a Letterboxd import: download the raw ZIP/CSV from S3,
+    run the heavy ZIP extraction + diary overlay + extras parsing, stage
+    the merged ratings CSV + extras JSON, and finally update the job row
+    with the total + s3 keys before dispatching the first chunk worker.
+
+    This worker exists so the upload endpoint can return 202 in <2 seconds
+    — the previous design did all of the above inside the request handler,
+    which paid the Postgres-cold-start + pandas-parse cost on the request
+    thread (165s in the worst case)."""
+    from src.api.routes.users import process_letterboxd_prep
+
+    job_id = event["job_id"]
+    process_letterboxd_prep(job_id)
     return {"status": "ok", "job_id": job_id}
 
 

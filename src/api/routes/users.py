@@ -592,17 +592,15 @@ async def import_letterboxd(
 ):
     """Import a Letterboxd library (full ZIP or bare ratings.csv).
 
-    For ZIP uploads we extract ratings.csv (required), then overlay
-    diary.csv's `Watched Date` onto each rating's timestamp so the
-    Profile's heatmap + 'films this year' reflect the actual watch
-    dates. We also stage reviews.csv, watchlist.csv, watched.csv and
-    likes/films.csv for the chunk worker to ingest after the ratings
-    phase.
+    Lightweight endpoint: detects ZIP-vs-CSV by magic bytes, stages the
+    raw upload to S3, creates the job row, and dispatches the
+    letterboxd-prep worker. Returns 202 in <2s regardless of upload
+    size or library shape -- the heavy ZIP extraction + pandas parsing
+    runs in the prep worker so a cold Postgres connection on first
+    request after deploy can't make the browser time out.
 
-    For bare CSV uploads (back-compat) we treat the upload as ratings.csv
-    only — the legacy single-file path.
-
-    Returns 202 with a job_id. Poll GET /users/jobs/{job_id} for progress.
+    The prep worker then dispatches the first chunk worker, which does
+    the ratings import phase.
     """
     logger.info(
         f"POST /users/import/letterboxd: user_id={current_user} filename={file.filename!r} "
@@ -610,8 +608,6 @@ async def import_letterboxd(
     )
 
     try:
-        import pandas as pd
-        from io import StringIO
         from datetime import datetime as _dt
 
         raw = await file.read()
@@ -622,49 +618,24 @@ async def import_letterboxd(
         # Detect ZIP by magic bytes — content_type alone is unreliable from
         # browsers / curl. PK\x03\x04 is the ZIP local-file-header signature.
         is_zip = raw[:4] == b"PK\x03\x04" or filename.endswith(".zip")
+        suffix = "zip" if is_zip else "csv"
 
-        extras_payload: Optional[dict] = None
-        if is_zip:
-            from src.services.letterboxd_service import get_letterboxd_service
-            extracted = get_letterboxd_service().extract_zip_export(raw)
-            csv_text = extracted.get("merged_ratings_csv")
-            if not csv_text:
+        # Reject obvious garbage uploads BEFORE staging. A bare CSV needs
+        # the header row to declare a "Rating" column. A ZIP needs the
+        # zipfile magic. Anything else is a 400.
+        if not is_zip:
+            head = raw[:512]
+            if b"Rating" not in head:
                 raise ValueError(
-                    "ZIP did not contain ratings.csv. Make sure you uploaded the "
-                    "Letterboxd export ZIP unmodified."
+                    "Uploaded file isn't a recognized Letterboxd export. "
+                    "Provide the ZIP from Settings → Export, or ratings.csv "
+                    "from inside that ZIP."
                 )
-            extras_payload = {
-                "reviews":   extracted.get("reviews", []),
-                "watchlist": extracted.get("watchlist", []),
-                "watched":   extracted.get("watched", []),
-                "likes":     extracted.get("likes", []),
-                "diary_count": extracted.get("diary_count", 0),
-            }
-            logger.info(
-                f"ZIP extracted: {extracted.get('ratings_count', 0)} ratings, "
-                f"{extracted.get('diary_count', 0)} diary overlays, "
-                f"{len(extras_payload['reviews'])} reviews, "
-                f"{len(extras_payload['watchlist'])} watchlist, "
-                f"{len(extras_payload['likes'])} likes"
-            )
-        else:
-            # Bare CSV upload. Decode best-effort; reject if not UTF-8-ish.
-            try:
-                csv_text = raw.decode("utf-8")
-            except UnicodeDecodeError:
-                csv_text = raw.decode("latin-1", errors="replace")
-
-        # Parse CSV to get total count
-        df = pd.read_csv(StringIO(csv_text))
-        rated_df = df[df["Rating"].notna()]
-        total_movies = len(rated_df)
-        if total_movies == 0:
-            raise ValueError("CSV has no rated rows. Make sure you uploaded ratings.csv or the full Letterboxd ZIP.")
 
         # Single-flight guard: if a Letterboxd import for this user is
         # already in flight (or recently stuck), return its job_id and
-        # re-dispatch a chunk worker so it resumes from where it stopped.
-        # No new job, no duplicate workers, no TMDB rate-limit fights.
+        # re-poke. The poke targets the right worker based on which
+        # phase the job is in (prep vs chunk).
         job_service = get_job_service()
         recent = job_service.get_user_jobs(
             current_user, job_type=JobType.LETTERBOXD_IMPORT, limit=5
@@ -678,85 +649,79 @@ async def import_letterboxd(
                     except Exception:
                         age = 0
                     if age < 600:
+                        full_job = job_service.get_job_status(j["job_id"]) or j
+                        # If prep never finished (no s3_key yet), re-poke
+                        # the prep worker; otherwise resume chunks.
+                        try:
+                            if not full_job.get("s3_key") and full_job.get("raw_s3_key"):
+                                _dispatch_letterboxd_prep_worker(j["job_id"])
+                            else:
+                                _dispatch_letterboxd_chunk_worker(j["job_id"])
+                        except Exception as e:
+                            logger.warning(f"Resume self-invoke failed ({e}); will rely on existing worker")
                         logger.info(
                             f"Letterboxd import already running for user {current_user} "
                             f"(job {j['job_id']}, age {int(age)}s) — resuming existing job"
                         )
-                        # Re-poke the worker so a stuck job picks up again
-                        # from next_chunk_index. Lambda Event invokes are
-                        # cheap (~30 ms); the chunk worker is idempotent and
-                        # will exit immediately if the job is already done.
-                        try:
-                            _dispatch_letterboxd_chunk_worker(j["job_id"])
-                        except Exception as e:
-                            logger.warning(f"Resume self-invoke failed ({e}); will rely on existing worker")
                         return {
                             "job_id": j["job_id"],
                             "user_id": current_user,
-                            "total_movies": j.get("total", total_movies),
-                            "status": j.get("status", "running"),
+                            "total_movies": full_job.get("total") or 0,
+                            "status": full_job.get("status", "running"),
                             "message": f"Resumed in-progress import. Poll GET /api/v1/users/jobs/{j['job_id']}.",
                             "poll_url": f"/api/v1/users/jobs/{j['job_id']}",
                         }
 
-        # Stage the CSV in S3 so each chunk worker can stream just its slice
-        # — keeps Lambda Event payloads tiny (under 1 KB) and lets workers
-        # process any library size without blowing the 256 KB event limit.
-        chunk_size = 50
+        # Stage the raw upload to S3 and create a PENDING job. The prep
+        # worker downloads from raw_s3_key, runs the heavy ZIP+pandas
+        # parse, fills in s3_key + extras_s3_key + total, and dispatches
+        # the first chunk worker.
         from src.services.import_staging_service import get_import_staging_service
         import uuid as _uuid
-        # Pre-generate the job_id so the S3 key can use it. JobService will
-        # accept it via create_job's return value.
         pre_job_id = str(_uuid.uuid4())
         try:
             staging = get_import_staging_service()
-            s3_key = staging.put_csv(current_user, pre_job_id, csv_text)
-            extras_s3_key: Optional[str] = None
-            if extras_payload is not None:
-                # Only stage extras when there's actually something to ingest
-                # — empty sections waste an S3 round-trip on the worker side.
-                if any(extras_payload.get(k) for k in ("reviews", "watchlist", "watched", "likes")):
-                    extras_s3_key = staging.put_extras(current_user, pre_job_id, extras_payload)
+            raw_s3_key = staging.put_raw(current_user, pre_job_id, raw, suffix)
         except Exception as e:
             logger.error(f"S3 staging upload failed: {e}")
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Could not stage your CSV for processing. Please try again in a moment.",
+                detail="Could not stage your upload. Please try again in a moment.",
             )
 
         job_id = job_service.create_job(
             job_type=JobType.LETTERBOXD_IMPORT,
             user_id=current_user,
-            total=total_movies,
-            s3_key=s3_key,
-            chunk_size=chunk_size,
-            extras_s3_key=extras_s3_key,
+            # total is unknown until prep finishes; placeholder so the
+            # progress bar shows "preparing" rather than 0% of 100.
+            total=0,
+            chunk_size=50,
+            raw_s3_key=raw_s3_key,
         )
 
         try:
-            _dispatch_letterboxd_chunk_worker(job_id)
+            _dispatch_letterboxd_prep_worker(job_id)
         except Exception as e:
-            # Local dev or missing IAM: run the chunks in a daemon thread
-            # instead of spinning a Lambda. Same code path, just in-process.
-            logger.warning(f"Lambda self-invoke unavailable ({e}); running chunks in a thread")
+            # Local dev fallback: run prep + chunks in a daemon thread.
+            logger.warning(f"Lambda self-invoke unavailable ({e}); running prep in a thread")
             import threading
             threading.Thread(
-                target=_run_chunk_loop_in_thread,
+                target=_run_prep_then_chunk_in_thread,
                 args=(job_id,),
                 daemon=True,
             ).start()
 
         logger.info(
             f"Created Letterboxd import job {job_id} for user {current_user} "
-            f"({total_movies} movies, chunk_size={chunk_size}, s3_key={s3_key})"
+            f"(raw_s3_key={raw_s3_key}, preprocessing dispatched)"
         )
 
         return {
             "job_id": job_id,
             "user_id": current_user,
-            "total_movies": total_movies,
-            "status": "pending",
-            "message": f"Import started. Poll GET /api/v1/users/jobs/{job_id} for status.",
+            "total_movies": 0,
+            "status": "preprocessing",
+            "message": f"Import queued. Poll GET /api/v1/users/jobs/{job_id} for status.",
             "poll_url": f"/api/v1/users/jobs/{job_id}",
         }
 
@@ -774,6 +739,174 @@ async def import_letterboxd(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to start import",
         )
+
+
+def _dispatch_letterboxd_prep_worker(job_id: str) -> None:
+    """Fire a Lambda Event invocation that runs the letterboxd-prep stage
+    (download raw upload, extract ZIP, stage merged CSV + extras, fill in
+    job total + s3_key, then dispatch the first chunk worker).
+
+    Mirrors _dispatch_letterboxd_chunk_worker — same env-gated self-invoke
+    pattern, same fallback contract (caller catches and runs in-thread on
+    local dev)."""
+    import json as _json
+    import os
+
+    if not os.environ.get("LAMBDA_DEPLOYMENT"):
+        raise RuntimeError("Not running on Lambda — skipping self-invoke")
+
+    import boto3
+    lambda_name = os.environ.get("AWS_LAMBDA_FUNCTION_NAME") or os.environ.get(
+        "LAMBDA_FUNCTION_NAME", "cinematch-api"
+    )
+    client = boto3.client("lambda", region_name=os.environ.get("AWS_DEFAULT_REGION", "us-east-1"))
+    payload = {"source": "letterboxd-prep", "job_id": job_id}
+    client.invoke(
+        FunctionName=lambda_name,
+        InvocationType="Event",
+        Payload=_json.dumps(payload).encode(),
+    )
+    logger.info(f"Dispatched letterboxd-prep for job {job_id}")
+
+
+def process_letterboxd_prep(job_id: str) -> None:
+    """Run the letterboxd-prep phase: download the raw upload, extract
+    ZIP (or treat as bare CSV), stage the merged ratings CSV + extras
+    JSON, fill in the job's s3_key + extras_s3_key + total, and dispatch
+    the first chunk worker.
+
+    Idempotent: if the job's s3_key is already set, we treat prep as
+    done and just dispatch the chunk worker. Safe to invoke twice — the
+    second invocation skips the heavy parse and just re-pokes chunks."""
+    from src.services.import_staging_service import get_import_staging_service
+    from src.services.letterboxd_service import get_letterboxd_service
+    import pandas as pd
+    from io import StringIO
+
+    job_service = get_job_service()
+    job = job_service.get_job_status(job_id)
+    if not job:
+        logger.warning(f"prep worker: job {job_id} not found, exiting")
+        return
+    if job["status"] in ("completed", "failed", "cancelled"):
+        logger.info(f"prep worker: job {job_id} already {job['status']}, no-op")
+        return
+
+    if job.get("s3_key"):
+        logger.info(f"prep worker: job {job_id} already prepared (s3_key set), dispatching chunk worker")
+        try:
+            _dispatch_letterboxd_chunk_worker(job_id)
+        except Exception as e:
+            logger.warning(f"prep worker: chunk dispatch failed: {e}")
+        return
+
+    user_id = job["user_id"]
+    raw_s3_key = job.get("raw_s3_key")
+    if not raw_s3_key:
+        logger.error(f"prep worker: job {job_id} has no raw_s3_key, marking failed")
+        job_service.update_job_status(job_id, JobStatus.FAILED, error_message="Missing raw upload")
+        return
+
+    staging = get_import_staging_service()
+    try:
+        raw = staging.get_raw(raw_s3_key)
+    except Exception as e:
+        logger.exception(f"prep worker: could not fetch raw upload from S3: {e}")
+        job_service.update_job_status(job_id, JobStatus.FAILED, error_message="Could not read staged upload")
+        return
+
+    is_zip = raw[:4] == b"PK\x03\x04" or raw_s3_key.endswith(".zip")
+    extras_payload: Optional[dict] = None
+
+    try:
+        if is_zip:
+            extracted = get_letterboxd_service().extract_zip_export(raw)
+            csv_text = extracted.get("merged_ratings_csv")
+            if not csv_text:
+                raise ValueError(
+                    "ZIP did not contain ratings.csv. Make sure you uploaded "
+                    "the Letterboxd export ZIP unmodified."
+                )
+            extras_payload = {
+                "reviews":     extracted.get("reviews", []),
+                "watchlist":   extracted.get("watchlist", []),
+                "watched":     extracted.get("watched", []),
+                "likes":       extracted.get("likes", []),
+                "diary_count": extracted.get("diary_count", 0),
+            }
+            logger.info(
+                f"prep worker: ZIP extracted for job {job_id}: "
+                f"{extracted.get('ratings_count', 0)} ratings, "
+                f"{extracted.get('diary_count', 0)} diary overlays, "
+                f"{len(extras_payload['reviews'])} reviews, "
+                f"{len(extras_payload['watchlist'])} watchlist, "
+                f"{len(extras_payload['likes'])} likes"
+            )
+        else:
+            try:
+                csv_text = raw.decode("utf-8")
+            except UnicodeDecodeError:
+                csv_text = raw.decode("latin-1", errors="replace")
+
+        df = pd.read_csv(StringIO(csv_text))
+        if "Rating" not in df.columns:
+            raise ValueError("CSV is missing the Rating column.")
+        rated_df = df[df["Rating"].notna()]
+        total_movies = int(len(rated_df))
+        if total_movies == 0:
+            raise ValueError("CSV has no rated rows.")
+
+        s3_key = staging.put_csv(user_id, job_id, csv_text)
+        extras_s3_key: Optional[str] = None
+        if extras_payload is not None and any(
+            extras_payload.get(k) for k in ("reviews", "watchlist", "watched", "likes")
+        ):
+            extras_s3_key = staging.put_extras(user_id, job_id, extras_payload)
+
+        job_service.update_job_fields(
+            job_id,
+            s3_key=s3_key,
+            extras_s3_key=extras_s3_key,
+            total=total_movies,
+        )
+        logger.info(
+            f"prep worker: job {job_id} prepared "
+            f"(total={total_movies}, s3_key={s3_key}, extras_s3_key={extras_s3_key})"
+        )
+
+    except ValueError as ve:
+        logger.warning(f"prep worker: invalid upload for job {job_id}: {ve}")
+        job_service.update_job_status(job_id, JobStatus.FAILED, error_message=str(ve))
+        # Best-effort cleanup of the raw upload so the bucket doesn't
+        # accumulate failed-prep garbage beyond the 7-day lifecycle.
+        try: staging.delete(raw_s3_key)
+        except Exception: pass
+        return
+    except Exception as e:
+        logger.exception(f"prep worker: unexpected failure for job {job_id}: {e}")
+        job_service.update_job_status(job_id, JobStatus.FAILED, error_message="Preprocessing failed")
+        return
+
+    # Raw upload is no longer needed — chunks read from the merged CSV.
+    try: staging.delete(raw_s3_key)
+    except Exception as e: logger.debug(f"prep worker: raw cleanup failed: {e}")
+
+    # Kick off the ratings phase.
+    try:
+        _dispatch_letterboxd_chunk_worker(job_id)
+    except Exception as e:
+        logger.warning(f"prep worker: chunk dispatch failed: {e}")
+
+
+def _run_prep_then_chunk_in_thread(job_id: str) -> None:
+    """Local-dev fallback: run the prep stage inline, then loop through
+    chunks. Same code path as Lambda, just in-process."""
+    try:
+        process_letterboxd_prep(job_id)
+    except Exception as e:
+        logger.warning(f"local prep: {e}")
+        return
+    _run_chunk_loop_in_thread(job_id)
 
 
 def _dispatch_letterboxd_chunk_worker(job_id: str) -> None:

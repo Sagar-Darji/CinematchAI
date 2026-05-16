@@ -517,19 +517,26 @@ class LetterboxdService:
             response = requests.get(url, params=params, timeout=10)
 
             tmdb_id: Optional[int] = None
-            if response.status_code == 200:
+            ok = response.status_code == 200
+            if ok:
                 data = response.json()
                 results = data.get("results", [])
                 if results:
                     tmdb_id = int(results[0]["id"])
 
-            # Persist outcome (hit OR miss) so repeat imports skip TMDB.
-            # Misses cache as 0; hits cache the int id. 30 days is far
-            # longer than any reasonable user re-import cadence.
-            try:
-                _tmdb_cache.set(cache_key, tmdb_id or 0, expire=30 * 24 * 3600)
-            except Exception:
-                pass
+            # Persist outcome ONLY when the lookup actually returned a 200.
+            # Caching a miss from a 429/5xx would poison the cache for 30
+            # days — that's how a previous import burned through TMDB rate
+            # limits and silently dropped 226 watchlist entries.
+            if ok:
+                try:
+                    _tmdb_cache.set(cache_key, tmdb_id or 0, expire=30 * 24 * 3600)
+                except Exception:
+                    pass
+            elif response.status_code in (429, 500, 502, 503, 504):
+                logger.warning(
+                    f"TMDB search transient {response.status_code} for {title!r} — not caching"
+                )
             return tmdb_id
 
         except Exception as e:
