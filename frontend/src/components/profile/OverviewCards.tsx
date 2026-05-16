@@ -328,7 +328,7 @@ function LangChip({
       className="text-xs font-semibold rounded-full px-3 py-1 transition-colors"
       style={{
         background: active ? 'var(--accent-gold)' : 'var(--bg-overlay)',
-        color:      active ? 'var(--bg-page)'    : 'var(--text-muted)',
+        color:      active ? 'var(--bg-primary)' : 'var(--text-muted)',
         border:     '1px solid var(--border)',
         cursor:     'pointer',
       }}
@@ -397,28 +397,50 @@ function PeoplePanel({
 // ── Histogram ────────────────────────────────────────────────────────
 
 function HistogramCard({ histogram }: { histogram: ProfileOverview['histogram'] }) {
-  const max = Math.max(1, ...histogram.map((b) => b.count))
+  // Horizontal rows keep the star value and the count visible at every
+  // tier — the prior vertical-bar version compressed everything into a
+  // 100px-tall strip where small buckets looked identical to empty ones.
+  const sorted = [...histogram].sort((a, b) => b.rating - a.rating)
+  const total = sorted.reduce((s, b) => s + b.count, 0) || 1
+  const max   = Math.max(1, ...sorted.map((b) => b.count))
   return (
     <CardShell title="Rating distribution" icon={<Star size={14} style={{ color: 'var(--accent-gold)' }} />}>
-      <div className="flex items-end gap-1" style={{ height: 100 }}>
-        {histogram.map((b) => {
-          const pct = Math.round((b.count / max) * 100)
+      <ul className="space-y-1.5">
+        {sorted.map((b) => {
+          const barPct = Math.round((b.count / max) * 100)
+          const sharePct = Math.round((b.count / total) * 100)
           return (
-            <div key={b.rating} className="flex-1 flex flex-col items-center justify-end" title={`${b.rating}★ — ${b.count}`}>
+            <li key={b.rating} className="flex items-center gap-3" title={`${b.rating}★ — ${b.count} (${sharePct}%)`}>
+              <span
+                className="text-xs tabular-nums w-10 text-right flex-shrink-0"
+                style={{ color: 'var(--text-muted)' }}
+              >
+                {b.rating}★
+              </span>
               <div
-                style={{
-                  width: '100%',
-                  height: `${Math.max(4, pct)}%`,
-                  background: 'var(--accent-gold)',
-                  opacity: pct === 0 ? 0.18 : 1,
-                  borderRadius: '3px 3px 0 0',
-                }}
-              />
-              <span className="text-[9px] mt-1" style={{ color: 'var(--text-muted)' }}>{b.rating}</span>
-            </div>
+                className="flex-1"
+                style={{ height: 8, background: 'var(--bg-overlay)', borderRadius: 4, overflow: 'hidden' }}
+              >
+                <div
+                  style={{
+                    width:   `${Math.max(b.count > 0 ? 4 : 0, barPct)}%`,
+                    height:  '100%',
+                    background: 'var(--accent-gold)',
+                    opacity: b.count === 0 ? 0 : 1,
+                    borderRadius: 4,
+                  }}
+                />
+              </div>
+              <span
+                className="text-xs tabular-nums w-14 text-right flex-shrink-0"
+                style={{ color: b.count > 0 ? 'var(--accent-gold)' : 'var(--text-muted)' }}
+              >
+                {b.count} · {sharePct}%
+              </span>
+            </li>
           )
         })}
-      </div>
+      </ul>
     </CardShell>
   )
 }

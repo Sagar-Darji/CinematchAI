@@ -41,7 +41,11 @@ export function PersonalityModal({ personality, onClose }: Props) {
       aria-modal="true"
       aria-label="Your taste essay"
       className="fixed inset-0 z-50 flex items-center justify-center p-0 sm:p-4 md:p-8"
-      style={{ background: 'rgba(0,0,0,0.78)' }}
+      style={{
+        background: 'rgba(0,0,0,0.75)',
+        backdropFilter: 'blur(4px)',
+        WebkitBackdropFilter: 'blur(4px)',
+      }}
       onClick={onClose}
     >
       <style>{`
@@ -51,8 +55,12 @@ export function PersonalityModal({ personality, onClose }: Props) {
       <div
         className="relative w-full sm:max-w-2xl md:max-w-3xl rounded-none sm:rounded-2xl flex flex-col modal-shell"
         style={{
-          background: 'var(--bg-page)',
+          // Solid dark surface — the previous --bg-page var isn't
+          // defined in index.css, which made the panel render fully
+          // transparent over the dimmed page beneath.
+          background: 'var(--bg-card)',
           border: '1px solid var(--border)',
+          boxShadow: '0 20px 60px rgba(0,0,0,0.55)',
         }}
         onClick={(e) => e.stopPropagation()}
       >

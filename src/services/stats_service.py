@@ -1162,16 +1162,29 @@ class StatsService:
         sanity checks rather than failing the whole compute."""
         if not isinstance(parsed, dict):
             return None
-        teaser = str(parsed.get("teaser") or "").strip()
+        # Same coercion as longitudinal_arc — see _coerce_paragraph
+        # below. Applied to every free-text field so any LLM that wraps
+        # output in {"text": "..."} objects still renders cleanly.
+        def _coerce_text(p: Any) -> str:
+            if isinstance(p, str):
+                return p.strip()
+            if isinstance(p, dict):
+                for key in ("text", "paragraph", "content", "body", "value"):
+                    v = p.get(key)
+                    if isinstance(v, str) and v.strip():
+                        return v.strip()
+            return ""
+
+        teaser = _coerce_text(parsed.get("teaser"))
         bullets_raw = parsed.get("bullets") or []
-        bullets = [str(b).strip() for b in bullets_raw if str(b or "").strip()][:5]
+        bullets = [t for t in (_coerce_text(b) for b in bullets_raw) if t][:5]
         longform_in = parsed.get("longform") or {}
         if not isinstance(longform_in, dict):
             longform_in = {}
         arc_raw = longform_in.get("longitudinal_arc") or []
-        arc = [str(a).strip() for a in arc_raw if str(a or "").strip()][:3]
-        dense_paragraph = str(longform_in.get("dense_paragraph") or "").strip()
-        letter = str(longform_in.get("letter") or "").strip()
+        arc = [t for t in (_coerce_text(a) for a in arc_raw) if t][:3]
+        dense_paragraph = _coerce_text(longform_in.get("dense_paragraph"))
+        letter = _coerce_text(longform_in.get("letter"))
         quarterly_raw = longform_in.get("quarterly_entries") or []
         quarterly: List[Dict[str, Any]] = []
         if isinstance(quarterly_raw, list):
@@ -1179,7 +1192,7 @@ class StatsService:
                 if not isinstance(entry, dict):
                     continue
                 q = str(entry.get("quarter") or "").strip()
-                t = str(entry.get("text") or "").strip()
+                t = _coerce_text(entry.get("text"))
                 if q and t:
                     quarterly.append({"quarter": q, "text": t})
 
