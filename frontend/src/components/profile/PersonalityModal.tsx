@@ -21,6 +21,33 @@ interface Props {
   onClose: () => void
 }
 
+/**
+ * Older personality blobs (computed before today's normalizer fix) can
+ * arrive shaped like "{'text': 'paragraph body'}" — a Python dict repr
+ * that leaked through when the LLM wrapped each entry instead of
+ * returning bare strings. Strip that wrapper at render time so users
+ * see clean prose without waiting for a recompute.
+ */
+function unwrapText(s: string): string {
+  if (!s) return s
+  const t = s.trim()
+  // Python repr: {'text': '...'} / {'paragraph': '...'} / {'content': '...'}
+  const m = t.match(/^\{\s*['"](?:text|paragraph|content|body|value)['"]\s*:\s*['"]([\s\S]*)['"]\s*\}$/)
+  if (m) return m[1].replace(/\\'/g, "'").replace(/\\"/g, '"').trim()
+  // JSON repr — same shape but with proper JSON quoting.
+  if (t.startsWith('{') && t.endsWith('}')) {
+    try {
+      const parsed = JSON.parse(t)
+      if (parsed && typeof parsed === 'object') {
+        for (const k of ['text', 'paragraph', 'content', 'body', 'value']) {
+          if (typeof parsed[k] === 'string' && parsed[k].trim()) return parsed[k].trim()
+        }
+      }
+    } catch { /* fall through */ }
+  }
+  return s
+}
+
 export function PersonalityModal({ personality, onClose }: Props) {
   // Escape-to-close + lock body scroll while open.
   useEffect(() => {
@@ -42,9 +69,9 @@ export function PersonalityModal({ personality, onClose }: Props) {
       aria-label="Your taste essay"
       className="fixed inset-0 z-50 flex items-center justify-center p-0 sm:p-4 md:p-8"
       style={{
-        background: 'rgba(0,0,0,0.75)',
-        backdropFilter: 'blur(4px)',
-        WebkitBackdropFilter: 'blur(4px)',
+        background: 'rgba(0,0,0,0.80)',
+        backdropFilter: 'blur(6px)',
+        WebkitBackdropFilter: 'blur(6px)',
       }}
       onClick={onClose}
     >
@@ -55,10 +82,11 @@ export function PersonalityModal({ personality, onClose }: Props) {
       <div
         className="relative w-full sm:max-w-2xl md:max-w-3xl rounded-none sm:rounded-2xl flex flex-col modal-shell"
         style={{
-          // Solid dark surface — the previous --bg-page var isn't
-          // defined in index.css, which made the panel render fully
-          // transparent over the dimmed page beneath.
-          background: 'var(--bg-card)',
+          // Mostly opaque dark surface with a hint of translucency so
+          // the page behind shows as a soft blur through the modal
+          // glass — substantial enough to read against, transparent
+          // enough to feel like a layer.
+          background: 'rgba(18, 18, 26, 0.92)',
           border: '1px solid var(--border)',
           boxShadow: '0 20px 60px rgba(0,0,0,0.55)',
         }}
@@ -88,24 +116,28 @@ export function PersonalityModal({ personality, onClose }: Props) {
         <div className="overflow-y-auto px-5 sm:px-8 md:px-10 py-8 space-y-10">
           {personality.teaser && (
             <section>
-              <p className="text-base sm:text-lg leading-relaxed text-white">{personality.teaser}</p>
+              <p className="text-base sm:text-lg leading-relaxed text-white">
+                {unwrapText(personality.teaser)}
+              </p>
             </section>
           )}
           {lf.longitudinal_arc.length > 0 && (
             <Section title="Where you've been">
               {lf.longitudinal_arc.map((para, i) => (
-                <p key={i} className="text-[15px] leading-relaxed">{para}</p>
+                <p key={i} className="text-[15px] leading-relaxed">{unwrapText(para)}</p>
               ))}
             </Section>
           )}
           {lf.dense_paragraph && (
             <Section title="The synthesis">
-              <p className="text-[15px] leading-relaxed">{lf.dense_paragraph}</p>
+              <p className="text-[15px] leading-relaxed">{unwrapText(lf.dense_paragraph)}</p>
             </Section>
           )}
           {lf.letter && (
             <Section title="A letter">
-              <p className="text-[15px] leading-relaxed whitespace-pre-line">{lf.letter}</p>
+              <p className="text-[15px] leading-relaxed whitespace-pre-line">
+                {unwrapText(lf.letter)}
+              </p>
             </Section>
           )}
           {lf.quarterly_entries.length > 0 && (
@@ -116,7 +148,7 @@ export function PersonalityModal({ personality, onClose }: Props) {
                     <div className="text-xs uppercase tracking-widest mb-1" style={{ color: 'var(--accent-gold)' }}>
                       {q.quarter}
                     </div>
-                    <p className="text-[15px] leading-relaxed">{q.text}</p>
+                    <p className="text-[15px] leading-relaxed">{unwrapText(q.text)}</p>
                   </li>
                 ))}
               </ul>
