@@ -2,7 +2,6 @@ import { Outlet } from 'react-router-dom'
 import { Sidebar } from './Sidebar'
 import { TopBar } from './TopBar'
 import { BottomTabBar } from './BottomTabBar'
-import { UserTour } from '@/components/tour/UserTour'
 
 export function Layout() {
   return (
@@ -16,7 +15,6 @@ export function Layout() {
         <Outlet />
       </main>
       <BottomTabBar />
-      <UserTour />
     </div>
   )
 }
