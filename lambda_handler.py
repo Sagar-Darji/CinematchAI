@@ -1,6 +1,6 @@
 """AWS Lambda entry point — wraps FastAPI with Mangum ASGI adapter."""
 
-import json
+from typing import Optional
 
 from mangum import Mangum
 
@@ -29,7 +29,14 @@ def handler(event, context):
     if src == "letterboxd-prep":
         return _run_letterboxd_prep(event)
     if src == "letterboxd-chunk":
-        return _run_letterboxd_chunk(event)
+        # Hand the Lambda budget through to the chunk worker so its
+        # in-container loop knows when to hand off to a fresh
+        # invocation instead of risking a hard timeout.
+        try:
+            remaining_ms = context.get_remaining_time_in_millis()
+        except Exception:
+            remaining_ms = None
+        return _run_letterboxd_chunk(event, deadline_ms=remaining_ms)
     if src == "letterboxd-worker":
         return _run_background_letterboxd(event)
     return _mangum_handler(event, context)
@@ -87,14 +94,17 @@ def _run_letterboxd_prep(event: dict) -> dict:
     return {"status": "ok", "job_id": job_id}
 
 
-def _run_letterboxd_chunk(event: dict) -> dict:
-    """Process ONE chunk of a Letterboxd import. The worker reads the CSV
-    from S3, processes its assigned slice, atomically advances the chunk
-    pointer, and self-dispatches the next chunk. Each invocation finishes
-    in 5-30 seconds (vs the monolithic worker's 5+ minutes that kept
-    blowing past Lambda's 300s timeout)."""
+def _run_letterboxd_chunk(event: dict, deadline_ms: Optional[int] = None) -> dict:
+    """Process Letterboxd-import chunks in a SINGLE Lambda invocation,
+    looping until done or the Lambda budget is about to run out. Receives
+    the context's remaining-time so it can self-dispatch a continuation
+    invocation before a hard timeout.
+
+    Old design fired one boto3.invoke per chunk; AWS's async-event queue
+    silently throttled at ~14 self-invokes and every large import froze
+    around the 700-row mark. New design loops in-container."""
     from src.api.routes.users import process_letterboxd_chunk
 
     job_id = event["job_id"]
-    process_letterboxd_chunk(job_id)
+    process_letterboxd_chunk(job_id, deadline_ms=deadline_ms)
     return {"status": "ok", "job_id": job_id}

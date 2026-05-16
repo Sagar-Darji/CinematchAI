@@ -364,6 +364,19 @@ export interface ProfileOverview {
   people: {
     directors: Array<{ name: string; count: number; avg_rating?: number | null }>
     actors:    Array<{ name: string; count: number }>
+    /** Per-language top-N directors. Keyed by ISO-639-1 code (e.g. "en",
+     *  "hi", "ko"). Drives the language toggle on the People panels. */
+    directors_by_language?: Record<
+      string,
+      Array<{ name: string; count: number; avg_rating?: number | null }>
+    >
+    actors_by_language?: Record<
+      string,
+      Array<{ name: string; count: number }>
+    >
+    /** Top languages by total ratings, capped at 5. Used to render the
+     *  language toggle in the order the user actually watches. */
+    languages?: string[]
   }
   histogram: Array<{ rating: number; count: number }>
   totals: {

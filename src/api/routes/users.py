@@ -1,6 +1,6 @@
 """User Management API Routes."""
 
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from pydantic import BaseModel, Field
@@ -939,96 +939,174 @@ def _dispatch_letterboxd_chunk_worker(job_id: str) -> None:
     logger.info(f"Dispatched letterboxd-chunk for job {job_id}")
 
 
-def process_letterboxd_chunk(job_id: str) -> None:
-    """Process ONE chunk of a Letterboxd import, then either:
-      - self-dispatch the next chunk (more rows remain), or
-      - mark the job complete + kick off the stats recompute.
+def process_letterboxd_chunk(job_id: str, deadline_ms: Optional[int] = None) -> None:
+    """Process Letterboxd-import chunks for `job_id` in a SINGLE Lambda
+    invocation, looping until the job is done OR the Lambda budget is
+    about to run out. Each chunk costs ~3-5s (TMDB + Postgres); at 50
+    rows/chunk + 250s soft budget, one invocation handles up to ~3000
+    rated rows — vastly more than any realistic Letterboxd library.
 
-    Idempotent: if the job is already completed/failed, returns immediately.
-    Safe to invoke twice for the same job_id concurrently — both will
-    advance `next_chunk_index` past the row they processed.
+    Why this isn't 'process ONE chunk, self-dispatch next':
+        The previous design fired `boto3.invoke(InvocationType="Event")`
+        between every chunk. After ~14 rapid back-to-back self-invokes
+        AWS Lambda's internal async-event queue silently dropped further
+        invocations (with MaximumRetryAttempts=0 originally, and even
+        with retries enabled there's no caller-side signal). Every
+        large import froze at the same 12-15 chunk boundary. Looping
+        in one invocation removes the self-invoke chain entirely.
+
+    Self-dispatch only fires as a *budget overflow* safety valve for
+    libraries that genuinely exceed the per-invocation budget — at
+    which point we advance `next_chunk_index`, dispatch the next
+    invocation, and exit. That dispatch happens ONCE per ~3000 rows
+    instead of once per 50, so the async-queue throttling vanishes.
+
+    `deadline_ms` is the Lambda context's `get_remaining_time_in_millis()`
+    captured at handler entry. None when called from local-dev threads —
+    in that case the loop uses an absolute SOFT_BUDGET wall clock.
     """
+    import time as _time
     from src.services.letterboxd_service import get_letterboxd_service
     from src.services.import_staging_service import get_import_staging_service
 
     job_service = get_job_service()
-    job = job_service.get_job_status(job_id)
-    if not job:
-        logger.warning(f"chunk worker: job {job_id} not found, exiting")
-        return
-    if job["status"] in ("completed", "failed", "cancelled"):
-        logger.info(f"chunk worker: job {job_id} already {job['status']}, no-op")
-        return
 
-    user_id = job["user_id"]
-    s3_key = job.get("s3_key")
-    chunk_size = job.get("chunk_size") or 50
-    start = job.get("next_chunk_index") or 0
-    total = job.get("total") or 0
+    # Margin: leave at least 60s on the clock when we exit the loop, so
+    # _mark_letterboxd_complete (extras pass + stats trigger + S3 cleanup)
+    # has room to finish without tripping the 300s Lambda ceiling.
+    SAFETY_MARGIN_MS = 60_000
+    # Absolute soft cap when no Lambda context is available (local dev /
+    # daemon-thread fallback). Lambda's hard max is 300s, so cap loop
+    # work at ~240s.
+    LOCAL_SOFT_BUDGET_MS = 240_000
 
-    if not s3_key:
-        logger.error(f"chunk worker: job {job_id} has no s3_key, marking failed")
-        job_service.update_job_status(job_id, JobStatus.FAILED, error_message="Missing s3_key")
-        return
+    loop_started_at = _time.monotonic()
 
-    # Mark as running on first chunk so the UI flips from "pending" promptly.
-    if job["status"] == "pending":
-        job_service.update_job_status(job_id, JobStatus.RUNNING, progress=0)
+    def _budget_exceeded() -> bool:
+        if deadline_ms is not None:
+            elapsed_ms = (_time.monotonic() - loop_started_at) * 1000
+            remaining = deadline_ms - elapsed_ms
+            return remaining < SAFETY_MARGIN_MS
+        return (_time.monotonic() - loop_started_at) * 1000 > LOCAL_SOFT_BUDGET_MS
 
-    # Pull the CSV once per chunk. ~80 KB for an 800-row library, no big
-    # deal; for larger libraries we could Range-read but it's not worth
-    # the complexity yet.
-    try:
-        csv_content = get_import_staging_service().get_csv(s3_key)
-    except Exception as e:
-        logger.error(f"chunk worker: S3 fetch failed for job {job_id}: {e}")
-        job_service.update_job_status(
-            job_id, JobStatus.FAILED, error_message="Could not read staged CSV from S3"
+    # Hold CSV content across iterations — read once, reuse for every chunk.
+    csv_content: Optional[str] = None
+
+    # Hard ceiling on loop iterations per invocation. At 50 rows/chunk
+    # that's 100k rated rows — far past any realistic library — and
+    # guarantees the loop terminates even if a downstream bug stops
+    # advancing next_chunk_index.
+    MAX_ITERATIONS = 2000
+    iterations = 0
+
+    while True:
+        iterations += 1
+        if iterations > MAX_ITERATIONS:
+            logger.error(
+                f"chunk worker: job {job_id} hit MAX_ITERATIONS={MAX_ITERATIONS}; "
+                f"bailing without self-dispatch to prevent runaway loop"
+            )
+            return
+        job = job_service.get_job_status(job_id)
+        if not job:
+            logger.warning(f"chunk worker: job {job_id} not found, exiting")
+            return
+        if job["status"] in ("completed", "failed", "cancelled"):
+            logger.info(f"chunk worker: job {job_id} already {job['status']}, no-op")
+            return
+
+        user_id = job["user_id"]
+        s3_key = job.get("s3_key")
+        chunk_size = job.get("chunk_size") or 50
+        start = job.get("next_chunk_index") or 0
+        total = job.get("total") or 0
+
+        if not s3_key:
+            logger.error(f"chunk worker: job {job_id} has no s3_key, marking failed")
+            job_service.update_job_status(job_id, JobStatus.FAILED, error_message="Missing s3_key")
+            return
+
+        # First-iteration setup: flip status to running + load CSV.
+        if csv_content is None:
+            if job["status"] == "pending":
+                job_service.update_job_status(job_id, JobStatus.RUNNING, progress=0)
+            try:
+                csv_content = get_import_staging_service().get_csv(s3_key)
+            except Exception as e:
+                logger.error(f"chunk worker: S3 fetch failed for job {job_id}: {e}")
+                job_service.update_job_status(
+                    job_id, JobStatus.FAILED, error_message="Could not read staged CSV from S3"
+                )
+                return
+
+        end = min(start + chunk_size, total) if total else start + chunk_size
+
+        try:
+            stats = get_letterboxd_service().import_chunk(
+                user_id=user_id,
+                csv_content=csv_content,
+                start_row=start,
+                end_row=end,
+                skip_if_unchanged=True,
+            )
+        except Exception as e:
+            logger.exception(f"chunk worker: chunk {start}-{end} for job {job_id} failed: {e}")
+            # Bail out of this Lambda invocation; the next dispatch will
+            # retry the same range thanks to next_chunk_index being
+            # unchanged.
+            return
+
+        processed = stats.get("processed", 0)
+        if processed == 0:
+            try:
+                _mark_letterboxd_complete(job_id, user_id, s3_key, job.get("extras_s3_key"))
+            except Exception as e:
+                # Completion failures must not bubble — otherwise Lambda's
+                # async-retry replays the whole chunk worker.
+                logger.exception(f"chunk worker: completion path failed for job {job_id}: {e}")
+            return
+
+        new_next = start + processed
+        progress = int(min(100, (new_next / total) * 100)) if total else 0
+        # Compare-and-swap: only advance if next_chunk_index is still
+        # `start`. If another worker raced ahead, bail — we'd otherwise
+        # rewind the counter and replay the same chunk.
+        won = job_service.advance_chunk(
+            job_id, new_next, progress, expected_current_index=start
         )
-        return
-
-    end = min(start + chunk_size, total) if total else start + chunk_size
-
-    try:
-        stats = get_letterboxd_service().import_chunk(
-            user_id=user_id,
-            csv_content=csv_content,
-            start_row=start,
-            end_row=end,
-            skip_if_unchanged=True,
+        if not won:
+            logger.warning(
+                f"chunk worker: job {job_id} CAS lost at chunk {start} "
+                f"(another worker advanced); exiting without self-dispatch"
+            )
+            return
+        logger.info(
+            f"chunk worker: job {job_id} chunk {start}-{end} done "
+            f"({stats['imported']} ok / {stats['failed']} miss); next_chunk_index={new_next}/{total}"
         )
-    except Exception as e:
-        logger.exception(f"chunk worker: chunk {start}-{end} for job {job_id} failed: {e}")
-        # Don't mark the whole job FAILED on a single chunk error — the
-        # next dispatch will retry. Only fail terminally if the same chunk
-        # has failed twice in a row (would need DB tracking; skip for now).
-        return
 
-    processed = stats.get("processed", 0)
-    if processed == 0:
-        # Nothing left to process — wrap up.
-        _mark_letterboxd_complete(job_id, user_id, s3_key, job.get("extras_s3_key"))
-        return
+        if new_next >= total:
+            try:
+                _mark_letterboxd_complete(job_id, user_id, s3_key, job.get("extras_s3_key"))
+            except Exception as e:
+                logger.exception(f"chunk worker: completion path failed for job {job_id}: {e}")
+            return
 
-    new_next = start + processed
-    progress = int(min(100, (new_next / total) * 100)) if total else 0
-    job_service.advance_chunk(job_id, new_next, progress)
-    logger.info(
-        f"chunk worker: job {job_id} chunk {start}-{end} done "
-        f"({stats['imported']} ok / {stats['failed']} miss); next_chunk_index={new_next}/{total}"
-    )
-
-    if new_next >= total:
-        _mark_letterboxd_complete(job_id, user_id, s3_key, job.get("extras_s3_key"))
-        return
-
-    # Self-chain. If this self-invoke fails (e.g. IAM blip), the job stays
-    # at status=running with the advanced next_chunk_index — the next user
-    # upload will trip the single-flight guard and re-dispatch from here.
-    try:
-        _dispatch_letterboxd_chunk_worker(job_id)
-    except Exception as e:
-        logger.warning(f"chunk worker: self-chain failed for job {job_id}: {e}")
+        # Budget check — only when more chunks remain AND we're running
+        # low. Hand off to a fresh invocation rather than risk a Lambda
+        # timeout that would leave the job in 'running' with no worker
+        # actively pushing it forward.
+        if _budget_exceeded():
+            logger.info(
+                f"chunk worker: budget exceeded at chunk {start}-{end} for job {job_id}; "
+                f"dispatching continuation"
+            )
+            try:
+                _dispatch_letterboxd_chunk_worker(job_id)
+            except Exception as e:
+                logger.warning(f"chunk worker: continuation dispatch failed for job {job_id}: {e}")
+            return
+        # Otherwise loop — process the next chunk in the same container.
 
 
 def _mark_letterboxd_complete(
@@ -1123,36 +1201,63 @@ def _process_letterboxd_extras(user_id: str, extras_s3_key: str) -> None:
                 logger.debug(f"extras: review upsert failed ({r.get('name')!r}): {exc}")
         logger.info(f"extras: imported {ok}/{len(reviews)} reviews")
 
-    # Watchlist
+    # Watchlist — batch-resolve TMDB ids, then batch-fetch metadata. The
+    # previous per-entry path called movie_svc.get_media_auto() which does
+    # not exist on MovieService (only get_media_auto_batch does); the
+    # AttributeError was swallowed by the broad except and silently
+    # dropped every single watchlist entry. Failures now log at WARNING
+    # so the next regression is visible in CloudWatch.
     watchlist = extras.get("watchlist") or []
     if watchlist:
         wsvc = get_watchlist_service()
         movie_svc = get_movie_service()
+        resolved = [(w, _resolve(w)) for w in watchlist]
+        resolved_ids = [tid for _, tid in resolved if tid]
+        unresolved = sum(1 for _, tid in resolved if not tid)
+        if unresolved:
+            sample = [w.get("name") for w, tid in resolved[:5] if not tid]
+            logger.info(
+                f"extras: watchlist TMDB resolve missed {unresolved}/{len(watchlist)}; "
+                f"sample={sample}"
+            )
+
+        # Batch-enrich what we did resolve. Falls back to bare name/year
+        # when metadata fetch fails so the user still gets the entry.
+        meta_by_id: Dict[int, Any] = {}
+        if resolved_ids:
+            try:
+                media_list = movie_svc.get_media_auto_batch(resolved_ids, max_workers=10)
+                for tid, m in zip(resolved_ids, media_list):
+                    if m is not None:
+                        meta_by_id[tid] = m
+            except Exception as exc:
+                logger.warning(f"extras: watchlist batch metadata fetch failed: {exc}")
+
         ok = 0
-        for w in watchlist:
-            tid = _resolve(w)
+        for w, tid in resolved:
             if not tid:
                 continue
+            media = meta_by_id.get(tid)
+            md = getattr(media, "metadata", None) if media else None
+            title  = getattr(md, "title", None) or w.get("name") or "Untitled"
+            poster = getattr(md, "poster_path", None)
+            year   = getattr(md, "year", None) or w.get("year")
             try:
-                media = movie_svc.get_media_auto(str(tid))
-                md = getattr(media, "metadata", None) if media else None
-                title = getattr(md, "title", None) or w.get("name") or "Untitled"
-                poster = getattr(md, "poster_path", None)
-                year = getattr(md, "year", None) or w.get("year")
                 wsvc.add(
                     user_id=user_id,
                     tmdb_id=tid,
-                    media_type="movie",
+                    media_type="movie",  # Letterboxd is films only
                     title=title,
                     poster_path=poster,
                     year=year,
                 )
                 ok += 1
             except Exception as exc:
-                logger.debug(f"extras: watchlist add failed ({w.get('name')!r}): {exc}")
+                logger.warning(f"extras: watchlist add failed ({w.get('name')!r}): {exc}")
         logger.info(f"extras: imported {ok}/{len(watchlist)} watchlist entries")
 
     # Likes → favorites (capped at 4, only when user has no existing favs).
+    # Same batch-resolve pattern, same bug-fix as watchlist above.
     likes = extras.get("likes") or []
     if likes:
         usvc = get_user_service()
@@ -1162,35 +1267,42 @@ def _process_letterboxd_extras(user_id: str, extras_s3_key: str) -> None:
             existing = []
         if not existing:
             movie_svc = get_movie_service()
+            # Only resolve up to ~16 likes — we cap favorites at 4 and want
+            # headroom for resolution misses without wasting TMDB calls on
+            # a huge likes list.
+            candidates = likes[:16]
+            resolved = [(lk, _resolve(lk)) for lk in candidates]
+            resolved_ids = [tid for _, tid in resolved if tid]
+            meta_by_id: Dict[int, Any] = {}
+            if resolved_ids:
+                try:
+                    media_list = movie_svc.get_media_auto_batch(resolved_ids, max_workers=10)
+                    for tid, m in zip(resolved_ids, media_list):
+                        if m is not None:
+                            meta_by_id[tid] = m
+                except Exception as exc:
+                    logger.warning(f"extras: likes batch metadata fetch failed: {exc}")
+
             picked: List[dict] = []
-            for lk in likes:
+            for lk, tid in resolved:
                 if len(picked) >= 4:
                     break
-                tid = _resolve(lk)
                 if not tid:
                     continue
-                try:
-                    media = movie_svc.get_media_auto(str(tid))
-                    md = getattr(media, "metadata", None) if media else None
-                    picked.append({
-                        "tmdb_id": int(tid),
-                        "media_type": "movie",
-                        "title": getattr(md, "title", None) or lk.get("name") or "Untitled",
-                        "poster_path": getattr(md, "poster_path", None),
-                    })
-                except Exception:
-                    picked.append({
-                        "tmdb_id": int(tid),
-                        "media_type": "movie",
-                        "title": lk.get("name") or "Untitled",
-                        "poster_path": None,
-                    })
+                media = meta_by_id.get(tid)
+                md = getattr(media, "metadata", None) if media else None
+                picked.append({
+                    "tmdb_id":     int(tid),
+                    "media_type":  "movie",
+                    "title":       getattr(md, "title", None) or lk.get("name") or "Untitled",
+                    "poster_path": getattr(md, "poster_path", None),
+                })
             if picked:
                 try:
                     usvc.set_favorites(user_id, picked)
                     logger.info(f"extras: set {len(picked)} favorites from Letterboxd likes")
                 except Exception as exc:
-                    logger.debug(f"extras: set_favorites failed: {exc}")
+                    logger.warning(f"extras: set_favorites failed: {exc}")
 
 
 def _run_chunk_loop_in_thread(job_id: str) -> None:

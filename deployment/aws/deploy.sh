@@ -52,6 +52,29 @@ aws lambda wait function-updated \
   --function-name "${LAMBDA_FUNCTION_NAME}" \
   --region "${AWS_REGION}"
 
+# Cost-runaway safeguards. Re-apply on every deploy so the function
+# cannot drift back to AWS defaults (2 async retries + 6h event age),
+# which let a single buggy invocation replay for hours and amplify
+# self-invoke chains into runaway spend.
+echo "==> Applying async-invoke safeguards (retries=0, max event age=300s) ..."
+aws lambda put-function-event-invoke-config \
+  --function-name "${LAMBDA_FUNCTION_NAME}" \
+  --region "${AWS_REGION}" \
+  --maximum-retry-attempts 0 \
+  --maximum-event-age-in-seconds 300 \
+  >/dev/null
+
+# Reserved concurrency cap — best-effort. Will fail if the account's
+# unreserved pool would drop below AWS's 10-execution minimum (common
+# on new accounts with the default 10 ConcurrentExecutions quota). In
+# that case the account-level cap already bounds blast radius.
+echo "==> Attempting reserved-concurrency cap (best-effort) ..."
+aws lambda put-function-concurrency \
+  --function-name "${LAMBDA_FUNCTION_NAME}" \
+  --region "${AWS_REGION}" \
+  --reserved-concurrent-executions 10 \
+  >/dev/null 2>&1 || echo "   (skipped — account quota too low to reserve)"
+
 echo ""
 echo "✅  Deploy complete: ${ECR_URI}"
 echo "    Lambda function '${LAMBDA_FUNCTION_NAME}' updated."

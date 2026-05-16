@@ -124,6 +124,41 @@ export default function Profile() {
 
   const computedAt = analytics?.computed_at ?? core?.computed_at ?? null
 
+  // ── Poll while refreshing ─────────────────────────────────────────────
+  // The server kicks off a background recompute when it sees a stale row,
+  // but the response we just got is the *pre*-recompute snapshot. Without
+  // polling, the "Refreshing…" badge sticks forever even after the worker
+  // has finished. Re-fetch every 6s and stop once the row is no longer
+  // stale or we've burned the budget — whichever comes first.
+  useEffect(() => {
+    if (!userId || !isRefreshing) return
+    let cancelled = false
+    let attempts = 0
+    const MAX_ATTEMPTS = 20  // 20 × 6s = 2 min max poll window
+    const INTERVAL_MS = 6000
+
+    const id = setInterval(() => {
+      if (cancelled) return
+      attempts += 1
+      Promise.all([getProfileCore(userId), getProfileAnalytics(userId)])
+        .then(([c, a]) => {
+          if (cancelled) return
+          setCore(c)
+          writeCache(coreCacheKey, c)
+          setRatingCount(c.live_total)
+          setAnalytics(a)
+          writeCache(analyticsCacheKey, a)
+        })
+        .catch(() => { /* keep cache on transient error */ })
+        .finally(() => {
+          if (!cancelled && attempts >= MAX_ATTEMPTS) clearInterval(id)
+        })
+    }, INTERVAL_MS)
+
+    return () => { cancelled = true; clearInterval(id) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId, isRefreshing])
+
   return (
     <div className="min-h-screen px-4 sm:px-6 md:px-8 pb-16">
       <div className="max-w-5xl mx-auto pt-4 md:pt-6 space-y-6">

@@ -131,16 +131,42 @@ class JobService:
                 tuple(params),
             )
 
-    def advance_chunk(self, job_id: str, new_index: int, progress: int) -> None:
-        """Atomically advance the chunk counter and progress in one UPDATE
-        so concurrent workers don't double-process. Used by the chunked
-        Letterboxd import worker after each chunk finishes."""
+    def advance_chunk(
+        self,
+        job_id: str,
+        new_index: int,
+        progress: int,
+        expected_current_index: Optional[int] = None,
+    ) -> bool:
+        """Advance the chunk counter + progress in a single UPDATE.
+
+        When `expected_current_index` is given, the UPDATE only fires if
+        next_chunk_index still equals that value — a compare-and-swap so
+        two concurrent workers can't both advance from the same start
+        and double-process a chunk. Returns True if this caller won the
+        CAS, False if another worker advanced first (the caller should
+        bail out of its loop in that case).
+
+        Called without `expected_current_index`, behavior is the old
+        unconditional UPDATE.
+        """
         with get_db().connect() as conn:
-            conn.execute(
+            if expected_current_index is None:
+                conn.execute(
+                    "UPDATE jobs SET next_chunk_index = ?, progress = ?, "
+                    "status = ? WHERE job_id = ?",
+                    (new_index, progress, JobStatus.RUNNING.value, job_id),
+                )
+                return True
+            cur = conn.execute(
                 "UPDATE jobs SET next_chunk_index = ?, progress = ?, "
-                "status = ? WHERE job_id = ?",
-                (new_index, progress, JobStatus.RUNNING.value, job_id),
+                "status = ? WHERE job_id = ? AND next_chunk_index = ?",
+                (
+                    new_index, progress, JobStatus.RUNNING.value,
+                    job_id, expected_current_index,
+                ),
             )
+            return (cur.rowcount or 0) > 0
 
     def update_job_status(self, job_id: str, status: JobStatus, progress: Optional[int] = None, error_message: Optional[str] = None):
         now = datetime.utcnow().isoformat()

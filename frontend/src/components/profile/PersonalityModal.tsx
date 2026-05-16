@@ -7,8 +7,10 @@
  *   - Letter (stylized, second-person)
  *   - Quarterly journal entries
  *
- * Each section is wrapped in a heading so the user can skim. Sections
- * the LLM didn't fill render nothing instead of empty headers.
+ * Layout: centered modal up to 720px wide / 90vh tall with internal
+ * scroll, fixed close button in the modal's top-right corner. On
+ * narrow viewports the modal expands to fill the screen so the body
+ * copy remains readable without horizontal overflow.
  */
 import { useEffect } from 'react'
 import { X } from 'lucide-react'
@@ -38,28 +40,47 @@ export function PersonalityModal({ personality, onClose }: Props) {
       role="dialog"
       aria-modal="true"
       aria-label="Your taste essay"
-      className="fixed inset-0 z-50 flex items-stretch justify-center md:items-center md:p-8"
+      className="fixed inset-0 z-50 flex items-center justify-center p-0 sm:p-4 md:p-8"
       style={{ background: 'rgba(0,0,0,0.78)' }}
       onClick={onClose}
     >
+      <style>{`
+        .modal-shell { height: 100dvh; max-height: 100dvh; }
+        @media (min-width: 640px) { .modal-shell { height: 90dvh; max-height: 90dvh; } }
+      `}</style>
       <div
-        className="relative w-full max-w-3xl overflow-y-auto md:rounded-2xl"
-        style={{ background: 'var(--bg-page)', border: '1px solid var(--border)' }}
+        className="relative w-full sm:max-w-2xl md:max-w-3xl rounded-none sm:rounded-2xl flex flex-col modal-shell"
+        style={{
+          background: 'var(--bg-page)',
+          border: '1px solid var(--border)',
+        }}
         onClick={(e) => e.stopPropagation()}
       >
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label="Close"
-          className="sticky top-4 ml-auto mr-4 mt-4 z-10 flex items-center justify-center w-9 h-9 rounded-full"
-          style={{ background: 'var(--bg-overlay)', border: '1px solid var(--border)', color: 'var(--text-muted)' }}
+        {/* Fixed header so the close button never drifts off-screen. */}
+        <div
+          className="flex items-center justify-between gap-3 px-5 sm:px-8 py-4 flex-shrink-0"
+          style={{ borderBottom: '1px solid var(--border)' }}
         >
-          <X size={18} />
-        </button>
-        <div className="px-6 md:px-10 pb-12 pt-2 space-y-10">
+          <h2 className="text-xs font-bold uppercase tracking-widest" style={{ color: 'var(--text-muted)' }}>
+            Your taste essay
+          </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="flex items-center justify-center w-9 h-9 rounded-full flex-shrink-0"
+            style={{ background: 'var(--bg-overlay)', border: '1px solid var(--border)', color: 'var(--text-muted)' }}
+          >
+            <X size={18} />
+          </button>
+        </div>
+
+        {/* Scrollable body — single overflow container, never pushes the
+            modal past the viewport. */}
+        <div className="overflow-y-auto px-5 sm:px-8 md:px-10 py-8 space-y-10">
           {personality.teaser && (
             <section>
-              <p className="text-lg leading-relaxed text-white">{personality.teaser}</p>
+              <p className="text-base sm:text-lg leading-relaxed text-white">{personality.teaser}</p>
             </section>
           )}
           {lf.longitudinal_arc.length > 0 && (
@@ -105,7 +126,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
       <h3 className="text-xs font-bold uppercase tracking-widest" style={{ color: 'var(--text-muted)' }}>
         {title}
       </h3>
-      <div className="text-white space-y-3">{children}</div>
+      <div className="text-white space-y-3 break-words">{children}</div>
     </section>
   )
 }

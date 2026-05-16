@@ -287,7 +287,7 @@ class StatsService:
         # structured object with teaser, bullets, longitudinal arc,
         # dense paragraph, letter, and quarterly entries. All generated
         # up-front so view time is a pure JSON read.
-        personality = self._maybe_llm_personality(payload, enriched)
+        personality = self._maybe_llm_personality(payload, enriched, user_id=user_id)
         # Legacy column gets the teaser text so /users/{id}/stats stays
         # usable for callers that haven't migrated yet.
         if isinstance(personality, dict):
@@ -343,6 +343,9 @@ class StatsService:
                 "people": {
                     "directors": agg.get("top_directors") or [],
                     "actors":    agg.get("top_actors") or [],
+                    "directors_by_language": agg.get("top_directors_by_lang") or {},
+                    "actors_by_language":    agg.get("top_actors_by_lang") or {},
+                    "languages":             agg.get("top_languages") or [],
                 },
                 "histogram":   agg.get("rating_histogram") or [],
                 "totals": {
@@ -666,19 +669,32 @@ class StatsService:
         # also surface avg user rating, so only deliberate ratings.
         genre_counts: Counter = Counter()
         actor_counts: Counter = Counter()
+        # Per-language counters power the People panel's language toggle —
+        # e.g. user wants to see "Top Hindi directors" vs "Top English
+        # directors" without the dominant pool drowning out the smaller one.
+        actor_counts_by_lang: Dict[str, Counter] = defaultdict(Counter)
         for it in items:
             for g in it.get("genres") or []:
                 genre_counts[g] += 1
+            lang = it.get("original_language") or "unknown"
             for actor in it.get("cast") or []:
                 actor_counts[actor] += 1
+                actor_counts_by_lang[lang][actor] += 1
 
         director_counts: Counter = Counter()
         director_rating_sum: Dict[str, float] = defaultdict(float)
+        director_counts_by_lang: Dict[str, Counter] = defaultdict(Counter)
+        director_rating_sum_by_lang: Dict[str, Dict[str, float]] = defaultdict(
+            lambda: defaultdict(float)
+        )
         for it in explicit:
             d = it.get("director")
             if d:
                 director_counts[d] += 1
                 director_rating_sum[d] += it["rating"]
+                lang = it.get("original_language") or "unknown"
+                director_counts_by_lang[lang][d] += 1
+                director_rating_sum_by_lang[lang][d] += it["rating"]
 
         top_genres = [{"name": g, "count": c} for g, c in genre_counts.most_common()]
         top_directors = [
@@ -690,6 +706,38 @@ class StatsService:
             for d, c in director_counts.most_common(20)
         ]
         top_actors = [{"name": a, "count": c} for a, c in actor_counts.most_common(20)]
+
+        # Per-language top-N. Cap at top 5 languages by total ratings so the
+        # frontend toggle stays sane; English + Hindi dominate most libraries
+        # but we don't hard-code that.
+        lang_totals: Counter = Counter()
+        for it in items:
+            lang_totals[it.get("original_language") or "unknown"] += 1
+        top_langs = [lang for lang, _ in lang_totals.most_common(5) if lang != "unknown"]
+
+        top_directors_by_lang: Dict[str, List[Dict[str, Any]]] = {}
+        for lang in top_langs:
+            counts = director_counts_by_lang.get(lang) or Counter()
+            sums = director_rating_sum_by_lang.get(lang) or {}
+            if not counts:
+                continue
+            top_directors_by_lang[lang] = [
+                {
+                    "name": d,
+                    "count": c,
+                    "avg_rating": round(sums.get(d, 0.0) / c, 2) if c else None,
+                }
+                for d, c in counts.most_common(10)
+            ]
+
+        top_actors_by_lang: Dict[str, List[Dict[str, Any]]] = {}
+        for lang in top_langs:
+            counts = actor_counts_by_lang.get(lang) or Counter()
+            if not counts:
+                continue
+            top_actors_by_lang[lang] = [
+                {"name": a, "count": c} for a, c in counts.most_common(10)
+            ]
 
         total_runtime = sum(int(it["runtime"]) for it in items if it.get("runtime"))
 
@@ -792,6 +840,9 @@ class StatsService:
             "top_genres": top_genres,
             "top_directors": top_directors,
             "top_actors": top_actors,
+            "top_directors_by_lang": top_directors_by_lang,
+            "top_actors_by_lang":    top_actors_by_lang,
+            "top_languages":         top_langs,
             "total_runtime_minutes": total_runtime,
             "foreign_pct": foreign_pct,
             "hidden_gem_pct": hidden_gem_pct,
@@ -805,6 +856,7 @@ class StatsService:
     def _maybe_llm_personality(
         payload: Dict[str, Any],
         enriched: Optional[List[dict]] = None,
+        user_id: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """Generate a layered taste-as-growth essay via Groq.
 
@@ -827,61 +879,33 @@ class StatsService:
                 # Not enough signal for a useful reading.
                 return None
 
-            top_genres_str = ", ".join(
-                f"{g['name']} ({g['count']})" for g in (payload.get("top_genres") or [])[:5]
-            ) or "varied"
-            top_directors = (payload.get("top_directors") or [])[:3]
-            top_directors_str = ", ".join(
-                f"{d['name']} ({d['count']} films, avg {d.get('avg_rating') or 0}★)"
-                for d in top_directors
-            ) or "none"
-            top_decade = max(payload.get("decade_breakdown") or [], key=lambda d: d["count"], default=None)
-            decade_str = f"{top_decade['decade']}s" if top_decade else "no clear decade"
-
-            generosity = payload.get("generosity_score") or 0.0
-            generosity_str = (
-                f"more generous than the crowd by {abs(generosity):.1f}★"
-                if generosity > 0.1
-                else f"harsher than the crowd by {abs(generosity):.1f}★"
-                if generosity < -0.1
-                else "near the crowd consensus"
+            evidence = StatsService._build_personality_evidence(
+                payload=payload,
+                enriched=enriched or [],
+                user_id=user_id,
             )
-
-            # Year-over-year + per-quarter signal lets the model write a
-            # growth narrative instead of an abstract taste reading. Keep
-            # the data set bounded so the prompt stays under the model's
-            # context budget — 5 top films per quarter is plenty.
-            yoy_summary, quarter_summary = StatsService._build_yoy_summary(enriched or [])
 
             prompt = (
                 "You are writing a layered taste-as-personality reading for a "
-                "film viewer. The reading should feel like a journal — observing "
-                "who they were when they started rating, how their taste has "
-                "shifted, and what that says about them now. Use concrete film "
-                "names from the data, not generic adjectives.\n\n"
+                "film viewer. The reading should feel like a perceptive critic "
+                "who has actually watched alongside them — naming the specific "
+                "films, directors, and quotes that prove every claim. Never "
+                "use a generic adjective without immediately citing the film "
+                "or review that earns it.\n\n"
                 "Return a JSON object with EXACTLY these keys:\n"
-                "  teaser:           a 3-4 line paragraph (under 360 chars) for the Profile teaser\n"
-                "  bullets:          array of 3 short evidence sentences (each under 110 chars)\n"
+                "  teaser:    a 3-4 line paragraph (under 360 chars). MUST name at least 2 specific films from the library.\n"
+                "  bullets:   array of 3 short evidence sentences (each under 130 chars). EACH bullet must cite at least one film by name + its star rating.\n"
                 "  longform:\n"
-                "    longitudinal_arc:  array of EXACTLY 3 paragraphs — who you were, how taste shifted, what it says now\n"
-                "    dense_paragraph:   one 150-180 word paragraph synthesizing taste + growth\n"
-                "    letter:            a stylized 'letter to a viewer' (~150 words) addressed in second person\n"
-                "    quarterly_entries: array of short journal entries, one per quarter present in the data; each {quarter: 'YYYY Qn', text: '<60 words>'}\n\n"
+                "    longitudinal_arc:  array of EXACTLY 3 paragraphs — who you were, how taste shifted, what it says now. Each paragraph names 1-2 specific films.\n"
+                "    dense_paragraph:   one 150-180 word paragraph synthesizing taste + growth. Anchor in director patterns + at least 3 named films.\n"
+                "    letter:            a stylized 'letter to a viewer' (~150 words) addressed in second person. Reference at least one review quote from the data.\n"
+                "    quarterly_entries: array of short journal entries, one per quarter present in the data; each {quarter: 'YYYY Qn', text: '<60 words>'}. Each quarter MUST name at least one film actually rated that quarter.\n\n"
                 "Write in second person ('You'). No clichés ('you love movies'). "
                 "Lead with what's distinctive about THIS library, not what's common. "
-                "Quarterly entries should reflect what was actually rated in that quarter "
-                "— call out at least one film by name in each.\n\n"
-                f"LIBRARY DATA:\n"
-                f"- Total titles rated: {total_titles}\n"
-                f"- Average rating: {payload.get('avg_rating')}\n"
-                f"- Top genres: {top_genres_str}\n"
-                f"- Most-rated directors: {top_directors_str}\n"
-                f"- Dominant decade: {decade_str}\n"
-                f"- Foreign cinema: {payload.get('foreign_pct')}%\n"
-                f"- Hidden gems (<100K TMDB votes): {payload.get('hidden_gem_pct')}%\n"
-                f"- Crowd lean: {generosity_str}\n"
-                f"- Year-over-year:\n{yoy_summary}\n"
-                f"- Per-quarter top picks:\n{quarter_summary}\n"
+                "When the library has multiple language traditions (e.g. Hindi + "
+                "English), acknowledge the bridge — don't pretend one doesn't "
+                "exist. Prefer naming films from the EVIDENCE block over inventing.\n\n"
+                f"{evidence}\n"
             )
 
             client = LLMClient(
@@ -895,10 +919,13 @@ class StatsService:
                 prompt=prompt,
                 system_prompt=(
                     "Output ONLY a JSON object with the requested keys. No "
-                    "preamble, no markdown fences, no commentary."
+                    "preamble, no markdown fences, no commentary. Every "
+                    "specific film name and review quote in your output "
+                    "must come from the EVIDENCE block — do not invent "
+                    "titles or quotes."
                 ),
-                temperature=0.7,
-                max_tokens=1400,
+                temperature=0.6,
+                max_tokens=2000,
             )
             text = (text or "").strip()
             # Strip ```json fences if present.
@@ -927,6 +954,167 @@ class StatsService:
         except Exception as exc:
             logger.warning(f"LLM personality generation failed: {exc}")
             return None
+
+    @staticmethod
+    def _build_personality_evidence(
+        payload: Dict[str, Any],
+        enriched: List[dict],
+        user_id: Optional[str],
+    ) -> str:
+        """Assemble a dense evidence block for the personality prompt.
+
+        The previous version passed counts and percentages only — the LLM
+        had to invent which films earned each label. This version surfaces
+        ranked film names per director, per star tier, per language, plus
+        the user's review excerpts so the model can quote them verbatim.
+        """
+        from collections import defaultdict, Counter
+
+        # ── Index by director: top films + avg rating ────────────────────
+        by_director: Dict[str, List[dict]] = defaultdict(list)
+        for it in enriched:
+            d = it.get("director")
+            if not d:
+                continue
+            by_director[d].append(it)
+
+        director_lines: List[str] = []
+        for entry in (payload.get("top_directors") or [])[:6]:
+            name = entry["name"]
+            films = sorted(
+                by_director.get(name, []),
+                key=lambda f: float(f.get("rating") or 0),
+                reverse=True,
+            )[:4]
+            picks = ", ".join(
+                f"{f.get('title') or '?'} ({f.get('year') or '?'}) {float(f.get('rating') or 0):g}★"
+                for f in films
+            ) or "—"
+            director_lines.append(
+                f"  - {name} · {entry['count']} films · avg {entry.get('avg_rating') or 0}★ · {picks}"
+            )
+
+        # ── Per-language directors (lets the LLM acknowledge the bridge) ─
+        lang_lines: List[str] = []
+        by_lang_dirs = payload.get("top_directors_by_lang") or {}
+        for lang in (payload.get("top_languages") or [])[:3]:
+            picks = by_lang_dirs.get(lang) or []
+            if not picks:
+                continue
+            top = ", ".join(f"{p['name']} ({p['count']})" for p in picks[:3])
+            lang_lines.append(f"  - {lang}: {top}")
+
+        # ── Rating tiers: which films earned each star value ─────────────
+        by_tier: Dict[float, List[str]] = defaultdict(list)
+        for it in enriched:
+            r = float(it.get("rating") or 0)
+            t = it.get("title")
+            if not t or r <= 0:
+                continue
+            by_tier[r].append(t)
+        tier_lines: List[str] = []
+        for tier in (5.0, 4.5, 4.0, 3.5, 3.0, 2.5, 2.0, 1.5, 1.0, 0.5):
+            titles = by_tier.get(tier) or []
+            if not titles:
+                continue
+            sample = ", ".join(titles[:4])
+            tier_lines.append(f"  - {tier:g}★ ({len(titles)}): {sample}")
+
+        # ── Hidden gems: high user rating, low TMDB vote_count ───────────
+        gems = sorted(
+            (
+                it for it in enriched
+                if (it.get("vote_count") or 0) < 50_000
+                and float(it.get("rating") or 0) >= 3.5
+                and it.get("title")
+            ),
+            key=lambda it: (float(it.get("rating") or 0), -(it.get("vote_count") or 0)),
+            reverse=True,
+        )[:5]
+        gem_lines = [
+            f"  - {g['title']} ({g.get('year') or '?'}) {float(g.get('rating') or 0):g}★, "
+            f"only {g.get('vote_count') or 0} TMDB votes"
+            for g in gems
+        ] or ["  - (no clear hidden gems)"]
+
+        # ── Decade breakdown with percentages ────────────────────────────
+        decades = payload.get("decade_breakdown") or []
+        total_dec = sum(d.get("count", 0) for d in decades) or 1
+        decade_lines = [
+            f"  - {d['label']}: {d['count']} films "
+            f"({round(100 * d['count'] / total_dec)}%)"
+            for d in sorted(decades, key=lambda d: d.get("decade", 0))
+        ] or ["  - (no dated films)"]
+
+        # ── Genre lean: top 5 with their counts ──────────────────────────
+        genre_lines = [
+            f"  - {g['name']}: {g['count']}"
+            for g in (payload.get("top_genres") or [])[:6]
+        ] or ["  - (no genres resolved)"]
+
+        # ── User review excerpts — verbatim so the LLM can quote ─────────
+        review_lines: List[str] = []
+        if user_id:
+            try:
+                from src.services.review_service import get_review_service
+                from src.services.movie_service import get_movie_service
+                reviews = get_review_service().list_by_user(user_id, limit=20)
+                # Resolve titles in batch.
+                ids = [int(r["tmdb_id"]) for r in reviews if r.get("tmdb_id")]
+                movies = get_movie_service().get_media_auto_batch(ids, max_workers=10) if ids else []
+                title_by_id = {}
+                for tid, m in zip(ids, movies):
+                    md = getattr(m, "metadata", None) if m else None
+                    if md and getattr(md, "title", None):
+                        title_by_id[tid] = md.title
+                for r in reviews[:8]:
+                    text = (r.get("review_text") or "").strip().replace("\n", " ")
+                    if not text:
+                        continue
+                    if len(text) > 200:
+                        text = text[:200].rstrip() + "…"
+                    title = title_by_id.get(int(r["tmdb_id"]), "?")
+                    rating = r.get("rating")
+                    rating_str = f"{float(rating):g}★" if rating is not None else "no rating"
+                    review_lines.append(f'  - {title} ({rating_str}): "{text}"')
+            except Exception as exc:
+                logger.debug(f"personality evidence: review lookup skipped: {exc}")
+
+        # ── YoY + per-quarter (existing helper) ──────────────────────────
+        yoy_summary, quarter_summary = StatsService._build_yoy_summary(enriched)
+
+        generosity = payload.get("generosity_score") or 0.0
+        generosity_str = (
+            f"more generous than the crowd by {abs(generosity):.1f}★"
+            if generosity > 0.1
+            else f"harsher than the crowd by {abs(generosity):.1f}★"
+            if generosity < -0.1
+            else "near the crowd consensus"
+        )
+
+        return (
+            "EVIDENCE — every claim in the output must be grounded here:\n"
+            f"- Total titles rated: {(payload.get('total_films') or 0) + (payload.get('total_series') or 0)}\n"
+            f"- Average rating: {payload.get('avg_rating')}\n"
+            f"- Foreign cinema: {payload.get('foreign_pct')}%\n"
+            f"- Hidden-gem density (<100K TMDB votes): {payload.get('hidden_gem_pct')}%\n"
+            f"- Crowd lean: {generosity_str}\n"
+            "\nTOP DIRECTORS (name · count · avg · highest-rated picks):\n"
+            + "\n".join(director_lines or ["  - (none)"])
+            + "\n\nDIRECTORS BY LANGUAGE (top 3 per language):\n"
+            + ("\n".join(lang_lines) if lang_lines else "  - (single language)")
+            + "\n\nGENRES:\n"
+            + "\n".join(genre_lines)
+            + "\n\nDECADES:\n"
+            + "\n".join(decade_lines)
+            + "\n\nRATING TIERS (titles at each star level):\n"
+            + ("\n".join(tier_lines) if tier_lines else "  - (no ratings)")
+            + "\n\nHIDDEN GEMS (high rating, low TMDB vote count):\n"
+            + "\n".join(gem_lines)
+            + "\n\nREVIEW EXCERPTS (verbatim — quote these in the letter section):\n"
+            + ("\n".join(review_lines) if review_lines else "  - (no reviews on file)")
+            + f"\n\nYEAR-OVER-YEAR:\n{yoy_summary}\n\nPER-QUARTER TOP PICKS:\n{quarter_summary}"
+        )
 
     @staticmethod
     def _build_yoy_summary(enriched: List[dict]) -> tuple[str, str]:
