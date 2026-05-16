@@ -75,6 +75,17 @@ class StatsService:
                     )
                     """
                 )
+                # The unified profile_payload column holds the full
+                # precomputed artifact the new Profile page reads in one
+                # shot: identity, captions, overview, diary. Stored as
+                # JSON-encoded text so SQLite + Postgres both work without
+                # a custom adapter; Postgres treats TEXT cheaply.
+                try:
+                    conn.execute(
+                        "ALTER TABLE user_stats ADD COLUMN profile_payload TEXT"
+                    )
+                except Exception:
+                    pass  # column already exists — idempotent
             register_pk("user_stats", ["user_id"])
         except Exception as exc:
             logger.warning(f"user_stats schema init: {exc}")
@@ -98,6 +109,7 @@ class StatsService:
             "top_directors",
             "top_actors",
             "insights_json",
+            "profile_payload",
         ):
             raw = d.get(k)
             if raw:
@@ -151,9 +163,18 @@ class StatsService:
             "generosity_score",
             "insights_json",
             "llm_personality",
+            "profile_payload",
             "computed_at",
             "stale",
         )
+        profile_payload_value = payload.get("profile_payload")
+        if isinstance(profile_payload_value, dict):
+            profile_payload_serialized = json.dumps(profile_payload_value)
+        elif isinstance(profile_payload_value, str):
+            profile_payload_serialized = profile_payload_value
+        else:
+            profile_payload_serialized = None
+
         values = (
             user_id,
             int(payload.get("total_films", 0)),
@@ -172,6 +193,7 @@ class StatsService:
             payload.get("generosity_score"),
             json.dumps(payload.get("insights") or []),
             payload.get("llm_personality"),
+            profile_payload_serialized,
             datetime.now(timezone.utc).isoformat(),
             False,  # stale — real bool so Postgres BOOLEAN column accepts it
         )
@@ -261,13 +283,310 @@ class StatsService:
             })
 
         payload = self._aggregate(enriched)
-        payload["llm_personality"] = self._maybe_llm_personality(payload)
+        # Layered LLM personality essay — one Groq call returns a
+        # structured object with teaser, bullets, longitudinal arc,
+        # dense paragraph, letter, and quarterly entries. All generated
+        # up-front so view time is a pure JSON read.
+        personality = self._maybe_llm_personality(payload, enriched)
+        # Legacy column gets the teaser text so /users/{id}/stats stays
+        # usable for callers that haven't migrated yet.
+        if isinstance(personality, dict):
+            payload["llm_personality"] = personality.get("teaser")
+        else:
+            payload["llm_personality"] = personality
+        # Assemble the precomputed Profile artifact. Builds for identity,
+        # captions, overview, diary — everything the new Profile page
+        # renders without computing at view time.
+        try:
+            favorites = get_user_service().get_favorites(user_id)
+        except Exception:
+            favorites = []
+        payload["profile_payload"] = self._build_profile_payload(
+            user_id=user_id,
+            agg=payload,
+            enriched=enriched,
+            ratings=ratings,
+            favorites=favorites,
+            personality=personality if isinstance(personality, dict) else None,
+        )
         self.upsert(user_id, payload)
         logger.info(
             f"Computed stats for {user_id}: {payload['total_films']} films, "
             f"{payload['total_series']} series, in {time.time() - t0:.1f}s"
         )
         return payload
+
+    # ── Profile payload builders ─────────────────────────────────────────
+
+    def _build_profile_payload(
+        self,
+        user_id: str,
+        agg: Dict[str, Any],
+        enriched: List[dict],
+        ratings: List[dict],
+        favorites: List[dict],
+        personality: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """Compose the precomputed Profile artifact the new page consumes
+        in a single read. Pure assembly — every input is already computed."""
+        now = datetime.now(timezone.utc)
+        return {
+            "schema_version": 1,
+            "computed_at": now.isoformat(),
+            "identity": self._build_identity(user_id, agg, favorites, enriched),
+            "overview": {
+                "favorites":   favorites or [],
+                "personality": personality or _empty_personality(),
+                "insights":    agg.get("insights") or [],
+                "top_genres":  agg.get("top_genres") or [],
+                "decades":     agg.get("decade_breakdown") or [],
+                "people": {
+                    "directors": agg.get("top_directors") or [],
+                    "actors":    agg.get("top_actors") or [],
+                },
+                "histogram":   agg.get("rating_histogram") or [],
+                "totals": {
+                    "films":   agg.get("total_films") or 0,
+                    "series":  agg.get("total_series") or 0,
+                    "runtime_minutes": agg.get("total_runtime_minutes") or 0,
+                    "foreign_pct":     agg.get("foreign_pct") or 0.0,
+                    "hidden_gem_pct":  agg.get("hidden_gem_pct") or 0.0,
+                    "generosity_score": agg.get("generosity_score") or 0.0,
+                    "avg_rating":      agg.get("avg_rating"),
+                },
+            },
+            "diary": self._build_diary_payload(enriched),
+        }
+
+    @staticmethod
+    def _build_identity(
+        user_id: str,
+        agg: Dict[str, Any],
+        favorites: List[dict],
+        enriched: List[dict],
+    ) -> Dict[str, Any]:
+        """Header strip: username (= user_id in this codebase, see
+        rename_user), avatar from user_service.get_avatar_url, banner
+        film + the 4 taste-first chips + rotating captions."""
+        from src.services.user_service import get_user_service
+        try:
+            avatar_url = get_user_service().get_avatar_url(user_id)
+        except Exception:
+            avatar_url = None
+
+        # Stat chips (taste-first set the user picked).
+        decades = agg.get("decade_breakdown") or []
+        top_decade = max(decades, key=lambda d: d.get("count", 0), default=None)
+        top_director = (agg.get("top_directors") or [{}])[0] if agg.get("top_directors") else None
+        top_genre = (agg.get("top_genres") or [{}])[0] if agg.get("top_genres") else None
+
+        stat_chips = {
+            "films": agg.get("total_films") or 0,
+            "decade_lean": f"{top_decade['decade']}s" if top_decade else None,
+            "top_director": {
+                "name":  top_director.get("name") if top_director else None,
+                "count": top_director.get("count") if top_director else None,
+            } if top_director else None,
+            "top_genre": {
+                "name":  top_genre.get("name") if top_genre else None,
+                "count": top_genre.get("count") if top_genre else None,
+            } if top_genre else None,
+        }
+
+        # Banner: first favorite's poster path (the existing convention).
+        banner_film_id: Optional[int] = None
+        if favorites:
+            try:
+                banner_film_id = int(favorites[0].get("tmdb_id"))
+            except (TypeError, ValueError):
+                pass
+
+        return {
+            "user_id":  user_id,
+            "username": user_id,  # by convention here user_id is the handle
+            "avatar_url": avatar_url,
+            "banner_film_id": banner_film_id,
+            "stat_chips": stat_chips,
+            "captions":  StatsService._build_captions(enriched),
+        }
+
+    @staticmethod
+    def _build_captions(items: List[dict]) -> List[Dict[str, Any]]:
+        """Return the 4 candidate captions the header rotates through:
+        on_this_day, recent (7-day), streak, random_pick.
+
+        Each is independently optional — missing data drops the caption.
+        The frontend rotates whatever it gets."""
+        if not items:
+            return []
+        today = datetime.now(timezone.utc).date()
+        captions: List[Dict[str, Any]] = []
+
+        # ── on_this_day ──────────────────────────────────────────────
+        # Look for a rating with timestamp matching today's MM-DD in any
+        # prior year. Take the highest-rated match for the most evocative
+        # callout.
+        on_this_day: Optional[dict] = None
+        best_rating = -1.0
+        for it in items:
+            ts = it.get("timestamp")
+            if not ts:
+                continue
+            try:
+                d = datetime.fromisoformat(str(ts).replace("Z", "+00:00")).date()
+            except Exception:
+                continue
+            if d.month == today.month and d.day == today.day and d.year < today.year:
+                r = float(it.get("rating") or 0)
+                if r > best_rating:
+                    best_rating = r
+                    on_this_day = it.copy()
+                    on_this_day["_year"] = d.year
+        if on_this_day and on_this_day.get("title"):
+            captions.append({
+                "type": "on_this_day",
+                "text": f"You watched {on_this_day['title']} on this day in {on_this_day['_year']}.",
+            })
+
+        # ── recent (7-day) ───────────────────────────────────────────
+        from datetime import timedelta
+        week_ago = today - timedelta(days=7)
+        recent_count = 0
+        for it in items:
+            ts = it.get("timestamp")
+            if not ts:
+                continue
+            try:
+                d = datetime.fromisoformat(str(ts).replace("Z", "+00:00")).date()
+            except Exception:
+                continue
+            if d >= week_ago and d <= today:
+                recent_count += 1
+        if recent_count >= 3:  # under 3 = not interesting
+            noun = "films" if recent_count != 1 else "film"
+            captions.append({
+                "type": "recent",
+                "text": f"You rated {recent_count} {noun} this week.",
+            })
+
+        # ── streak (consecutive days with a rating ending today) ────
+        rating_days = set()
+        for it in items:
+            ts = it.get("timestamp")
+            if not ts:
+                continue
+            try:
+                d = datetime.fromisoformat(str(ts).replace("Z", "+00:00")).date()
+            except Exception:
+                continue
+            rating_days.add(d)
+        streak = 0
+        cursor = today
+        while cursor in rating_days:
+            streak += 1
+            cursor = cursor - timedelta(days=1)
+        if streak >= 3:
+            captions.append({
+                "type": "streak",
+                "text": f"{streak}-day rating streak.",
+            })
+
+        # ── random_pick: a random top-rated film ────────────────────
+        import random
+        top_rated = [it for it in items if (it.get("rating") or 0) >= 4.5 and it.get("title")]
+        if top_rated:
+            pick = random.choice(top_rated)
+            captions.append({
+                "type": "random_pick",
+                "text": f"Top pick today: {pick['title']}.",
+            })
+
+        # Total ratings milestone — every 100 films crossed gets a
+        # one-shot caption that sits in the rotation.
+        total = sum(1 for it in items if it.get("media_type") == "movie")
+        if total >= 100 and total % 100 == 0:
+            captions.append({
+                "type": "milestone",
+                "text": f"You've crossed {total} films.",
+            })
+        elif total >= 100:
+            # Nearest-100 callout that's still meaningful.
+            nearest = (total // 100) * 100
+            captions.append({
+                "type": "milestone",
+                "text": f"You've crossed {nearest} films.",
+            })
+
+        return captions
+
+    @staticmethod
+    def _build_diary_payload(items: List[dict]) -> Dict[str, Any]:
+        """Diary tab data: year chart, per-year heatmaps, monthly
+        highlight reel. Recently-watched list is paginated separately —
+        not included in the blob."""
+        year_chart: Dict[str, int] = {}
+        # heatmaps: {year: {YYYY-MM-DD: count}} — count is # of titles
+        # logged on that day, deduped if same film appears twice on the
+        # same day.
+        heatmaps: Dict[str, Dict[str, set]] = {}
+
+        # Per-month aggregations for the highlight reel.
+        from collections import defaultdict, Counter
+        month_buckets: Dict[str, List[dict]] = defaultdict(list)
+
+        for it in items:
+            ts = it.get("timestamp")
+            if not ts:
+                continue
+            try:
+                d = datetime.fromisoformat(str(ts).replace("Z", "+00:00")).date()
+            except Exception:
+                continue
+            yr = str(d.year)
+            year_chart[yr] = year_chart.get(yr, 0) + 1
+            heatmaps.setdefault(yr, {}).setdefault(d.isoformat(), set()).add(
+                (it.get("title") or "", it.get("media_type") or "movie")
+            )
+            month_buckets[f"{d.year:04d}-{d.month:02d}"].append(it)
+
+        # Flatten heatmap sets to counts so the blob is JSON-safe.
+        heatmaps_flat: Dict[str, Dict[str, int]] = {
+            yr: {day: len(entries) for day, entries in days.items()}
+            for yr, days in heatmaps.items()
+        }
+
+        # Monthly highlight reel — keep the last 6 months that have data,
+        # most-recent first. Each: top film (highest rating, then most
+        # recent), total watched, dominant genre.
+        highlight_months = sorted(month_buckets.keys(), reverse=True)[:6]
+        monthly_highlights: List[Dict[str, Any]] = []
+        for m in highlight_months:
+            bucket = month_buckets[m]
+            top = max(
+                bucket,
+                key=lambda it: (float(it.get("rating") or 0), str(it.get("timestamp") or "")),
+            )
+            genre_counts: Counter = Counter()
+            for it in bucket:
+                for g in it.get("genres") or []:
+                    genre_counts[g] += 1
+            dom_genre = genre_counts.most_common(1)[0][0] if genre_counts else None
+            monthly_highlights.append({
+                "month":  m,
+                "total":  len(bucket),
+                "top_film": {
+                    "title":  top.get("title"),
+                    "year":   top.get("year"),
+                    "rating": top.get("rating"),
+                },
+                "dominant_genre": dom_genre,
+            })
+
+        return {
+            "year_chart":         year_chart,
+            "heatmaps":           heatmaps_flat,
+            "monthly_highlights": monthly_highlights,
+        }
 
     # ── Aggregation ───────────────────────────────────────────────────────
 
@@ -483,9 +802,19 @@ class StatsService:
     # ── LLM personality essay ─────────────────────────────────────────────
 
     @staticmethod
-    def _maybe_llm_personality(payload: Dict[str, Any]) -> Optional[str]:
-        """Generate a 3-4 sentence taste reading via Groq. Returns None on
-        any failure — the rest of the stats payload still ships."""
+    def _maybe_llm_personality(
+        payload: Dict[str, Any],
+        enriched: Optional[List[dict]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Generate a layered taste-as-growth essay via Groq.
+
+        Returns a dict with: teaser (3-4 lines), bullets (3 evidence
+        strings), and longform (longitudinal_arc[3], dense_paragraph,
+        letter, quarterly_entries[]). All produced in ONE Groq call
+        returning JSON so view time is just a JSON read.
+
+        Returns None on any failure or when the user has < 10 rated
+        titles — the rest of the stats payload still ships."""
         try:
             from src.utils.llm_client import LLMClient, LLMProvider
             from config.settings import get_settings
@@ -493,14 +822,19 @@ class StatsService:
             settings = get_settings()
             if not settings.groq_api_key or settings.llm_provider != "groq":
                 return None
-            if (payload.get("total_films") or 0) + (payload.get("total_series") or 0) < 10:
+            total_titles = (payload.get("total_films") or 0) + (payload.get("total_series") or 0)
+            if total_titles < 10:
                 # Not enough signal for a useful reading.
                 return None
 
-            top_genres = ", ".join(
-                f"{g['name']} ({g['count']})" for g in (payload.get("top_genres") or [])[:3]
+            top_genres_str = ", ".join(
+                f"{g['name']} ({g['count']})" for g in (payload.get("top_genres") or [])[:5]
             ) or "varied"
-            top_director = (payload.get("top_directors") or [{}])[0]
+            top_directors = (payload.get("top_directors") or [])[:3]
+            top_directors_str = ", ".join(
+                f"{d['name']} ({d['count']} films, avg {d.get('avg_rating') or 0}★)"
+                for d in top_directors
+            ) or "none"
             top_decade = max(payload.get("decade_breakdown") or [], key=lambda d: d["count"], default=None)
             decade_str = f"{top_decade['decade']}s" if top_decade else "no clear decade"
 
@@ -513,41 +847,182 @@ class StatsService:
                 else "near the crowd consensus"
             )
 
+            # Year-over-year + per-quarter signal lets the model write a
+            # growth narrative instead of an abstract taste reading. Keep
+            # the data set bounded so the prompt stays under the model's
+            # context budget — 5 top films per quarter is plenty.
+            yoy_summary, quarter_summary = StatsService._build_yoy_summary(enriched or [])
+
             prompt = (
-                "You are a film critic profiling a viewer's taste based on their "
-                "ratings library. In 3-4 sentences, in second person ('You'), write "
-                "a personal, observational reading. Be specific and confident. "
-                "No clichés like 'you love movies'. Mention concrete patterns from "
-                "the data. Output the reading only — no preamble.\n\n"
-                f"STATS:\n"
-                f"- Total titles rated: {(payload.get('total_films') or 0) + (payload.get('total_series') or 0)}\n"
+                "You are writing a layered taste-as-personality reading for a "
+                "film viewer. The reading should feel like a journal — observing "
+                "who they were when they started rating, how their taste has "
+                "shifted, and what that says about them now. Use concrete film "
+                "names from the data, not generic adjectives.\n\n"
+                "Return a JSON object with EXACTLY these keys:\n"
+                "  teaser:           a 3-4 line paragraph (under 360 chars) for the Profile teaser\n"
+                "  bullets:          array of 3 short evidence sentences (each under 110 chars)\n"
+                "  longform:\n"
+                "    longitudinal_arc:  array of EXACTLY 3 paragraphs — who you were, how taste shifted, what it says now\n"
+                "    dense_paragraph:   one 150-180 word paragraph synthesizing taste + growth\n"
+                "    letter:            a stylized 'letter to a viewer' (~150 words) addressed in second person\n"
+                "    quarterly_entries: array of short journal entries, one per quarter present in the data; each {quarter: 'YYYY Qn', text: '<60 words>'}\n\n"
+                "Write in second person ('You'). No clichés ('you love movies'). "
+                "Lead with what's distinctive about THIS library, not what's common. "
+                "Quarterly entries should reflect what was actually rated in that quarter "
+                "— call out at least one film by name in each.\n\n"
+                f"LIBRARY DATA:\n"
+                f"- Total titles rated: {total_titles}\n"
                 f"- Average rating: {payload.get('avg_rating')}\n"
-                f"- Top genres: {top_genres}\n"
-                f"- Most-rated director: {top_director.get('name', 'none')} "
-                f"({top_director.get('count', 0)} films, avg {top_director.get('avg_rating', 0)}★)\n"
+                f"- Top genres: {top_genres_str}\n"
+                f"- Most-rated directors: {top_directors_str}\n"
                 f"- Dominant decade: {decade_str}\n"
                 f"- Foreign cinema: {payload.get('foreign_pct')}%\n"
-                f"- Hidden gems (vote_count < 100K): {payload.get('hidden_gem_pct')}%\n"
-                f"- Generosity vs TMDB: {generosity_str}\n"
+                f"- Hidden gems (<100K TMDB votes): {payload.get('hidden_gem_pct')}%\n"
+                f"- Crowd lean: {generosity_str}\n"
+                f"- Year-over-year:\n{yoy_summary}\n"
+                f"- Per-quarter top picks:\n{quarter_summary}\n"
             )
 
             client = LLMClient(
                 provider=LLMProvider.GROQ,
                 model=getattr(settings, "groq_model_fast", None) or None,
             )
+            # Ask for JSON. Groq supports response_format={"type":"json_object"}
+            # on llama-3.x — if the client doesn't pass that through we fall
+            # back to extracting a {...} block from the response text.
             text = client.generate(
                 prompt=prompt,
-                system_prompt=None,
-                temperature=0.6,
-                max_tokens=240,
+                system_prompt=(
+                    "Output ONLY a JSON object with the requested keys. No "
+                    "preamble, no markdown fences, no commentary."
+                ),
+                temperature=0.7,
+                max_tokens=1400,
             )
-            text = (text or "").strip().strip('"').strip()
-            if not text:
-                return None
-            return text[:600]  # hard cap so it always fits a card
+            text = (text or "").strip()
+            # Strip ```json fences if present.
+            if text.startswith("```"):
+                text = text.strip("`")
+                if text.lower().startswith("json"):
+                    text = text[4:]
+                text = text.strip()
+            try:
+                parsed = json.loads(text)
+            except json.JSONDecodeError:
+                # Try to recover a {...} substring.
+                start = text.find("{")
+                end = text.rfind("}")
+                if start >= 0 and end > start:
+                    try:
+                        parsed = json.loads(text[start:end + 1])
+                    except json.JSONDecodeError:
+                        logger.warning("LLM personality: JSON parse failed after recovery")
+                        return None
+                else:
+                    logger.warning("LLM personality: no JSON in response")
+                    return None
+
+            return StatsService._normalize_personality(parsed)
         except Exception as exc:
             logger.warning(f"LLM personality generation failed: {exc}")
             return None
+
+    @staticmethod
+    def _build_yoy_summary(enriched: List[dict]) -> tuple[str, str]:
+        """Render compact year-over-year + per-quarter signal lines for
+        the LLM prompt. Returns (yoy_text, quarter_text)."""
+        from collections import defaultdict, Counter
+        by_year: Dict[int, List[dict]] = defaultdict(list)
+        by_q: Dict[str, List[dict]] = defaultdict(list)
+        for it in enriched:
+            ts = it.get("timestamp")
+            if not ts:
+                continue
+            try:
+                d = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+            except Exception:
+                continue
+            by_year[d.year].append(it)
+            q = (d.month - 1) // 3 + 1
+            by_q[f"{d.year} Q{q}"].append(it)
+
+        yoy_lines: List[str] = []
+        for yr in sorted(by_year.keys()):
+            bucket = by_year[yr]
+            avg = sum(float(b.get("rating") or 0) for b in bucket) / len(bucket) if bucket else 0
+            genre_counts: Counter = Counter()
+            for b in bucket:
+                for g in b.get("genres") or []:
+                    genre_counts[g] += 1
+            top = genre_counts.most_common(1)[0][0] if genre_counts else "n/a"
+            yoy_lines.append(f"  {yr}: {len(bucket)} films, avg {avg:.1f}★, top genre {top}")
+
+        # Per-quarter top 3 by rating.
+        q_lines: List[str] = []
+        for q in sorted(by_q.keys()):
+            bucket = sorted(by_q[q], key=lambda b: float(b.get("rating") or 0), reverse=True)[:3]
+            titles = ", ".join(b.get("title") or "?" for b in bucket if b.get("title")) or "n/a"
+            q_lines.append(f"  {q}: {titles}")
+
+        return "\n".join(yoy_lines) or "  (no dated ratings)", "\n".join(q_lines) or "  (no dated ratings)"
+
+    @staticmethod
+    def _normalize_personality(parsed: Any) -> Optional[Dict[str, Any]]:
+        """Coerce whatever shape the LLM returned into the canonical
+        personality dict. Discards entries that don't pass minimal
+        sanity checks rather than failing the whole compute."""
+        if not isinstance(parsed, dict):
+            return None
+        teaser = str(parsed.get("teaser") or "").strip()
+        bullets_raw = parsed.get("bullets") or []
+        bullets = [str(b).strip() for b in bullets_raw if str(b or "").strip()][:5]
+        longform_in = parsed.get("longform") or {}
+        if not isinstance(longform_in, dict):
+            longform_in = {}
+        arc_raw = longform_in.get("longitudinal_arc") or []
+        arc = [str(a).strip() for a in arc_raw if str(a or "").strip()][:3]
+        dense_paragraph = str(longform_in.get("dense_paragraph") or "").strip()
+        letter = str(longform_in.get("letter") or "").strip()
+        quarterly_raw = longform_in.get("quarterly_entries") or []
+        quarterly: List[Dict[str, Any]] = []
+        if isinstance(quarterly_raw, list):
+            for entry in quarterly_raw:
+                if not isinstance(entry, dict):
+                    continue
+                q = str(entry.get("quarter") or "").strip()
+                t = str(entry.get("text") or "").strip()
+                if q and t:
+                    quarterly.append({"quarter": q, "text": t})
+
+        if not teaser:
+            return None  # at minimum we need the teaser
+
+        return {
+            "teaser":  teaser[:600],
+            "bullets": bullets,
+            "longform": {
+                "longitudinal_arc":  arc,
+                "dense_paragraph":   dense_paragraph[:1500],
+                "letter":            letter[:1500],
+                "quarterly_entries": quarterly,
+            },
+        }
+
+
+def _empty_personality() -> Dict[str, Any]:
+    """Shape we always emit when no LLM essay is available — keeps the
+    frontend rendering predictable instead of branching on null."""
+    return {
+        "teaser":  None,
+        "bullets": [],
+        "longform": {
+            "longitudinal_arc": [],
+            "dense_paragraph":  None,
+            "letter":           None,
+            "quarterly_entries": [],
+        },
+    }
 
 
 # ── Trigger throttle ──────────────────────────────────────────────────────
