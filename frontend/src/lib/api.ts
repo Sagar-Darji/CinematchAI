@@ -321,6 +321,131 @@ export interface HeatmapData {
   counts: Record<string, number>
 }
 
+// ── Profile (precomputed-artifact API, new in Commit 2) ──────────────────
+
+export interface ProfileCaption {
+  type: 'on_this_day' | 'recent' | 'streak' | 'random_pick' | 'milestone'
+  text: string
+}
+
+export interface ProfileStatChips {
+  films?: number
+  decade_lean?: string | null
+  top_director?: { name?: string | null; count?: number | null } | null
+  top_genre?:    { name?: string | null; count?: number | null } | null
+}
+
+export interface ProfileIdentity {
+  user_id: string
+  username: string | null
+  avatar_url: string | null
+  banner_film_id: number | null
+  stat_chips: ProfileStatChips
+  captions: ProfileCaption[]
+}
+
+export interface ProfilePersonality {
+  teaser: string | null
+  bullets: string[]
+  longform: {
+    longitudinal_arc: string[]
+    dense_paragraph: string | null
+    letter: string | null
+    quarterly_entries: Array<{ quarter: string; text: string }>
+  }
+}
+
+export interface ProfileOverview {
+  favorites: FavoriteItem[]
+  personality: ProfilePersonality
+  insights: Array<{ type: string; title: string; value: string; context?: string }>
+  top_genres: Array<{ name: string; count: number }>
+  decades: Array<{ decade: number; label: string; count: number }>
+  people: {
+    directors: Array<{ name: string; count: number; avg_rating?: number | null }>
+    actors:    Array<{ name: string; count: number }>
+  }
+  histogram: Array<{ rating: number; count: number }>
+  totals: {
+    films: number
+    series: number
+    runtime_minutes: number
+    foreign_pct: number
+    hidden_gem_pct: number
+    generosity_score: number
+    avg_rating: number | null
+  }
+}
+
+export interface ProfileDiaryPayload {
+  year_chart: Record<string, number>
+  heatmaps:   Record<string, Record<string, number>>  // {year: {YYYY-MM-DD: count}}
+  monthly_highlights: Array<{
+    month: string
+    total: number
+    top_film: { title: string | null; year: number | null; rating: number | null }
+    dominant_genre: string | null
+  }>
+}
+
+export interface ProfilePayload {
+  schema_version: number
+  computed_at: string
+  identity: ProfileIdentity
+  overview: ProfileOverview
+  diary: ProfileDiaryPayload
+}
+
+export interface ProfileCoreResponse {
+  user_id: string
+  identity: ProfileIdentity
+  favorites: FavoriteItem[]
+  live_total: number
+  computed_at: string | null
+  is_stale: boolean
+}
+
+export interface ProfileAnalyticsResponse {
+  status: 'ok' | 'pending' | 'missing'
+  computed_at: string | null
+  payload: ProfilePayload | null
+  is_stale?: boolean
+}
+
+export interface DiaryEntry {
+  movie_id: string
+  title: string | null
+  year: number | null
+  poster_path: string | null
+  media_type: MediaType
+  rating: number
+  timestamp: string | null
+  review_text: string | null
+}
+
+export interface DiaryPage {
+  items: DiaryEntry[]
+  next_cursor: string | null
+  has_more: boolean
+}
+
+export interface LibraryItem {
+  movie_id: string
+  title: string | null
+  year: number | null
+  poster_path: string | null
+  media_type: MediaType
+  rating: number
+  timestamp: string | null
+}
+
+export interface LibraryPage {
+  items: LibraryItem[]
+  next_cursor: number | null
+  has_more: boolean
+  total: number
+}
+
 export interface Review {
   tmdb_id: number
   media_type: MediaType
@@ -654,6 +779,69 @@ export async function importLetterboxd(_userId: string, file: File): Promise<{ j
   }))
   if (!res.ok) throw new Error(await res.text())
   return res.json()
+}
+
+// ── New precomputed-Profile endpoints ─────────────────────────────────
+
+export async function getProfileCore(userId: string): Promise<ProfileCoreResponse> {
+  const res = handle401IfNeeded(await fetch(`${BASE}/profile/core/${userId}`, { headers: authHeaders() }))
+  if (!res.ok) throw new Error(await res.text())
+  return res.json()
+}
+
+export async function getProfileAnalytics(userId: string): Promise<ProfileAnalyticsResponse> {
+  const res = handle401IfNeeded(await fetch(`${BASE}/profile/analytics/${userId}`, { headers: authHeaders() }))
+  if (!res.ok) throw new Error(await res.text())
+  return res.json()
+}
+
+export async function getProfileDiary(userId: string, opts?: { cursor?: string; limit?: number }): Promise<DiaryPage> {
+  const params = new URLSearchParams()
+  if (opts?.cursor) params.set('cursor', opts.cursor)
+  if (opts?.limit)  params.set('limit', String(opts.limit))
+  const q = params.toString()
+  const res = handle401IfNeeded(await fetch(
+    `${BASE}/profile/diary/${userId}${q ? `?${q}` : ''}`,
+    { headers: authHeaders() },
+  ))
+  if (!res.ok) throw new Error(await res.text())
+  return res.json()
+}
+
+export interface LibraryQuery {
+  mediaType?: MediaType
+  sort?: 'rating' | 'date_watched' | 'title' | 'year'
+  genres?: string[]
+  decades?: number[]
+  q?: string
+  cursor?: number
+  limit?: number
+}
+
+export async function getProfileLibrary(userId: string, query: LibraryQuery = {}): Promise<LibraryPage> {
+  const params = new URLSearchParams()
+  if (query.mediaType) params.set('media_type', query.mediaType)
+  if (query.sort)      params.set('sort', query.sort)
+  if (query.genres && query.genres.length)   params.set('genres',  query.genres.join(','))
+  if (query.decades && query.decades.length) params.set('decades', query.decades.join(','))
+  if (query.q)         params.set('q', query.q)
+  if (query.cursor != null) params.set('cursor', String(query.cursor))
+  if (query.limit)     params.set('limit', String(query.limit))
+  const qs = params.toString()
+  const res = handle401IfNeeded(await fetch(
+    `${BASE}/profile/library/${userId}${qs ? `?${qs}` : ''}`,
+    { headers: authHeaders() },
+  ))
+  if (!res.ok) throw new Error(await res.text())
+  return res.json()
+}
+
+export async function recomputeProfile(userId: string): Promise<void> {
+  const res = handle401IfNeeded(await fetch(`${BASE}/profile/${userId}/recompute`, {
+    method: 'POST',
+    headers: authHeaders(),
+  }))
+  if (!res.ok) throw new Error(await res.text())
 }
 
 export async function pollImportJob(jobId: string): Promise<{ status: string; progress: number; result?: unknown }> {

@@ -23,7 +23,7 @@ export default function Onboarding() {
   const [movies, setMovies] = useState<OnboardingMovie[]>([])
   const [ratings, setRatings] = useState<Record<string, number>>({})
   const [loadingMovies, setLoadingMovies] = useState(false)
-  const [csvContent, setCsvContent] = useState('')
+  const [pickedFile, setPickedFile] = useState<File | null>(null)
   const [importJob, setImportJob] = useState<{ id: string; total: number } | null>(null)
   const [importProgress, setImportProgress] = useState(0)
   const [submitting, setSubmitting] = useState(false)
@@ -129,17 +129,15 @@ export default function Onboarding() {
   const handleLetterboxdUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
-    const reader = new FileReader()
-    reader.onload = (ev) => setCsvContent(ev.target?.result as string)
-    reader.readAsText(file)
+    setPickedFile(file)
   }
 
   const handleLetterboxdSubmit = async () => {
-    if (!csvContent) { setError('Please select your Letterboxd CSV file.'); return }
+    if (!pickedFile) { setError('Please select your Letterboxd .zip or ratings.csv.'); return }
     setSubmitting(true)
     setError('')
     try {
-      const result = await importLetterboxd(username, csvContent)
+      const result = await importLetterboxd(username, pickedFile)
       setImportJob({ id: result.job_id, total: result.total_movies })
       setStep('importing')
     } catch (e) {
@@ -466,22 +464,22 @@ export default function Onboarding() {
             <label
               className="flex flex-col items-center justify-center gap-3 rounded-xl p-8 cursor-pointer transition-colors"
               style={{
-                border: `2px dashed ${csvContent ? 'var(--accent-gold)' : 'var(--border)'}`,
+                border: `2px dashed ${pickedFile ? 'var(--accent-gold)' : 'var(--border)'}`,
                 background: 'var(--bg-card)',
               }}
             >
-              <Upload size={32} style={{ color: csvContent ? 'var(--accent-gold)' : 'var(--text-muted)' }} />
-              <span className="text-sm font-medium" style={{ color: csvContent ? 'var(--accent-gold)' : 'var(--text-muted)' }}>
-                {csvContent ? 'CSV loaded ✓ — ready to import' : 'Click to select ratings.csv'}
+              <Upload size={32} style={{ color: pickedFile ? 'var(--accent-gold)' : 'var(--text-muted)' }} />
+              <span className="text-sm font-medium" style={{ color: pickedFile ? 'var(--accent-gold)' : 'var(--text-muted)' }}>
+                {pickedFile ? `${pickedFile.name} ✓ — ready to import` : 'Click to select your Letterboxd .zip (or ratings.csv)'}
               </span>
-              <input type="file" accept=".csv" onChange={handleLetterboxdUpload} className="hidden" />
+              <input type="file" accept=".zip,.csv" onChange={handleLetterboxdUpload} className="hidden" />
             </label>
 
             {error && <p className="text-sm" style={{ color: 'var(--accent-red)' }}>{error}</p>}
 
             <button
               onClick={handleLetterboxdSubmit}
-              disabled={submitting || !csvContent}
+              disabled={submitting || !pickedFile}
               className="w-full py-3 rounded-xl font-bold flex items-center justify-center gap-2 disabled:opacity-40"
               style={{ background: 'var(--accent-gold)', color: '#0a0a0f', border: 'none', cursor: 'pointer' }}
             >
