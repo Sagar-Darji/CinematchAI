@@ -1,10 +1,11 @@
 """Letterboxd Import Service - Import ratings from Letterboxd CSV export."""
 
 import csv
+import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
-from io import StringIO
-from typing import Callable, Dict, List, Optional, Tuple
+from io import BytesIO, StringIO
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import pandas as pd
 import requests
@@ -22,6 +23,213 @@ class LetterboxdService:
         """Initialize Letterboxd service."""
         self.user_service = get_user_service()
         self.tmdb_base_url = "https://api.themoviedb.org/3"
+
+    # ── ZIP extraction ────────────────────────────────────────────────────
+
+    # CSVs we know how to ingest from a Letterboxd export. Filenames are
+    # always lower-cased before lookup so case-variant exports still hit.
+    _ZIP_FILES = {
+        "ratings": "ratings.csv",
+        "diary": "diary.csv",
+        "reviews": "reviews.csv",
+        "watchlist": "watchlist.csv",
+        "watched": "watched.csv",
+        "likes_films": "likes/films.csv",
+    }
+
+    def extract_zip_export(self, zip_bytes: bytes) -> Dict[str, Any]:
+        """Open a Letterboxd ZIP export in-memory and produce everything
+        downstream consumers need.
+
+        Returns:
+            {
+              "merged_ratings_csv": str | None,  # ratings.csv with `Date`
+                  # overridden by diary.csv's `Watched Date` where matched
+                  # by Letterboxd URI (fallback: Name + Year). None when
+                  # ratings.csv is absent — the ratings worker won't run.
+              "reviews":   [ {tmdb_hint, name, year, uri, rating, review_text, watched_date} ],
+              "watchlist": [ {name, year, uri} ],
+              "watched":   [ {name, year, uri, date} ],
+              "likes":     [ {name, year, uri} ],
+              "diary_count":   int,  # how many diary rows we overlaid
+              "ratings_count": int,
+            }
+
+        Tolerates missing files — every section is optional. Raises
+        ValueError only when the ZIP itself is malformed.
+        """
+        try:
+            zf = zipfile.ZipFile(BytesIO(zip_bytes))
+        except zipfile.BadZipFile as e:
+            raise ValueError(f"Uploaded file is not a valid ZIP: {e}")
+
+        # Build a case-insensitive name → ZipInfo map so likes/films.csv
+        # resolves whether the export uses "Likes/films.csv" or anything.
+        name_map: Dict[str, str] = {n.lower(): n for n in zf.namelist()}
+
+        def _read(lname: str) -> Optional[pd.DataFrame]:
+            actual = name_map.get(lname)
+            if not actual:
+                return None
+            try:
+                with zf.open(actual) as fh:
+                    return pd.read_csv(fh)
+            except Exception as exc:
+                logger.warning(f"Letterboxd ZIP: failed to read {actual}: {exc}")
+                return None
+
+        ratings_df = _read(self._ZIP_FILES["ratings"])
+        diary_df = _read(self._ZIP_FILES["diary"])
+        reviews_df = _read(self._ZIP_FILES["reviews"])
+        watchlist_df = _read(self._ZIP_FILES["watchlist"])
+        watched_df = _read(self._ZIP_FILES["watched"])
+        likes_df = _read(self._ZIP_FILES["likes_films"])
+
+        result: Dict[str, Any] = {
+            "merged_ratings_csv": None,
+            "reviews": [],
+            "watchlist": [],
+            "watched": [],
+            "likes": [],
+            "diary_count": 0,
+            "ratings_count": 0,
+        }
+
+        # ── Merge ratings + diary's Watched Date ──────────────────────
+        if ratings_df is not None and not ratings_df.empty:
+            merged = self._overlay_watched_dates(ratings_df, diary_df)
+            buf = StringIO()
+            merged.to_csv(buf, index=False)
+            result["merged_ratings_csv"] = buf.getvalue()
+            result["ratings_count"] = int(len(merged))
+            if diary_df is not None:
+                result["diary_count"] = int(self._last_overlay_hits)
+
+        # ── Reviews ───────────────────────────────────────────────────
+        if reviews_df is not None and not reviews_df.empty:
+            result["reviews"] = self._parse_reviews(reviews_df)
+
+        # ── Watchlist / watched / likes ───────────────────────────────
+        for key, df in (
+            ("watchlist", watchlist_df),
+            ("watched", watched_df),
+            ("likes", likes_df),
+        ):
+            if df is not None and not df.empty:
+                result[key] = self._parse_simple_list(df)
+
+        return result
+
+    _last_overlay_hits: int = 0
+
+    def _overlay_watched_dates(
+        self,
+        ratings_df: pd.DataFrame,
+        diary_df: Optional[pd.DataFrame],
+    ) -> pd.DataFrame:
+        """Return a copy of ratings_df with its `Date` column replaced by
+        diary.csv's `Watched Date` wherever a row matches by Letterboxd URI
+        (preferred — canonical) or (Name, Year) (fallback).
+
+        Letterboxd's ratings.csv `Date` is the rating-add date, NOT when the
+        film was watched. Users who back-fill their library on Letterboxd
+        end up with every row stamped to one day, which then masquerades
+        as "watched in 2026" everywhere downstream. diary.csv has the real
+        `Watched Date` for any film logged to the diary.
+        """
+        merged = ratings_df.copy()
+        if "Date" not in merged.columns:
+            merged["Date"] = None
+
+        self._last_overlay_hits = 0
+        if diary_df is None or diary_df.empty:
+            return merged
+        if "Watched Date" not in diary_df.columns:
+            return merged
+
+        # Build lookups from diary. Watched Date is the column we want; URI
+        # is the canonical join key.
+        uri_to_watched: Dict[str, str] = {}
+        ny_to_watched: Dict[Tuple[str, str], str] = {}
+        for _, row in diary_df.iterrows():
+            wd = row.get("Watched Date")
+            if not pd.notna(wd):
+                continue
+            wd_str = str(wd)
+            uri = row.get("Letterboxd URI")
+            if pd.notna(uri) and str(uri).strip():
+                uri_to_watched[str(uri).strip()] = wd_str
+            name = row.get("Name")
+            year = row.get("Year")
+            if pd.notna(name):
+                ny_key = (str(name).strip().lower(), str(year) if pd.notna(year) else "")
+                ny_to_watched.setdefault(ny_key, wd_str)
+
+        hits = 0
+        new_dates: List[Any] = []
+        for _, row in merged.iterrows():
+            chosen: Optional[str] = None
+            uri = row.get("Letterboxd URI") if "Letterboxd URI" in merged.columns else None
+            if pd.notna(uri) and str(uri).strip() in uri_to_watched:
+                chosen = uri_to_watched[str(uri).strip()]
+            else:
+                name = row.get("Name")
+                year = row.get("Year") if "Year" in merged.columns else None
+                if pd.notna(name):
+                    ny_key = (str(name).strip().lower(), str(year) if pd.notna(year) else "")
+                    chosen = ny_to_watched.get(ny_key)
+            if chosen:
+                hits += 1
+                new_dates.append(chosen)
+            else:
+                # Fall back to whatever Date was already there (rating-add date).
+                new_dates.append(row.get("Date"))
+
+        merged["Date"] = new_dates
+        self._last_overlay_hits = hits
+        logger.info(
+            f"Letterboxd ZIP: overlaid {hits}/{len(merged)} ratings with diary Watched Date"
+        )
+        return merged
+
+    @staticmethod
+    def _parse_reviews(df: pd.DataFrame) -> List[Dict[str, Any]]:
+        """reviews.csv columns: Date, Name, Year, Letterboxd URI, Rating,
+        Rewatch, Review, Tags, Watched Date."""
+        out: List[Dict[str, Any]] = []
+        for _, row in df.iterrows():
+            text = row.get("Review")
+            if not pd.notna(text) or not str(text).strip():
+                continue
+            entry: Dict[str, Any] = {
+                "name": str(row["Name"]) if pd.notna(row.get("Name")) else None,
+                "year": int(row["Year"]) if pd.notna(row.get("Year")) and float(row["Year"]).is_integer() else None,
+                "uri": str(row["Letterboxd URI"]) if pd.notna(row.get("Letterboxd URI")) else None,
+                "rating": float(row["Rating"]) if pd.notna(row.get("Rating")) else None,
+                "review_text": str(text).strip(),
+                "watched_date": str(row["Watched Date"]) if pd.notna(row.get("Watched Date")) else None,
+            }
+            if entry["name"]:
+                out.append(entry)
+        return out
+
+    @staticmethod
+    def _parse_simple_list(df: pd.DataFrame) -> List[Dict[str, Any]]:
+        """Generic (Name, Year, URI[, Date]) parser for watchlist / watched
+        / likes/films exports."""
+        out: List[Dict[str, Any]] = []
+        for _, row in df.iterrows():
+            name = row.get("Name")
+            if not pd.notna(name):
+                continue
+            entry: Dict[str, Any] = {
+                "name": str(name).strip(),
+                "year": int(row["Year"]) if pd.notna(row.get("Year")) and float(row["Year"]).is_integer() else None,
+                "uri": str(row["Letterboxd URI"]) if pd.notna(row.get("Letterboxd URI")) else None,
+                "date": str(row["Date"]) if "Date" in df.columns and pd.notna(row.get("Date")) else None,
+            }
+            out.append(entry)
+        return out
 
     def import_from_csv(
         self,

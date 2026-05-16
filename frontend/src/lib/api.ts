@@ -640,11 +640,17 @@ export async function onboardUser(
   }))
 }
 
-export async function importLetterboxd(userId: string, csvContent: string): Promise<{ job_id: string; total_movies: number }> {
+/** Upload a Letterboxd export. `file` can be the full ZIP (preferred — we
+ * extract ratings + diary + reviews + watchlist + likes) or a bare
+ * ratings.csv (back-compat). The backend detects ZIP vs CSV by magic bytes,
+ * so we send whatever the user picks as multipart/form-data. */
+export async function importLetterboxd(_userId: string, file: File): Promise<{ job_id: string; total_movies: number }> {
+  const form = new FormData()
+  form.append('file', file)
   const res = handle401IfNeeded(await fetch(`${BASE}/users/import/letterboxd`, {
     method: 'POST',
-    headers: authHeaders({ 'Content-Type': 'application/json' }),
-    body: JSON.stringify({ user_id: userId, csv_content: csvContent }),
+    headers: authHeaders(),  // multipart boundary set by browser; no JSON header
+    body: form,
   }))
   if (!res.ok) throw new Error(await res.text())
   return res.json()

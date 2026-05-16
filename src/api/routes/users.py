@@ -8,7 +8,6 @@ from pydantic import BaseModel, Field
 from src.api.deps import get_current_user
 from src.api.schemas.request import (
     FeedbackRequest,
-    LetterboxdImportRequest,
     OnboardingRequest,
     UpdateContextRequest,
 )
@@ -588,36 +587,79 @@ async def update_context(
     },
 )
 async def import_letterboxd(
-    request: LetterboxdImportRequest,
+    file: UploadFile = File(..., description="Letterboxd export .zip OR raw ratings.csv"),
     current_user: str = Depends(get_current_user),
 ):
+    """Import a Letterboxd library (full ZIP or bare ratings.csv).
+
+    For ZIP uploads we extract ratings.csv (required), then overlay
+    diary.csv's `Watched Date` onto each rating's timestamp so the
+    Profile's heatmap + 'films this year' reflect the actual watch
+    dates. We also stage reviews.csv, watchlist.csv, watched.csv and
+    likes/films.csv for the chunk worker to ingest after the ratings
+    phase.
+
+    For bare CSV uploads (back-compat) we treat the upload as ratings.csv
+    only — the legacy single-file path.
+
+    Returns 202 with a job_id. Poll GET /users/jobs/{job_id} for progress.
     """
-    Import user ratings from Letterboxd CSV export (ASYNC).
-
-    - **user_id**: User identifier
-    - **csv_content**: Letterboxd CSV export file content
-
-    **Returns immediately (202 Accepted) with job_id.**
-    Use GET /users/jobs/{job_id} to check progress.
-
-    **Production-grade async processing:**
-    - Immediate response (no timeout)
-    - Progress tracking
-    - Handles 100s of ratings without blocking
-    """
-    logger.info(f"POST /users/import/letterboxd: user_id={current_user}")
+    logger.info(
+        f"POST /users/import/letterboxd: user_id={current_user} filename={file.filename!r} "
+        f"content_type={file.content_type!r}"
+    )
 
     try:
         import pandas as pd
         from io import StringIO
         from datetime import datetime as _dt
 
+        raw = await file.read()
+        if not raw:
+            raise ValueError("Uploaded file is empty.")
+
+        filename = (file.filename or "").lower()
+        # Detect ZIP by magic bytes — content_type alone is unreliable from
+        # browsers / curl. PK\x03\x04 is the ZIP local-file-header signature.
+        is_zip = raw[:4] == b"PK\x03\x04" or filename.endswith(".zip")
+
+        extras_payload: Optional[dict] = None
+        if is_zip:
+            from src.services.letterboxd_service import get_letterboxd_service
+            extracted = get_letterboxd_service().extract_zip_export(raw)
+            csv_text = extracted.get("merged_ratings_csv")
+            if not csv_text:
+                raise ValueError(
+                    "ZIP did not contain ratings.csv. Make sure you uploaded the "
+                    "Letterboxd export ZIP unmodified."
+                )
+            extras_payload = {
+                "reviews":   extracted.get("reviews", []),
+                "watchlist": extracted.get("watchlist", []),
+                "watched":   extracted.get("watched", []),
+                "likes":     extracted.get("likes", []),
+                "diary_count": extracted.get("diary_count", 0),
+            }
+            logger.info(
+                f"ZIP extracted: {extracted.get('ratings_count', 0)} ratings, "
+                f"{extracted.get('diary_count', 0)} diary overlays, "
+                f"{len(extras_payload['reviews'])} reviews, "
+                f"{len(extras_payload['watchlist'])} watchlist, "
+                f"{len(extras_payload['likes'])} likes"
+            )
+        else:
+            # Bare CSV upload. Decode best-effort; reject if not UTF-8-ish.
+            try:
+                csv_text = raw.decode("utf-8")
+            except UnicodeDecodeError:
+                csv_text = raw.decode("latin-1", errors="replace")
+
         # Parse CSV to get total count
-        df = pd.read_csv(StringIO(request.csv_content))
+        df = pd.read_csv(StringIO(csv_text))
         rated_df = df[df["Rating"].notna()]
         total_movies = len(rated_df)
         if total_movies == 0:
-            raise ValueError("CSV has no rated rows. Make sure you uploaded ratings.csv, not the diary or watchlist.")
+            raise ValueError("CSV has no rated rows. Make sure you uploaded ratings.csv or the full Letterboxd ZIP.")
 
         # Single-flight guard: if a Letterboxd import for this user is
         # already in flight (or recently stuck), return its job_id and
@@ -668,7 +710,13 @@ async def import_letterboxd(
         pre_job_id = str(_uuid.uuid4())
         try:
             staging = get_import_staging_service()
-            s3_key = staging.put_csv(current_user, pre_job_id, request.csv_content)
+            s3_key = staging.put_csv(current_user, pre_job_id, csv_text)
+            extras_s3_key: Optional[str] = None
+            if extras_payload is not None:
+                # Only stage extras when there's actually something to ingest
+                # — empty sections waste an S3 round-trip on the worker side.
+                if any(extras_payload.get(k) for k in ("reviews", "watchlist", "watched", "likes")):
+                    extras_s3_key = staging.put_extras(current_user, pre_job_id, extras_payload)
         except Exception as e:
             logger.error(f"S3 staging upload failed: {e}")
             raise HTTPException(
@@ -682,6 +730,7 @@ async def import_letterboxd(
             total=total_movies,
             s3_key=s3_key,
             chunk_size=chunk_size,
+            extras_s3_key=extras_s3_key,
         )
 
         try:
@@ -825,7 +874,7 @@ def process_letterboxd_chunk(job_id: str) -> None:
     processed = stats.get("processed", 0)
     if processed == 0:
         # Nothing left to process — wrap up.
-        _mark_letterboxd_complete(job_id, user_id, s3_key)
+        _mark_letterboxd_complete(job_id, user_id, s3_key, job.get("extras_s3_key"))
         return
 
     new_next = start + processed
@@ -837,7 +886,7 @@ def process_letterboxd_chunk(job_id: str) -> None:
     )
 
     if new_next >= total:
-        _mark_letterboxd_complete(job_id, user_id, s3_key)
+        _mark_letterboxd_complete(job_id, user_id, s3_key, job.get("extras_s3_key"))
         return
 
     # Self-chain. If this self-invoke fails (e.g. IAM blip), the job stays
@@ -849,10 +898,26 @@ def process_letterboxd_chunk(job_id: str) -> None:
         logger.warning(f"chunk worker: self-chain failed for job {job_id}: {e}")
 
 
-def _mark_letterboxd_complete(job_id: str, user_id: str, s3_key: Optional[str]) -> None:
-    """Wrap up a finished import: mark COMPLETED, store result, fire stats
-    recompute, delete the staged CSV from S3."""
+def _mark_letterboxd_complete(
+    job_id: str,
+    user_id: str,
+    s3_key: Optional[str],
+    extras_s3_key: Optional[str] = None,
+) -> None:
+    """Wrap up a finished import: process ZIP extras (reviews/watchlist/
+    likes/watched), mark COMPLETED, store result, fire stats recompute,
+    delete the staged CSV + extras from S3."""
     job_service = get_job_service()
+
+    # ── Extras pass — only when the upload was a full ZIP ───────────────
+    if extras_s3_key:
+        try:
+            _process_letterboxd_extras(user_id, extras_s3_key)
+        except Exception as exc:
+            # Extras are nice-to-have, never block the ratings phase from
+            # being marked complete. Logging the failure is enough.
+            logger.warning(f"chunk worker: extras pass failed for job {job_id}: {exc}")
+
     job_service.update_job_status(job_id, JobStatus.COMPLETED, progress=100)
     job_service.update_job_result(job_id, {"status": "completed", "user_id": user_id})
     logger.info(f"chunk worker: job {job_id} COMPLETED")
@@ -863,14 +928,136 @@ def _mark_letterboxd_complete(job_id: str, user_id: str, s3_key: Optional[str]) 
         invoke_stats_worker(user_id)
     except Exception as e:
         logger.warning(f"chunk worker: stats recompute trigger failed: {e}")
-    # Best-effort cleanup of the staged CSV — the 7-day S3 lifecycle rule
-    # is the backstop.
-    if s3_key:
+    # Best-effort cleanup of the staged CSV + extras — the 7-day S3
+    # lifecycle rule is the backstop.
+    from src.services.import_staging_service import get_import_staging_service
+    staging = get_import_staging_service()
+    for cleanup_key in (s3_key, extras_s3_key):
+        if not cleanup_key:
+            continue
         try:
-            from src.services.import_staging_service import get_import_staging_service
-            get_import_staging_service().delete(s3_key)
+            staging.delete(cleanup_key)
         except Exception as e:
-            logger.warning(f"chunk worker: S3 cleanup failed: {e}")
+            logger.warning(f"chunk worker: S3 cleanup failed for {cleanup_key}: {e}")
+
+
+def _process_letterboxd_extras(user_id: str, extras_s3_key: str) -> None:
+    """Pull the extras JSON for a finished import and write it to the
+    relevant services: reviews → review_service, watchlist → watchlist_service,
+    likes → favorites (capped at 4, only if the user has none set).
+
+    Each item carries a `name` + `year` + `uri`; we resolve to a TMDB id
+    using the same diskcache the chunk worker warmed during the ratings
+    phase, so most lookups are sub-millisecond. Unresolved items are
+    skipped with a debug log — they're surfaced again on the next import.
+    """
+    from src.services.import_staging_service import get_import_staging_service
+    from src.services.letterboxd_service import get_letterboxd_service
+    from src.services.review_service import get_review_service
+    from src.services.watchlist_service import get_watchlist_service
+    from src.services.movie_service import get_movie_service
+
+    extras = get_import_staging_service().get_extras(extras_s3_key)
+    lb = get_letterboxd_service()
+
+    def _resolve(item: dict) -> Optional[int]:
+        try:
+            return lb._search_tmdb_movie(item.get("name") or "", item.get("year"))
+        except Exception as exc:
+            logger.debug(f"extras: TMDB resolve failed for {item.get('name')!r}: {exc}")
+            return None
+
+    # Reviews — only those with a non-empty review_text were emitted by the
+    # ZIP extractor, so no filter needed.
+    reviews = extras.get("reviews") or []
+    if reviews:
+        rsvc = get_review_service()
+        ok = 0
+        for r in reviews:
+            tid = _resolve(r)
+            if not tid:
+                continue
+            try:
+                rsvc.upsert(
+                    user_id=user_id,
+                    tmdb_id=tid,
+                    media_type="movie",  # Letterboxd is films only
+                    rating=r.get("rating"),
+                    review_text=r.get("review_text"),
+                )
+                ok += 1
+            except Exception as exc:
+                logger.debug(f"extras: review upsert failed ({r.get('name')!r}): {exc}")
+        logger.info(f"extras: imported {ok}/{len(reviews)} reviews")
+
+    # Watchlist
+    watchlist = extras.get("watchlist") or []
+    if watchlist:
+        wsvc = get_watchlist_service()
+        movie_svc = get_movie_service()
+        ok = 0
+        for w in watchlist:
+            tid = _resolve(w)
+            if not tid:
+                continue
+            try:
+                media = movie_svc.get_media_auto(str(tid))
+                md = getattr(media, "metadata", None) if media else None
+                title = getattr(md, "title", None) or w.get("name") or "Untitled"
+                poster = getattr(md, "poster_path", None)
+                year = getattr(md, "year", None) or w.get("year")
+                wsvc.add(
+                    user_id=user_id,
+                    tmdb_id=tid,
+                    media_type="movie",
+                    title=title,
+                    poster_path=poster,
+                    year=year,
+                )
+                ok += 1
+            except Exception as exc:
+                logger.debug(f"extras: watchlist add failed ({w.get('name')!r}): {exc}")
+        logger.info(f"extras: imported {ok}/{len(watchlist)} watchlist entries")
+
+    # Likes → favorites (capped at 4, only when user has no existing favs).
+    likes = extras.get("likes") or []
+    if likes:
+        usvc = get_user_service()
+        try:
+            existing = usvc.get_favorites(user_id)
+        except Exception:
+            existing = []
+        if not existing:
+            movie_svc = get_movie_service()
+            picked: List[dict] = []
+            for lk in likes:
+                if len(picked) >= 4:
+                    break
+                tid = _resolve(lk)
+                if not tid:
+                    continue
+                try:
+                    media = movie_svc.get_media_auto(str(tid))
+                    md = getattr(media, "metadata", None) if media else None
+                    picked.append({
+                        "tmdb_id": int(tid),
+                        "media_type": "movie",
+                        "title": getattr(md, "title", None) or lk.get("name") or "Untitled",
+                        "poster_path": getattr(md, "poster_path", None),
+                    })
+                except Exception:
+                    picked.append({
+                        "tmdb_id": int(tid),
+                        "media_type": "movie",
+                        "title": lk.get("name") or "Untitled",
+                        "poster_path": None,
+                    })
+            if picked:
+                try:
+                    usvc.set_favorites(user_id, picked)
+                    logger.info(f"extras: set {len(picked)} favorites from Letterboxd likes")
+                except Exception as exc:
+                    logger.debug(f"extras: set_favorites failed: {exc}")
 
 
 def _run_chunk_loop_in_thread(job_id: str) -> None:

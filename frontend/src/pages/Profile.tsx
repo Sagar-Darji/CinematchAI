@@ -47,7 +47,7 @@ type TabKey = 'overview' | 'diary' | 'films' | 'series' | 'watchlist'
 
 function LetterboxdImport({ userId, onComplete }: { userId: string; onComplete: (count: number) => void }) {
   const [open, setOpen] = useState(false)
-  const [csvContent, setCsvContent] = useState('')
+  const [pickedFile, setPickedFile] = useState<File | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [jobId, setJobId] = useState<string | null>(null)
   const [total, setTotal] = useState(0)
@@ -59,17 +59,15 @@ function LetterboxdImport({ userId, onComplete }: { userId: string; onComplete: 
   const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
-    const reader = new FileReader()
-    reader.onload = (ev) => setCsvContent(ev.target?.result as string)
-    reader.readAsText(file)
+    setPickedFile(file)
   }
 
   const handleStart = async () => {
-    if (!csvContent) { setError('Please select your ratings.csv file.'); return }
+    if (!pickedFile) { setError('Please select your Letterboxd export (.zip or .csv).'); return }
     setError('')
     setSubmitting(true)
     try {
-      const result = await importLetterboxd(userId, csvContent)
+      const result = await importLetterboxd(userId, pickedFile)
       setJobId(result.job_id)
       setTotal(result.total_movies)
       setStatus('importing')
@@ -183,24 +181,23 @@ function LetterboxdImport({ userId, onComplete }: { userId: string; onComplete: 
             <ol className="space-y-1" style={{ color: 'var(--text-muted)' }}>
               <li>1. Go to letterboxd.com → Settings → Import &amp; Export</li>
               <li>2. Click <strong className="text-white">Export Your Data</strong></li>
-              <li>3. Download the ZIP, extract <code className="text-yellow-400">ratings.csv</code></li>
-              <li>4. Upload that file below</li>
+              <li>3. Upload the downloaded <code className="text-yellow-400">.zip</code> below — we pull ratings, real watch dates, reviews, watchlist, and likes.</li>
             </ol>
           </div>
           <label
             className="flex flex-col items-center justify-center gap-3 rounded-xl p-6 cursor-pointer transition-colors"
-            style={{ border: `2px dashed ${csvContent ? 'var(--accent-gold)' : 'var(--border)'}`, background: 'var(--bg-overlay)' }}
+            style={{ border: `2px dashed ${pickedFile ? 'var(--accent-gold)' : 'var(--border)'}`, background: 'var(--bg-overlay)' }}
           >
-            <Upload size={28} style={{ color: csvContent ? 'var(--accent-gold)' : 'var(--text-muted)' }} />
-            <span className="text-sm font-medium" style={{ color: csvContent ? 'var(--accent-gold)' : 'var(--text-muted)' }}>
-              {csvContent ? 'CSV loaded ✓ — ready to import' : 'Click to select ratings.csv'}
+            <Upload size={28} style={{ color: pickedFile ? 'var(--accent-gold)' : 'var(--text-muted)' }} />
+            <span className="text-sm font-medium" style={{ color: pickedFile ? 'var(--accent-gold)' : 'var(--text-muted)' }}>
+              {pickedFile ? `${pickedFile.name} ✓ — ready to import` : 'Click to select your Letterboxd .zip (or ratings.csv)'}
             </span>
-            <input type="file" accept=".csv" onChange={handleFile} className="hidden" />
+            <input type="file" accept=".zip,.csv" onChange={handleFile} className="hidden" />
           </label>
           {error && <p className="text-sm" style={{ color: 'var(--accent-red)' }}>{error}</p>}
           <button
             onClick={handleStart}
-            disabled={submitting || !csvContent}
+            disabled={submitting || !pickedFile}
             className="w-full py-3 rounded-xl font-bold flex items-center justify-center gap-2 disabled:opacity-40"
             style={{ background: 'var(--accent-gold)', color: '#0a0a0f', border: 'none', cursor: 'pointer' }}
           >

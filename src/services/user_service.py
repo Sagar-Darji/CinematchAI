@@ -494,12 +494,16 @@ class UserService:
         # Idempotent path: skip the UPSERT + cache invalidation when the
         # incoming value matches what's already on disk. Avoids hammering
         # Postgres + the CF matrix + stats stale flag on a re-import.
+        # Also compares timestamps — a Letterboxd ZIP re-import that
+        # overlays Watched Date from diary.csv must update the row even
+        # when the star count hasn't changed, otherwise the "wrong year"
+        # data sticks.
         if skip_if_unchanged:
             existing = self._connect()
             try:
                 cur = existing.cursor()
                 cur.execute(
-                    "SELECT rating FROM ratings WHERE user_id=? AND movie_id=?",
+                    "SELECT rating, timestamp FROM ratings WHERE user_id=? AND movie_id=?",
                     (user_id, movie_id),
                 )
                 row = cur.fetchone()
@@ -507,9 +511,19 @@ class UserService:
                 existing.close()
             if row is not None:
                 old_rating = row["rating"] if isinstance(row, dict) else row[0]
-                # 0.01 tolerance handles float-precision quirks across
-                # SQLite/Postgres without missing a real change.
-                if old_rating is not None and abs(float(old_rating) - float(rating)) < 0.01:
+                old_ts = row["timestamp"] if isinstance(row, dict) else row[1]
+                rating_same = (
+                    old_rating is not None
+                    and abs(float(old_rating) - float(rating)) < 0.01
+                )
+                # Treat timestamps as "same" when both share the same
+                # YYYY-MM-DD prefix — Postgres may store as a TIMESTAMP and
+                # round microseconds differently than the incoming ISO str,
+                # but day-level equality is what callers actually care about.
+                incoming_day = (timestamp or "")[:10]
+                old_day = (str(old_ts) if old_ts else "")[:10]
+                ts_same = (not timestamp) or (incoming_day == old_day)
+                if rating_same and ts_same:
                     return
 
         conn = self._connect()

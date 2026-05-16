@@ -48,6 +48,35 @@ class ImportStagingService:
         safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in user_id)
         return f"{safe}/{job_id}.csv"
 
+    @staticmethod
+    def extras_key_for(user_id: str, job_id: str) -> str:
+        """Sister key holding ZIP-extracted reviews/watchlist/likes/watched
+        JSON for the same job. Same 7-day lifecycle rule applies."""
+        safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in user_id)
+        return f"{safe}/{job_id}_extras.json"
+
+    def put_extras(self, user_id: str, job_id: str, extras_payload: dict) -> str:
+        """Persist the non-ratings ZIP sections (reviews, watchlist, likes,
+        watched) so the chunk worker can ingest them after the ratings
+        phase. Returns the S3 key."""
+        import json as _json
+        key = self.extras_key_for(user_id, job_id)
+        body = _json.dumps(extras_payload).encode("utf-8")
+        self._s3().put_object(
+            Bucket=BUCKET,
+            Key=key,
+            Body=body,
+            ContentType="application/json",
+            ServerSideEncryption="AES256",
+        )
+        logger.info(f"Staged import extras at s3://{BUCKET}/{key} ({len(body)} bytes)")
+        return key
+
+    def get_extras(self, s3_key: str) -> dict:
+        import json as _json
+        obj = self._s3().get_object(Bucket=BUCKET, Key=s3_key)
+        return _json.loads(obj["Body"].read().decode("utf-8"))
+
     def put_csv(self, user_id: str, job_id: str, csv_content: str) -> str:
         """Upload the raw CSV. Returns the S3 key for storage on the job row."""
         key = self.key_for(user_id, job_id)
