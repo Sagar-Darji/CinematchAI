@@ -19,6 +19,8 @@ import MovieWeb from '@/pages/MovieWeb'
 import Search from '@/pages/Search'
 import MovieDetail from '@/pages/MovieDetail'
 import Watchlist from '@/pages/Watchlist'
+import Settings from '@/pages/Settings'
+import SettingsImport from '@/pages/SettingsImport'
 import { useUserStore } from '@/store/useUserStore'
 import { useWatchlistStore } from '@/store/useWatchlistStore'
 import { useHistoryStore } from '@/store/useHistoryStore'
@@ -118,6 +120,22 @@ export default function App() {
             element={
               <ProtectedRoute>
                 <Watchlist />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/settings"
+            element={
+              <ProtectedRoute>
+                <Settings />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/settings/import"
+            element={
+              <ProtectedRoute>
+                <SettingsImport />
               </ProtectedRoute>
             }
           />
