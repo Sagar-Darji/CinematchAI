@@ -562,14 +562,17 @@ class UserService:
             invalidate_admin_profile_cache(user_id)
         except Exception:
             pass
-        # Mark persisted stats stale so the next Profile load triggers a
-        # background recompute (we don't recompute synchronously here —
-        # add_rating runs in the request thread and shouldn't block).
-        try:
-            from src.services.stats_service import get_stats_service
-            get_stats_service().mark_stale(user_id)
-        except Exception:
-            pass
+        # NOTE: We deliberately do NOT mark user_stats stale or dispatch a
+        # recompute here. The Profile page now serves a precomputed blob
+        # refreshed only on big trigger events (onboarding completion,
+        # Letterboxd ZIP import, manual /profile/{id}/recompute). Per-
+        # rating recompute was the thundering-herd source: each bulk
+        # rating session fired N Lambda workers, all of which had to
+        # resolve TMDB + run Groq for marginally updated numbers. The
+        # ratings table itself is up to date; ProfileService._is_stale
+        # detects the drift and the frontend shows a 'Refreshing…' badge
+        # along with a 'Last refreshed' footer until the user (or the
+        # next import) regenerates.
 
         logger.info(f"Added rating: user={user_id}, movie={movie_id}, rating={rating}")
 
@@ -629,11 +632,11 @@ class UserService:
             invalidate_admin_profile_cache(user_id)
         except Exception:
             pass
-        try:
-            from src.services.stats_service import get_stats_service
-            get_stats_service().mark_stale(user_id)
-        except Exception:
-            pass
+        # See add_rating: per-rating stats recompute is intentionally
+        # gone. Implicit feedback rows never appear on Profile analytics
+        # anyway (they're filtered from histogram + insights), so the
+        # blob doesn't need updating until the next onboarding/import/
+        # manual recompute event.
 
     def get_user_ratings(self, user_id: str) -> List[Dict]:
         """

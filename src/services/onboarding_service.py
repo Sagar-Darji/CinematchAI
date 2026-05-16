@@ -78,6 +78,25 @@ class OnboardingService:
                 message=f"Successfully onboarded user {user_id} with {len(ratings)} ratings. Generated {len(recommendation_response.recommendations)} initial recommendations.",
             )
 
+            # Fire the precomputed Profile build. Onboarding is one of the
+            # three trigger events under the new model (the others being
+            # Letterboxd import completion and the manual Settings button).
+            # We dispatch via the throttled trigger so back-to-back onboard
+            # retries don't spawn duplicate workers.
+            try:
+                from src.services.stats_service import (
+                    get_stats_service,
+                    invoke_stats_worker,
+                    mark_trigger,
+                    should_throttle_trigger,
+                )
+                get_stats_service().mark_stale(user_id)
+                if not should_throttle_trigger(user_id):
+                    invoke_stats_worker(user_id)
+                    mark_trigger(user_id)
+            except Exception as exc:
+                logger.warning(f"Onboarding stats trigger failed (non-critical): {exc}")
+
             logger.info(f"Onboarding completed for user_id={user_id}")
 
             return response
