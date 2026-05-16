@@ -4,7 +4,7 @@ For TV titles we also persist last_season / last_episode so the player can
 resume at the right episode. For movies these are NULL.
 """
 
-from typing import List, Optional
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from src.core.db import get_db, register_pk
 from src.utils.logging import get_logger
@@ -110,24 +110,62 @@ class HistoryService:
     def get_heatmap(self, user_id: str, year: int) -> dict:
         """Return {ISO date: count} of watch events for the given calendar year.
 
-        Powers the diary heatmap. Days with zero watches are omitted — the
-        frontend fills them in.
+        Sources from BOTH `ratings.timestamp` and `watch_history.watched_at`,
+        deduped by (day, movie_id, media_type). Rationale: most users on this
+        product log a film by *rating* it (Letterboxd imports come in as
+        rating rows with the original watch date as `timestamp`). The player's
+        watch_history table is a far sparser signal. Reading only from
+        watch_history produced "1 day in 2026" for users with 300+ Letterboxd
+        ratings — accurate to the table, wrong as a heatmap.
+
+        Days with zero watches are omitted — the frontend fills them in.
         """
         start = f"{year:04d}-01-01 00:00:00"
         end = f"{year + 1:04d}-01-01 00:00:00"
+        # day → set of (movie_id, media_type) so a same-day rating + play of
+        # the same title only counts once.
+        day_entries: Dict[str, Set[Tuple[str, str]]] = {}
+
+        def _ingest(day_val: Any, mid: Any, mtype: Any) -> None:
+            if not day_val:
+                return
+            day_str = str(day_val)[:10]  # Postgres returns date; SQLite str
+            key = (str(mid) if mid is not None else "", str(mtype or "movie"))
+            day_entries.setdefault(day_str, set()).add(key)
+
         with self.db.connect() as conn:
-            rows = conn.execute(
-                "SELECT DATE(watched_at) AS day, COUNT(*) AS count "
+            # ratings (Letterboxd-imported timestamps live here).
+            # Exclude implicit feedback — those are likert reactions, not
+            # watch events. Tolerate the table not existing (tests that only
+            # exercise watch_history).
+            try:
+                rating_rows = conn.execute(
+                    "SELECT DATE(timestamp) AS day, movie_id "
+                    "FROM ratings "
+                    "WHERE user_id = ? AND timestamp IS NOT NULL "
+                    "AND timestamp >= ? AND timestamp < ? "
+                    "AND COALESCE(source, '') != 'implicit_feedback'",
+                    (user_id, start, end),
+                ).fetchall()
+            except Exception as exc:
+                logger.debug(f"heatmap: ratings query skipped ({exc})")
+                rating_rows = []
+            for row in rating_rows:
+                if isinstance(row, dict):
+                    _ingest(row.get("day"), row.get("movie_id"), "movie")
+                else:
+                    _ingest(row[0], row[1], "movie")
+
+            # watch_history (player-recorded progress events).
+            for row in conn.execute(
+                "SELECT DATE(watched_at) AS day, tmdb_id, media_type "
                 "FROM watch_history "
-                "WHERE user_id = ? AND watched_at >= ? AND watched_at < ? "
-                "GROUP BY DATE(watched_at)",
+                "WHERE user_id = ? AND watched_at >= ? AND watched_at < ?",
                 (user_id, start, end),
-            ).fetchall()
-        result: dict = {}
-        for row in rows:
-            day = row["day"] if isinstance(row, dict) else row[0]
-            count = row["count"] if isinstance(row, dict) else row[1]
-            if day:
-                # Postgres returns date objects; SQLite returns strings.
-                result[str(day)] = int(count)
-        return result
+            ).fetchall():
+                if isinstance(row, dict):
+                    _ingest(row.get("day"), row.get("tmdb_id"), row.get("media_type"))
+                else:
+                    _ingest(row[0], row[1], row[2])
+
+        return {day: len(entries) for day, entries in day_entries.items()}

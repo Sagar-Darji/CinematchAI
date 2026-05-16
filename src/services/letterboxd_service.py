@@ -243,6 +243,7 @@ class LetterboxdService:
                     watched=True,
                     timestamp=ts,
                     skip_if_unchanged=skip_if_unchanged,
+                    source="letterboxd",
                 )
                 imported += 1
             else:

@@ -529,15 +529,31 @@ export default function Profile() {
     return () => { cancelled = true; clearInterval(tick) }
   }, [userId, statsResp?.computing])
 
-  const genres = useMemo(() => profile?.genres ?? {}, [profile])
-  const topGenres = useMemo(
-    () => Object.entries(genres).sort((a, b) => b[1] - a[1]).slice(0, 8),
-    [genres],
-  )
-  const maxGenreCount = topGenres[0]?.[1] ?? 1
-
   const ratings = admin?.recent_ratings
   const persistedStats = statsResp?.stats ?? null
+
+  // Prefer the persisted-stats top_genres (full library, accurate counts)
+  // over profile.genres (which the /users/{id} admin route computes from
+  // only the first 50 ratings — that's why this used to render Drama=25
+  // for an 853-rating library). Fall back to profile.genres only while
+  // stats hasn't finished computing yet.
+  const topGenres = useMemo<Array<[string, number]>>(() => {
+    if (persistedStats?.top_genres && persistedStats.top_genres.length > 0) {
+      return persistedStats.top_genres.slice(0, 8).map((g) => [g.name, g.count] as [string, number])
+    }
+    const dict = profile?.genres ?? {}
+    return Object.entries(dict).sort((a, b) => b[1] - a[1]).slice(0, 8)
+  }, [persistedStats, profile])
+  const genres = useMemo<Record<string, number>>(() => {
+    if (persistedStats?.top_genres && persistedStats.top_genres.length > 0) {
+      const out: Record<string, number> = {}
+      for (const g of persistedStats.top_genres) out[g.name] = g.count
+      return out
+    }
+    return profile?.genres ?? {}
+  }, [persistedStats, profile])
+  const maxGenreCount = topGenres[0]?.[1] ?? 1
+  const totalGenreCount = persistedStats?.top_genres?.length ?? Object.keys(genres).length
   const histogram = useMemo(
     () =>
       persistedStats?.rating_histogram?.length
@@ -718,7 +734,7 @@ export default function Profile() {
                     { icon: Film, label: 'Films', value: totalRatings ? totalRatings.toLocaleString() : '—' },
                     { icon: Calendar, label: `In ${currentYear}`, value: filmsYear ? filmsYear.toLocaleString() : '—' },
                     { icon: Star, label: 'Avg ★', value: avgRating ? avgRating.toFixed(1) : '—' },
-                    { icon: TrendingUp, label: 'Genres', value: Object.keys(genres).length ? Object.keys(genres).length.toLocaleString() : '—' },
+                    { icon: TrendingUp, label: 'Genres', value: totalGenreCount ? totalGenreCount.toLocaleString() : '—' },
                   ].map(({ icon: Icon, label, value }, i) => (
                     <div
                       key={label}
@@ -910,6 +926,23 @@ export default function Profile() {
                             </div>
                           ))}
                         </div>
+                        {(() => {
+                          // Surface the gap between total ratings and what we
+                          // could place on the timeline. TMDB may not resolve
+                          // every tmdb_id back to a release year (TV shows
+                          // missing the field, deleted titles, etc.). Telling
+                          // the user up front avoids "the math is wrong"
+                          // confusion.
+                          const placed = decades.reduce((s, d) => s + d.count, 0)
+                          const total = typeof totalRatings === 'number' ? totalRatings : 0
+                          const unknown = total - placed
+                          if (unknown <= 0) return null
+                          return (
+                            <p className="text-[10px] mt-3 text-center" style={{ color: 'var(--text-muted)' }}>
+                              {unknown.toLocaleString()} {unknown === 1 ? 'rating' : 'ratings'} with no release year on TMDB
+                            </p>
+                          )
+                        })()}
                       </div>
                     )}
 

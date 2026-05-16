@@ -247,6 +247,7 @@ class StatsService:
             enriched.append({
                 "rating": float(r["rating"]),
                 "timestamp": r.get("timestamp"),
+                "source": r.get("source") or "unknown",
                 "title": getattr(md, "title", None),
                 "year": getattr(md, "year", None),
                 "media_type": getattr(md, "media_type", "movie") or "movie",
@@ -273,8 +274,22 @@ class StatsService:
     @staticmethod
     def _aggregate(items: List[dict]) -> Dict[str, Any]:
         """Pure function — given enriched per-rating dicts, produce the full
-        stats payload. Easy to unit-test."""
+        stats payload. Easy to unit-test.
+
+        `items` may contain rows with `source == "implicit_feedback"` — those
+        are 1-2★ likert reactions captured from the recommendation feed, not
+        deliberate ratings. They still count toward "you watched this", so
+        totals/runtime/genre+decade *breadth* include them, but they would
+        skew avg_rating, the histogram, and the director/genre-lean insights
+        (which assume a real star). We split once and use the right slice
+        in the right place.
+        """
         current_year = datetime.now(timezone.utc).year
+
+        def _is_explicit(it: dict) -> bool:
+            return it.get("source") != "implicit_feedback"
+
+        explicit = [it for it in items if _is_explicit(it)]
 
         total_films = sum(1 for it in items if it["media_type"] == "movie")
         total_series = sum(1 for it in items if it["media_type"] == "tv")
@@ -292,7 +307,8 @@ class StatsService:
             except Exception:
                 continue
 
-        ratings = [it["rating"] for it in items]
+        # Histogram + avg are about *deliberate* stars only.
+        ratings = [it["rating"] for it in explicit]
         avg_rating = round(sum(ratings) / len(ratings), 2) if ratings else None
 
         # Histogram — half-star buckets.
@@ -327,20 +343,23 @@ class StatsService:
             for d, c in sorted(decade_counts.items())
         ]
 
-        # Top-N tables. For directors we also track avg user rating.
+        # Top-N tables. Genres/actors count breadth (use all items); directors
+        # also surface avg user rating, so only deliberate ratings.
         genre_counts: Counter = Counter()
-        director_counts: Counter = Counter()
-        director_rating_sum: Dict[str, float] = defaultdict(float)
         actor_counts: Counter = Counter()
         for it in items:
             for g in it.get("genres") or []:
                 genre_counts[g] += 1
+            for actor in it.get("cast") or []:
+                actor_counts[actor] += 1
+
+        director_counts: Counter = Counter()
+        director_rating_sum: Dict[str, float] = defaultdict(float)
+        for it in explicit:
             d = it.get("director")
             if d:
                 director_counts[d] += 1
                 director_rating_sum[d] += it["rating"]
-            for actor in it.get("cast") or []:
-                actor_counts[actor] += 1
 
         top_genres = [{"name": g, "count": c} for g, c in genre_counts.most_common()]
         top_directors = [
@@ -376,8 +395,8 @@ class StatsService:
             else 0.0
         )
 
-        with_tmdb = [it for it in items if it.get("vote_average") is not None]
-        # TMDB averages are 0–10; user ratings are 0.5–5. Compare on the same scale.
+        # Generosity vs TMDB only makes sense over deliberate stars.
+        with_tmdb = [it for it in explicit if it.get("vote_average") is not None]
         if with_tmdb:
             user_mean = sum(it["rating"] for it in with_tmdb) / len(with_tmdb)
             tmdb_mean = sum(it["vote_average"] / 2 for it in with_tmdb) / len(with_tmdb)
@@ -386,10 +405,11 @@ class StatsService:
             generosity_score = 0.0
 
         # Genre lean — biggest delta in average rating between two top genres.
-        # Only consider genres with >= 5 ratings to avoid noise.
+        # Only consider genres with >= 5 ratings to avoid noise, and only
+        # deliberate ratings (1-2★ likerts would pull every genre toward 1.5).
         genre_avg: Dict[str, float] = {}
         genre_n: Counter = Counter()
-        for it in items:
+        for it in explicit:
             for g in it.get("genres") or []:
                 genre_avg[g] = genre_avg.get(g, 0.0) + it["rating"]
                 genre_n[g] += 1

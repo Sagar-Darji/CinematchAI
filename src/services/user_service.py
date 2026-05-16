@@ -93,10 +93,24 @@ class UserService:
                 rating REAL NOT NULL,
                 watched BOOLEAN DEFAULT TRUE,
                 timestamp TEXT NOT NULL,
+                source TEXT DEFAULT 'unknown',
                 FOREIGN KEY (user_id) REFERENCES users(user_id),
                 UNIQUE(user_id, movie_id)
             )
         """)
+        # Idempotent ALTER for existing deployments — source distinguishes
+        # Letterboxd imports from manual thumbs from recommendation-feedback
+        # implicit ratings, so analytics can filter them differently.
+        try:
+            if db.is_postgres:
+                cursor.execute("SAVEPOINT alter_src")
+            cursor.execute("ALTER TABLE ratings ADD COLUMN source TEXT DEFAULT 'unknown'")
+            if db.is_postgres:
+                cursor.execute("RELEASE SAVEPOINT alter_src")
+        except Exception:
+            if db.is_postgres:
+                cursor.execute("ROLLBACK TO SAVEPOINT alter_src")
+                cursor.execute("RELEASE SAVEPOINT alter_src")
 
         # Contexts table
         cursor.execute("""
@@ -454,6 +468,7 @@ class UserService:
         watched: bool = True,
         timestamp: Optional[str] = None,
         skip_if_unchanged: bool = False,
+        source: str = "manual",
     ):
         """
         Add or update a rating.
@@ -470,6 +485,11 @@ class UserService:
                 already exists, return immediately without writing or
                 invalidating any caches. Letterboxd re-imports of the same
                 library become near-instant (~99% of rows are unchanged).
+            source: Where the rating came from — "manual" (user typed it),
+                "letterboxd" (CSV import), "implicit_feedback" (thumbs
+                up/down on a recommendation), "unknown" (pre-source-column
+                row). Analytics filter implicit_feedback out of the
+                histogram + insight cards.
         """
         # Idempotent path: skip the UPSERT + cache invalidation when the
         # incoming value matches what's already on disk. Avoids hammering
@@ -509,10 +529,10 @@ class UserService:
 
         cursor.execute(
             """
-            INSERT OR REPLACE INTO ratings (user_id, movie_id, rating, watched, timestamp)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT OR REPLACE INTO ratings (user_id, movie_id, rating, watched, timestamp, source)
+            VALUES (?, ?, ?, ?, ?, ?)
         """,
-            (user_id, movie_id, rating, watched, ts),
+            (user_id, movie_id, rating, watched, ts, source),
         )
 
         conn.commit()
@@ -575,10 +595,10 @@ class UserService:
             now = datetime.now(timezone.utc).isoformat()
             cursor.execute(
                 """
-                INSERT INTO ratings (user_id, movie_id, rating, watched, timestamp)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO ratings (user_id, movie_id, rating, watched, timestamp, source)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (user_id, movie_id, implicit, action == "watched", now),
+                (user_id, movie_id, implicit, action == "watched", now, "implicit_feedback"),
             )
             conn.commit()
             logger.info(
@@ -609,14 +629,16 @@ class UserService:
             user_id: User ID.
 
         Returns:
-            List of rating dictionaries.
+            List of rating dictionaries. Each dict carries the `source` so
+            analytics can distinguish Letterboxd imports from implicit
+            recommendation-feedback ratings.
         """
         conn = self._connect()
         cursor = conn.cursor()
 
         cursor.execute(
             """
-            SELECT movie_id, rating, watched, timestamp
+            SELECT movie_id, rating, watched, timestamp, source
             FROM ratings
             WHERE user_id = ?
             ORDER BY timestamp DESC
@@ -629,12 +651,16 @@ class UserService:
 
         ratings = []
         for row in rows:
+            # row may be sqlite3.Row, dict-row from psycopg2, or our
+            # _DualAccessRow — index access works in all three.
+            source = row[4] if len(row) > 4 else None
             ratings.append(
                 {
                     "movie_id": row[0],
                     "rating": row[1],
                     "watched": bool(row[2]),
                     "timestamp": row[3],
+                    "source": source or "unknown",
                 }
             )
 
